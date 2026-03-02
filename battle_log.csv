@@ -1,0 +1,72 @@
+Player Name	Player Level	Outcome	Ship Name	Ship Level	Ship Strength	Ship XP	Officer One	Officer Two	Officer Three	Hull Health	Hull Health Remaining	Shield Health	Shield Health Remaining	Location	Timestamp
+TojlathHD	66	DEFEAT	ROTARRAN	60	2915177984	0	Mirror Picard	Mirror Ezri	Mirror Troi	2681468973	0	1919088216	0	Sigrun	3/1/2026 2:59:09 AM
+xxBEGSxx	66	VICTORY	ROTARRAN	60	3231889152	0	Gul Dukat	Andy Billups	Garak	2739216932	2720786505	2067625795	1990247609	Sigrun	3/1/2026 2:59:09 AM
+
+Reward Name	Count
+
+Fleet Type	Attack	Defense	Health	Ship Ability	Captain Maneuver	Officer One Ability	Officer Two Ability	Officer Three Ability	Officer Attack Bonus	Damage Per Round	Armour Pierce	Shield Pierce	Accuracy	Critical Chance	Critical Damage	Officer Defense Bonus	Armour	Shield Deflection	Dodge	Officer Health Bonus	Shield Health	Hull Health	Impulse Speed	Warp Range	Warp Speed	Cargo Capacity	Protected Cargo	Mining Bonus	Debuff applied	Buff applied
+Player Fleet 1	417088352	197811008	2300278528	Bird of Prey	Take the Shot	Anticollective	Clean It Up	Inquisitor's Wrath	6.5	381366848	42934123	3667329	3667329	0.22	3.15	6.5	2711464	2683796	34166940	6.5	1919088216	2681468973	162	1184	447.6	4128750	0	1	NO	NO
+Enemy Fleet 1	501976192	210454256	2519458816	Bird of Prey	Prefect of Bajor	Manic Ambition	In Your Element	Outcast Spy	6.5	465928128	44022786	3830624	3776192	0.22	4.4	6.5	2583500	2597334	36910018	6.5	2067625795	2971291576	227	1184	282	3589260	0	1	NO	NO
+
+Round	Battle Event	Type	Attacker Name	Attacker Alliance	Attacker Ship	Attacker - Is Armada?	Target Name	Target Alliance	Target Ship	Target - Is Armada?	Hyperthermic Decay %	Hyperthermic Stablizer %	Critical Hit?	Hull Damage	Shield Damage	Mitigated Damage	Mitigated Isolytic Damage	Mitigated Apex Barrier	Total Damage	Total Isolytic Damage	Ability Type	Ability Value	Ability Name	Ability Owner Name	Target Defeated	Target Destroyed	Charging Weapons %
+1	1	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.18	Tertiary Adjunct	Seven of Nine	--	--	--
+1	2	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.35	Two But One	S31 Georgiou	--	--	--
+1	3	Officer Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.25	Two But One	S31 Georgiou	--	--	--
+1	4	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1	Prefect of Bajor	Gul Dukat	--	--	--
+1	5	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.9	In Your Element	Andy Billups	--	--	--
+1	6	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.6	Outcast Spy	Garak	--	--	--
+1	7	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.65	Hold, Please	Gwen DeMarco	--	--	--
+1	8	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.95	Purity of Will	Icheb	--	--	--
+1	9	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1.2	Bedside Manner	Doctor T'Ana	--	--	--
+1	10	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	15000	Active Listening	Romi	--	--	--
+1	11	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	12000	Logical Tactics	Infiltrator Tuvok	--	--	--
+1	12	Officer Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1.25	Take the Shot	Mirror Picard	--	--	--
+1	13	Forbidden Tech Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	24.8	--	Tantalus Field	--	--	--
+1	14	Forbidden Tech Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	10	--	Time Crystal	--	--	--
+1	15	Forbidden Tech Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	17.5	--	Time Crystal	--	--	--
+1	16	Forbidden Tech Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	3	--	Q Cannon	--	--	--
+1	17	Forbidden Tech Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	15	--	Q Cannon	--	--	--
+1	18	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	57363356	229453424	137585856	4267868928	333300800	230214028	4795358336	--	--	--	--	--	--	--
+1	19	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	57086776	228347104	136922480	4247291136	331693760	229104040	4772237216	--	--	--	--	--	--	--
+1	20	Attack	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	NO	2043394	8173577	28625184	257458048	35055972	47499451	283856724	--	--	--	--	--	--	--
+1	21	Attack	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	NO	2588152	10352609	36256504	326094976	44401704	60162549	359531396	--	--	--	--	--	--	--
+1	22	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.5	Manic Ambition	Gul Dukat	--	--	--
+1	23	Forbidden Tech Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	2	--	Q Cannon	--	--	--
+1	24	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	59634848	238539392	143034016	4436869120	346498944	239330112	4985246208	--	--	--	--	--	--	--
+1	25	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	58587220	234348880	140521296	4358924800	340411872	235125716	4897668352	--	--	--	--	--	--	--
+1	26	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	NO	11875370	47501480	28483044	883534848	68999976	47658934	992735784	--	--	--	--	--	--	--
+1	27	Attack	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	NO	2292829	9171315	32119424	288885632	39335208	53297648	318506760	--	--	--	--	--	--	--
+1	28	Attack	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	NO	2216834	8867334	31054836	279310592	38031456	51531116	307949936	--	--	--	--	--	--	--
+1	29	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.5	Manic Ambition	Gul Dukat	--	--	--
+1	30	Forbidden Tech Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	2	--	Q Cannon	--	--	--
+2	32	battle_action_type_{0}	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	--	--	914120.9	--	--	--	--
+2	33	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1	Prefect of Bajor	Gul Dukat	--	--	--
+2	34	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.9	In Your Element	Andy Billups	--	--	--
+2	35	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.6	Outcast Spy	Garak	--	--	--
+2	36	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.65	Hold, Please	Gwen DeMarco	--	--	--
+2	37	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.95	Purity of Will	Icheb	--	--	--
+2	38	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1.2	Bedside Manner	Doctor T'Ana	--	--	--
+2	39	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	15000	Active Listening	Romi	--	--	--
+2	40	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	12000	Logical Tactics	Infiltrator Tuvok	--	--	--
+2	41	Officer Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1.25	Take the Shot	Mirror Picard	--	--	--
+2	42	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	78199600	312798400	153232784	6005090816	454366528	256395072	6747293056	--	--	--	--	--	--	--
+2	43	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	75131312	300525216	147220448	5769470976	436538688	246334960	6482551680	--	--	--	--	--	--	--
+2	44	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	78556008	314224032	153931168	6032459776	456437376	257563688	6778044672	--	--	--	--	--	--	--
+2	45	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	67738488	270953952	132734152	5201762816	393583872	222095968	5844677312	--	--	--	--	--	--	--
+2	46	Shield Depleted	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--
+2	47	Attack	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	NO	2540375	10161500	30377318	465785472	55087376	50406869	513545172	--	--	--	--	--	--	--
+2	48	Attack	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	NO	2562085	10248340	30636920	469766048	55558148	50837641	517933900	--	--	--	--	--	--	--
+2	49	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.5	Manic Ambition	Gul Dukat	--	--	--
+2	50	Forbidden Tech Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	2	--	Q Cannon	--	--	--
+2	51	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	392947104	0	153996640	6035025920	456631520	257673184	6780928000	--	--	--	--	--	--	--
+2	52	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	369122208	0	144659632	5669114368	428945344	242050128	6369791424	--	--	--	--	--	--	--
+2	53	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	325767904	0	127669008	5003263488	378564704	213620752	5621644352	--	--	--	--	--	--	--
+2	54	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	336550208	0	131894608	5168861696	391094432	220691184	5807709760	--	--	--	--	--	--	--
+2	55	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	371052608	0	145416160	5698761728	431188608	243316000	6403103104	--	--	--	--	--	--	--
+2	56	Attack	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	NO	2421726	9686904	28958532	444030784	52514500	48052598	489559848	--	--	--	--	--	--	--
+2	57	Attack	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	NO	2679152	10716607	32036782	491230624	58096716	53160517	541599364	--	--	--	--	--	--	--
+2	58	Officer Ability	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.5	Manic Ambition	Gul Dukat	--	--	--
+2	59	Forbidden Tech Ability	TojlathHD	The Pack	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	2	--	Q Cannon	--	--	--
+2	60	Attack	xxBEGSxx	Ronin	ROTARRAN	NO	TojlathHD	The Pack	ROTARRAN	NO	--	--	YES	596065152	0	233598976	9154587648	692668672	390866944	10286053504	--	--	--	--	--	--	--
+2	61	Combatant Destroyed	TojlathHD	The Pack	ROTARRAN	NO	xxBEGSxx	Ronin	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--
+
