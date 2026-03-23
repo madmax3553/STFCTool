@@ -1,0 +1,99 @@
+====================================================================================================
+  STFC CREW OPTIMIZER — Multi-Scenario Analysis
+  Ship: NEGH'VAR (T8 Battleship)  |  Mode: PVP  |  Top 3
+====================================================================================================
+
+[1/3] Loading officer roster ...
+  Loaded 266 officers
+
+[2/3] Analyzing battle logs ...
+  Loaded 3 battle(s)
+
+====================================================================================================
+  WEAKNESS PROFILE (from battle history)
+====================================================================================================
+  Battles analyzed:         3
+  Losses:                   3
+  Crit Damage Gap:          4.0/10
+  Crit Hit Disadvantage:    10.0/10
+  Shield Timing Loss:       8.0/10
+  Stat Paradox:             8.0/10
+  Damage Escalation:        0.0/10
+
+====================================================================================================
+  [3/3] OPTIMIZING PVP (PLAYER COMBAT) — BATTLESHIP CREWS
+  Note: Recommended ship for PvP (Player Combat) is Explorer (Explorers have the highest base HP and defense, giving survivability advantage in PvP)
+====================================================================================================
+  Evaluating 40 candidate officers in all 3-officer combinations...
+  Total combinations to evaluate: 9,880
+
+====================================================================================================
+  TOP 3 PVP (PLAYER COMBAT) — BATTLESHIP CREW RECOMMENDATIONS
+====================================================================================================
+
+>>> #1 — PvP (Player Combat) Score: 550,956
+  ================================================================================
+  CAPTAIN: Gul Dukat
+    Level 15 | Rank 3 | ATK 41,138 | DEF 11,427 | HP 11,387 | CM 20%
+    Abilities: cm: while on an interceptor fighting a player, at the start of a round, chance to apply hull breach for 3 rounds. oa: wh
+  BRIDGE 1: Strike Team La'an
+    Level 15 | Rank 3 | ATK 29,711 | DEF 11,427 | HP 22,775 | OA 72%
+    Abilities: cm: while on battleship in pvp, if opponent is burning, at the start of each round, increase number of shots oa: while o
+  BRIDGE 2: Kirk
+    Level 30 | Rank 5 | ATK 21,686 | DEF 86,745 | HP 21,610 | OA 80%
+    Abilities: cm: increase all officer stats when the ship has morale oa: chance to inspire morale to his ship for 2 rounds
+  SYNERGY:
+    + State synergy chain: morale, breach, burning (3 officers benefit)
+  WARNINGS:
+    - 'Gul Dukat' CM is locked to non-Battleship ship type (-43,989)
+  SCORE BREAKDOWN:
+    Gul Dukat                      individual:       68,741
+    Strike Team La'an              individual:       89,627
+    Kirk                           individual:       61,577
+    State chain bonus                       :      375,000
+
+ >> #2 — PvP (Player Combat) Score: 525,456
+  ================================================================================
+  CAPTAIN: Strike Team La'an
+    Level 15 | Rank 3 | ATK 29,711 | DEF 11,427 | HP 22,775 | CM 10%
+    Abilities: cm: while on battleship in pvp, if opponent is burning, at the start of each round, increase number of shots oa: while o
+  BRIDGE 1: Borg Queen
+    Level 30 | Rank 5 | ATK 103,009 | DEF 32,529 | HP 70,234 | OA 7%
+    Abilities: bda: while fighting a player ship with assimilate, increase ship's armor piercing, shield piercing and accuracy. cumulat
+  BRIDGE 2: Dezoc
+    Level 30 | Rank 5 | ATK 43,983 | DEF 50,267 | HP 25,046 | OA 50%
+    Abilities: bda: at the start of each round, if opponents hull is below 95%, chance to apply assimilate for 4 rounds oa: while fight
+  SYNERGY:
+    + State synergy chain: burning, assimilate (2 officers benefit)
+    + Partial crew coherence on 'assimilate' (2/3 officers)
+  SCORE BREAKDOWN:
+    Strike Team La'an              individual:       89,627
+    Borg Queen                     individual:      157,624
+    Dezoc                          individual:       54,705
+    State chain bonus                       :      200,000
+    Synergy coherence bonus                 :       15,000
+    Battle-log weakness counter             :        8,000
+
+  > #3 — PvP (Player Combat) Score: 518,828
+  ================================================================================
+  CAPTAIN: Kirk
+    Level 30 | Rank 5 | ATK 21,686 | DEF 86,745 | HP 21,610 | CM 40%
+    Abilities: cm: increase all officer stats when the ship has morale oa: chance to inspire morale to his ship for 2 rounds
+  BRIDGE 1: Borg Queen
+    Level 30 | Rank 5 | ATK 103,009 | DEF 32,529 | HP 70,234 | OA 7%
+    Abilities: bda: while fighting a player ship with assimilate, increase ship's armor piercing, shield piercing and accuracy. cumulat
+  BRIDGE 2: Strike Team La'an
+    Level 15 | Rank 3 | ATK 29,711 | DEF 11,427 | HP 22,775 | OA 72%
+    Abilities: cm: while on battleship in pvp, if opponent is burning, at the start of each round, increase number of shots oa: while o
+  SYNERGY:
+    + State synergy chain: morale, burning (2 officers benefit)
+  SCORE BREAKDOWN:
+    Kirk                           individual:       61,577
+    Borg Queen                     individual:      157,624
+    Strike Team La'an              individual:       89,627
+    State chain bonus                       :      200,000
+    Battle-log weakness counter             :        8,000
+
+====================================================================================================
+  Done.
+====================================================================================================

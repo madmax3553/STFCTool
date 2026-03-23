@@ -1,0 +1,5 @@
+SHIP="battleship"
+MODE="pvp"
+TOP_N="3"
+SKIP_BATTLES="yes"
+SKIP_LEGACY="yes"
