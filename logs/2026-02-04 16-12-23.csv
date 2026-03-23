@@ -1,0 +1,73 @@
+Player Name	Player Level	Outcome	Ship Name	Ship Level	Ship Strength	Ship XP	Officer One	Officer Two	Officer Three	Hull Health	Hull Health Remaining	Shield Health	Shield Health Remaining	Location	Timestamp
+TojlathHD	66	DEFEAT	U.S.S. ENTERPRISE-D	60	2737992704	0	Mirror Picard	Mirror Kira	Mirror Data	2231548400	0	2102924040	0	Axo'Tae	2/4/2026 4:12:23 PM
+Cloaked Enemy	Unknown	VICTORY	ROTARRAN	60	3042234368	0	Gul Dukat	Andy Billups	Garak	2351101797	2315096788	2088180886	1938221652	Axo'Tae	2/4/2026 4:12:23 PM
+
+Reward Name	Count
+
+Fleet Type	Attack	Defense	Health	Ship Ability	Captain Maneuver	Officer One Ability	Officer Two Ability	Officer Three Ability	Officer Attack Bonus	Damage Per Round	Armour Pierce	Shield Pierce	Accuracy	Critical Chance	Critical Damage	Officer Defense Bonus	Armour	Shield Deflection	Dodge	Officer Health Bonus	Shield Health	Hull Health	Impulse Speed	Warp Range	Warp Speed	Cargo Capacity	Protected Cargo	Mining Bonus	Debuff applied	Buff applied
+Player Fleet 1	385874432	184882256	2167236096	Galaxy Class	Take the Shot	Anticollective	A Little Excitement	Reflections	6.5	319227936	3721761	3667329	42934123	0.22	3.4	6.5	2559786	31882036	2534628	6.5	2102924040	2231548400	187	1184	476.48	4092050	0	1	NO	NO
+Enemy Fleet 1	489795680	204207648	2348231168	Bird of Prey	Prefect of Bajor	Manic Ambition	In Your Element	Outcast Spy	6.5	454074176	42934123	3667329	3667329	0.22	4.4	6.5	2503954	2503954	35833620	6.5	2088180886	2608281447	227	1184	280.2	3589260	0	1	NO	NO
+
+Round	Battle Event	Type	Attacker Name	Attacker Alliance	Attacker Ship	Attacker - Is Armada?	Target Name	Target Alliance	Target Ship	Target - Is Armada?	Hyperthermic Decay %	Hyperthermic Stablizer %	Critical Hit?	Hull Damage	Shield Damage	Mitigated Damage	Mitigated Isolytic Damage	Mitigated Apex Barrier	Total Damage	Total Isolytic Damage	Ability Type	Ability Value	Ability Name	Ability Owner Name	Target Defeated	Target Destroyed	Charging Weapons %
+1	1	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.18	Tertiary Adjunct	Seven of Nine	--	--	--
+1	2	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.35	Two But One	S31 Georgiou	--	--	--
+1	3	Officer Ability	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.26	Tertiary Adjunct	Seven of Nine	--	--	--
+1	4	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1	Prefect of Bajor	Gul Dukat	--	--	--
+1	5	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.9	In Your Element	Andy Billups	--	--	--
+1	6	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.6	Outcast Spy	Garak	--	--	--
+1	7	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	15000	Active Listening	Romi	--	--	--
+1	8	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.8	Purity of Will	Icheb	--	--	--
+1	9	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1.2	Bedside Manner	Doctor T'Ana	--	--	--
+1	10	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.5	Hold, Please	Gwen DeMarco	--	--	--
+1	11	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	12000	Logical Tactics	Infiltrator Tuvok	--	--	--
+1	12	Officer Ability	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.55	Reflections	Mirror Data	--	--	--
+1	13	Officer Ability	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	Officer	1.25	Take the Shot	Mirror Picard	--	--	--
+1	14	Officer Ability	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	Officer	17000	Anticollective	Mirror Picard	--	--	--
+1	15	Officer Ability	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.2	A Little Excitement	Mirror Kira	--	--	--
+1	16	Forbidden Tech Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	ForbiddenTechAbility	6	--	Thalaron Radiation	--	--	--
+1	17	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	47970812	191883248	254644656	5635475968	766654720	426507740	6470121664	--	--	--	--	--	--	--
+1	18	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	NO	4974281	19897124	26405102	584364608	79497424	44226251	670912288	--	--	--	--	--	--	--
+1	19	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2099634	8398536	14942633	286199488	47480344	41826303	317294332	--	--	--	--	--	--	--
+1	20	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2221054	8884216	15806753	302750144	50226092	44245083	335643176	--	--	--	--	--	--	--
+1	21	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2041025	8164102	14525530	278210624	46154996	40658779	308437498	--	--	--	--	--	--	--
+1	22	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2038171	8152686	14505218	277821568	46090456	40601925	308006174	--	--	--	--	--	--	--
+1	23	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2356559	9426236	16771112	321220736	53290352	46944443	356120552	--	--	--	--	--	--	--
+1	24	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2020982	8083927	14382884	275478496	45701736	40259493	305408532	--	--	--	--	--	--	--
+1	25	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2070561	8282245	14735729	282236608	46822904	41247151	312900896	--	--	--	--	--	--	--
+1	26	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.5	Manic Ambition	Gul Dukat	--	--	--
+1	27	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	49100312	196401248	260640416	5768166400	784705984	436550040	6622464320	--	--	--	--	--	--	--
+1	28	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	51905504	207622000	275531264	6097712640	829537728	461490960	7000818176	--	--	--	--	--	--	--
+1	29	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	50240856	200963424	266694800	5902154752	802933888	446690632	6776297088	--	--	--	--	--	--	--
+2	31	battle_action_type_{0}	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	--	--	1484799	--	--	--	--
+2	32	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1	Prefect of Bajor	Gul Dukat	--	--	--
+2	33	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.9	In Your Element	Andy Billups	--	--	--
+2	34	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.6	Outcast Spy	Garak	--	--	--
+2	35	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	15000	Active Listening	Romi	--	--	--
+2	36	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	1.2	Bedside Manner	Doctor T'Ana	--	--	--
+2	37	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.5	Hold, Please	Gwen DeMarco	--	--	--
+2	38	Officer Ability	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	Officer	1.25	Take the Shot	Mirror Picard	--	--	--
+2	39	Officer Ability	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	Officer	17000	Anticollective	Mirror Picard	--	--	--
+2	40	Officer Ability	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.2	A Little Excitement	Mirror Kira	--	--	--
+2	41	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	54290612	217162448	288192224	6377908736	867655808	482696932	7322512896	--	--	--	--	--	--	--
+2	42	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	47046536	188186144	249738304	5526894592	751883200	418289960	6345458816	--	--	--	--	--	--	--
+2	43	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	55508204	222032816	294655584	6520947712	887115008	493522556	7486736768	--	--	--	--	--	--	--
+2	44	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	60689276	242757104	322158400	7129605632	969917248	539587372	8185540288	--	--	--	--	--	--	--
+2	45	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	59099080	236396320	313717152	6942794240	944503296	525448968	7971061120	--	--	--	--	--	--	--
+2	46	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	49333616	197334464	261878880	5795574784	788434688	438624400	6653932032	--	--	--	--	--	--	--
+2	47	Shield Depleted	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--
+2	48	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2940469	11761878	15916055	489935904	67162920	44551034	543166192	--	--	--	--	--	--	--
+2	49	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2983845	11935380	16150837	497163104	68153656	45208214	551178608	--	--	--	--	--	--	--
+2	50	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2727429	10909714	14762917	454439424	62296880	41323252	503813112	--	--	--	--	--	--	--
+2	51	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2665704	10662818	14428819	444155072	60887048	40388073	492411388	--	--	--	--	--	--	--
+2	52	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2839892	11359566	15371652	473177824	64865636	43027182	524587388	--	--	--	--	--	--	--
+2	53	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2928141	11712566	15849326	487881824	66881336	44364253	540888940	--	--	--	--	--	--	--
+2	54	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2668404	10673614	14443429	444604800	60948700	40428971	492909976	--	--	--	--	--	--	--
+2	55	Attack	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	ROTARRAN	NO	--	--	NO	2887938	11551750	15631713	481183168	65963048	43755125	533462492	--	--	--	--	--	--	--
+2	56	Officer Ability	Cloaked Enemy	--	ROTARRAN	NO	--	--	ROTARRAN	NO	--	--	--	--	--	--	--	--	--	--	Officer	0.5	Manic Ambition	Gul Dukat	--	--	--
+2	57	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	427596576	0	453964320	10046568448	1366743296	760350784	11534521856	--	--	--	--	--	--	--
+2	58	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	420102528	0	446008160	9870492672	1342789760	747024864	11332368256	--	--	--	--	--	--	--
+2	59	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	422091520	0	448119808	9917224960	1349147264	750561792	11386021760	--	--	--	--	--	--	--
+2	60	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	424585888	0	450768000	9975831552	1357120128	754997280	11453308288	--	--	--	--	--	--	--
+2	61	Attack	Cloaked Enemy	--	ROTARRAN	NO	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	--	--	YES	442140992	0	469405632	10388296704	1413232128	786213632	11926861824	--	--	--	--	--	--	--
+2	62	Combatant Destroyed	TojlathHD	The Pack	U.S.S. ENTERPRISE-D	NO	Cloaked Enemy	--	U.S.S. ENTERPRISE-D	NO	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--	--
+
