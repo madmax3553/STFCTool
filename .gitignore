@@ -9,7 +9,14 @@ venv/
 .venv
 *.egg-info/
 dist/
+
+# C++ / xmake
 build/
+.xmake/
+
+# Cached game data (re-fetched from api.spocks.club on demand)
+data/game_data/
+data/player_data/
 
 # IDE
 .vscode/
@@ -25,5 +32,6 @@ Thumbs.db
 # Generated Reports (exclude from git, user generates these)
 stfc_crew_recommendations.html
 
-# User data (can add but don't force)
-*.json
+# User data (generated at runtime, not committed)
+.stfc_loadout.json
+.stfc_last_results.json

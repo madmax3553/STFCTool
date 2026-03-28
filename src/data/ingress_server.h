@@ -1,0 +1,57 @@
+#pragma once
+
+#include <string>
+#include <functional>
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include "data/models.h"
+
+namespace stfc {
+
+// Local HTTP server that receives sync data from the STFC community mod.
+// The mod POSTs JSON to /sync/ingress/ with a stfc-sync-token header.
+class IngressServer {
+public:
+    explicit IngressServer(const std::string& data_dir = "data/player_data",
+                           int port = 8270);
+    ~IngressServer();
+
+    // Start the server in a background thread
+    bool start();
+
+    // Stop the server
+    void stop();
+
+    // Check if server is running
+    bool is_running() const { return running_.load(); }
+
+    // Get the port
+    int port() const { return port_; }
+
+    // Set the expected sync token (for validation)
+    void set_token(const std::string& token) { token_ = token; }
+
+    // Get last received player data
+    PlayerData get_player_data();
+
+    // Set callback for when new data arrives
+    using DataCallback = std::function<void(const std::string& data_type)>;
+    void set_data_callback(DataCallback cb) { data_cb_ = std::move(cb); }
+
+private:
+    std::string data_dir_;
+    int port_;
+    std::string token_;
+    std::atomic<bool> running_{false};
+    std::thread server_thread_;
+    std::mutex data_mutex_;
+    PlayerData player_data_;
+    DataCallback data_cb_;
+
+    void run_server();
+    bool save_sync_data(const std::string& data_type, const std::string& json_body);
+    bool validate_token(const std::string& provided_token);
+};
+
+} // namespace stfc
