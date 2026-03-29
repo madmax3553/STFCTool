@@ -25,7 +25,7 @@ target("smoke_test")
     set_kind("binary")
     set_default(false)  -- only build when explicitly requested: xmake build smoke_test
     set_rundir("$(projectdir)")
-    add_files("src/smoke_test.cpp", "src/data/api_client.cpp", "src/util/csv_import.cpp", "src/core/crew_optimizer.cpp")
+    add_files("src/smoke_test.cpp", "src/data/api_client.cpp", "src/util/csv_import.cpp", "src/core/crew_optimizer.cpp", "src/core/planner.cpp")
     add_includedirs("src")
     add_sysincludedirs("include")
     add_packages("openssl")

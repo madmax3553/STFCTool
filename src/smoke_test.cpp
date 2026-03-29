@@ -23,6 +23,7 @@
 #include "data/api_client.h"
 #include "util/csv_import.h"
 #include "core/crew_optimizer.h"
+#include "core/planner.h"
 
 namespace fs = std::filesystem;
 using namespace stfc;
@@ -1085,6 +1086,273 @@ void test_crew_performance() {
 }
 
 // ---------------------------------------------------------------------------
+// Tests: Planner
+// ---------------------------------------------------------------------------
+
+void test_planner_construction() {
+    TEST("Planner construction and template loading");
+    Planner planner;
+    CHECK(planner.all_daily_tasks().size() >= 20,
+          "expected >= 20 daily templates, got " + std::to_string(planner.all_daily_tasks().size()));
+    CHECK(planner.all_weekly_goals().size() >= 10,
+          "expected >= 10 weekly templates, got " + std::to_string(planner.all_weekly_goals().size()));
+    PASS();
+}
+
+void test_planner_daily_generation() {
+    TEST("generate_daily_plan produces non-empty plan with valid tasks");
+    Planner planner;
+    DailyPlan plan = planner.generate_daily_plan();
+    CHECK(!plan.date.empty(), "date is empty");
+    CHECK(plan.total_tasks() > 0, "no tasks generated");
+    CHECK(plan.completed_tasks() == 0, "fresh plan has completed tasks");
+    CHECK(plan.remaining_tasks() == plan.total_tasks(), "remaining != total");
+    CHECK(plan.completion_pct() < 0.01, "fresh plan has non-zero completion");
+
+    // All tasks should have valid fields
+    for (const auto& t : plan.tasks) {
+        CHECK(t.id > 0, "task id <= 0");
+        CHECK(!t.title.empty(), "task has empty title");
+        CHECK(t.estimated_minutes >= 0, "negative estimated_minutes");
+    }
+
+    std::cout << "(" << plan.total_tasks() << " tasks, ~"
+              << plan.total_estimated_minutes() << " min) ";
+    PASS();
+}
+
+void test_planner_daily_for_specific_day() {
+    TEST("generate_daily_plan_for different days");
+    Planner planner;
+    DailyPlan monday = planner.generate_daily_plan_for(1, "2026-03-30"); // Monday=1
+    DailyPlan saturday = planner.generate_daily_plan_for(6, "2026-04-04"); // Saturday=6
+
+    CHECK(monday.date == "2026-03-30", "wrong date for monday");
+    CHECK(saturday.date == "2026-04-04", "wrong date for saturday");
+    CHECK(monday.total_tasks() > 0, "no monday tasks");
+    CHECK(saturday.total_tasks() > 0, "no saturday tasks");
+
+    std::cout << "(Mon:" << monday.total_tasks() << " Sat:" << saturday.total_tasks() << " tasks) ";
+    PASS();
+}
+
+void test_planner_toggle_task() {
+    TEST("toggle_task marks task complete and back");
+    Planner planner;
+    DailyPlan plan = planner.generate_daily_plan();
+    CHECK(plan.total_tasks() > 0, "no tasks to toggle");
+
+    int tid = plan.tasks[0].id;
+    CHECK(!plan.tasks[0].completed, "task already completed");
+
+    planner.toggle_task(plan, tid);
+    CHECK(plan.tasks[0].completed, "task not marked completed after toggle");
+    CHECK(plan.completed_tasks() == 1, "completed count should be 1");
+
+    planner.toggle_task(plan, tid);
+    CHECK(!plan.tasks[0].completed, "task still completed after second toggle");
+    CHECK(plan.completed_tasks() == 0, "completed count should be 0");
+
+    PASS();
+}
+
+void test_planner_skip_task() {
+    TEST("skip_task marks task as skipped with reason");
+    Planner planner;
+    DailyPlan plan = planner.generate_daily_plan();
+    CHECK(plan.total_tasks() > 0, "no tasks to skip");
+
+    int tid = plan.tasks[0].id;
+    planner.skip_task(plan, tid, "testing skip");
+    CHECK(plan.tasks[0].skipped, "task not marked skipped");
+    CHECK(plan.tasks[0].skip_reason == "testing skip", "skip reason not set");
+
+    PASS();
+}
+
+void test_planner_weekly_generation() {
+    TEST("generate_weekly_plan produces 7 days and goals");
+    Planner planner;
+    WeeklyPlan plan = planner.generate_weekly_plan();
+    CHECK(!plan.week_start.empty(), "week_start is empty");
+    CHECK(plan.days.size() == 7, "expected 7 days, got " + std::to_string(plan.days.size()));
+    CHECK(!plan.goals.empty(), "no weekly goals generated");
+    CHECK(plan.completed_goals() == 0, "fresh plan has completed goals");
+
+    // Each day should have tasks
+    for (int i = 0; i < 7; ++i) {
+        CHECK(plan.days[i].total_tasks() > 0,
+              "day " + std::to_string(i) + " has no tasks");
+    }
+
+    std::cout << "(" << plan.goals.size() << " goals, 7 days) ";
+    PASS();
+}
+
+void test_planner_goal_progress() {
+    TEST("update_goal_progress tracks progress and auto-completes");
+    Planner planner;
+    WeeklyPlan plan = planner.generate_weekly_plan();
+    CHECK(!plan.goals.empty(), "no goals");
+
+    int gid = plan.goals[0].id;
+    int target = plan.goals[0].progress_total;
+    CHECK(target > 0, "goal has zero target");
+
+    // Increment to completion
+    planner.update_goal_progress(plan, gid, target);
+    CHECK(plan.goals[0].progress_current == target, "progress not updated");
+    CHECK(plan.goals[0].completed, "goal not auto-completed at target");
+
+    // Decrement below target un-completes
+    planner.update_goal_progress(plan, gid, 0);
+    CHECK(!plan.goals[0].completed, "goal still completed at 0");
+
+    PASS();
+}
+
+void test_planner_persistence() {
+    TEST("save and load daily plan round-trip");
+    Planner planner;
+    DailyPlan plan = planner.generate_daily_plan();
+
+    // Toggle first task
+    if (!plan.tasks.empty()) {
+        planner.toggle_task(plan, plan.tasks[0].id);
+    }
+
+    std::string path = "data/player_data/test_daily_save.json";
+    fs::create_directories("data/player_data");
+    CHECK(planner.save_daily(plan, path), "save failed");
+    CHECK(fs::exists(path), "save file not created");
+
+    // Load into fresh plan
+    DailyPlan loaded = planner.generate_daily_plan();
+    CHECK(planner.load_daily(loaded, path), "load failed");
+    CHECK(loaded.tasks[0].completed == plan.tasks[0].completed, "completion state not preserved");
+
+    // Cleanup
+    fs::remove(path);
+    PASS();
+}
+
+void test_planner_weekly_persistence() {
+    TEST("save and load weekly plan round-trip");
+    Planner planner;
+    WeeklyPlan plan = planner.generate_weekly_plan();
+
+    // Find a goal with progress_total > 1 to test meaningful progress
+    CHECK(!plan.goals.empty(), "no goals");
+    int test_idx = -1;
+    for (size_t i = 0; i < plan.goals.size(); ++i) {
+        if (plan.goals[i].progress_total > 2) { test_idx = (int)i; break; }
+    }
+    if (test_idx < 0) test_idx = 0;  // fall back to first goal
+
+    int target_progress = std::min(3, plan.goals[test_idx].progress_total);
+    planner.update_goal_progress(plan, plan.goals[test_idx].id, target_progress);
+    CHECK(plan.goals[test_idx].progress_current == target_progress,
+          "progress not set before save: got " + std::to_string(plan.goals[test_idx].progress_current) +
+          " expected " + std::to_string(target_progress));
+
+    std::string path = "data/player_data/test_weekly_save.json";
+    fs::create_directories("data/player_data");
+    CHECK(planner.save_weekly(plan, path), "save failed");
+    CHECK(fs::exists(path), "save file not created");
+
+    // Reset goal progress and reload from saved file
+    plan.goals[test_idx].progress_current = 0;
+    plan.goals[test_idx].completed = false;
+    CHECK(planner.load_weekly(plan, path), "load failed");
+    CHECK(plan.goals[test_idx].progress_current == target_progress,
+          "goal progress not preserved, got " + std::to_string(plan.goals[test_idx].progress_current));
+
+    fs::remove(path);
+    PASS();
+}
+
+void test_planner_categories_covered() {
+    TEST("daily plan covers multiple task categories");
+    Planner planner;
+    DailyPlan plan = planner.generate_daily_plan();
+
+    std::set<TaskCategory> categories;
+    for (const auto& t : plan.tasks) {
+        categories.insert(t.category);
+    }
+
+    CHECK(categories.size() >= 5,
+          "only " + std::to_string(categories.size()) + " categories covered, expected >= 5");
+
+    std::cout << "(" << categories.size() << " categories) ";
+    PASS();
+}
+
+void test_planner_priority_ordering() {
+    TEST("daily plan tasks have valid priorities and categories");
+    Planner planner;
+    DailyPlan plan = planner.generate_daily_plan();
+
+    int critical = 0, high = 0, medium = 0, low = 0;
+    for (const auto& t : plan.tasks) {
+        switch (t.priority) {
+            case TaskPriority::Critical: critical++; break;
+            case TaskPriority::High:     high++; break;
+            case TaskPriority::Medium:   medium++; break;
+            case TaskPriority::Low:      low++; break;
+        }
+    }
+
+    // Should have a reasonable mix — at least some high or critical tasks
+    CHECK(high + critical > 0, "no high/critical priority tasks");
+
+    std::cout << "(C:" << critical << " H:" << high << " M:" << medium << " L:" << low << ") ";
+    PASS();
+}
+
+void test_planner_completion_pct() {
+    TEST("completion_pct tracks correctly");
+    Planner planner;
+    DailyPlan plan = planner.generate_daily_plan();
+    CHECK(plan.total_tasks() > 0, "no tasks");
+
+    CHECK(plan.completion_pct() < 0.01, "should be 0% initially");
+
+    // Complete all tasks
+    for (auto& t : plan.tasks) {
+        planner.toggle_task(plan, t.id);
+    }
+
+    double pct = plan.completion_pct();
+    CHECK(pct > 99.9, "should be 100% after completing all, got " + std::to_string(pct));
+
+    PASS();
+}
+
+void test_planner_helper_functions() {
+    TEST("priority_str, priority_icon, category_str, category_icon");
+
+    // priority_str — implementation returns uppercase
+    CHECK(std::string(priority_str(TaskPriority::Critical)) == "CRITICAL", "priority_str Critical");
+    CHECK(std::string(priority_str(TaskPriority::High)) == "HIGH", "priority_str High");
+    CHECK(std::string(priority_str(TaskPriority::Medium)) == "MEDIUM", "priority_str Medium");
+    CHECK(std::string(priority_str(TaskPriority::Low)) == "LOW", "priority_str Low");
+
+    // priority_icon should return non-empty strings
+    CHECK(std::string(priority_icon(TaskPriority::Critical)).size() > 0, "priority_icon Critical empty");
+
+    // category_str
+    CHECK(std::string(category_str(TaskCategory::Events)) == "Events", "category_str Events");
+    CHECK(std::string(category_str(TaskCategory::Mining)) == "Mining", "category_str Mining");
+    CHECK(std::string(category_str(TaskCategory::Combat)) == "Combat", "category_str Combat");
+
+    // category_icon should return non-empty strings
+    CHECK(std::string(category_icon(TaskCategory::Events)).size() > 0, "category_icon Events empty");
+
+    PASS();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -1203,6 +1471,21 @@ int main(int argc, char* argv[]) {
     } else {
         std::cout << "  (skipped — roster not loaded)\n";
     }
+
+    std::cout << "\n--- Planner ---\n";
+    test_planner_helper_functions();
+    test_planner_construction();
+    test_planner_daily_generation();
+    test_planner_daily_for_specific_day();
+    test_planner_toggle_task();
+    test_planner_skip_task();
+    test_planner_weekly_generation();
+    test_planner_goal_progress();
+    test_planner_categories_covered();
+    test_planner_priority_ordering();
+    test_planner_completion_pct();
+    test_planner_persistence();
+    test_planner_weekly_persistence();
 
     // Summary
     std::cout << "\n";
