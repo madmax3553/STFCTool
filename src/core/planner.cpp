@@ -1,6 +1,8 @@
 #include "core/planner.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <ctime>
 #include <fstream>
 #include <sstream>
@@ -223,12 +225,12 @@ void Planner::init_daily_templates() {
         2, "morning", true, 95,
         {"daily", "store", "free"});
 
-    add("Collect all generator outputs",
-        "Parsteel/Tritanium/Dilithium generators fill up over time. "
-        "At G6 levels these are significant. Collect before they cap out.",
+    add("Collect generators + refinery",
+        "Parsteel/Trit/Dil generators cap out over time. At G6 these are significant. "
+        "Also check refinery: queue all 3 slots. Refined resources gate late-G6 content.",
         TaskCategory::Mining, TaskPriority::Critical,
-        1, "morning", true, 90,
-        {"daily", "generators", "resources"});
+        2, "morning", true, 95,
+        {"daily", "generators", "refinery", "resources"});
 
     add("Start/queue research",
         "Never let the research queue sit idle. At G6 research times are 10-30+ days. "
@@ -245,7 +247,7 @@ void Planner::init_daily_templates() {
         3, "morning", false, 100,
         {"daily", "building", "queue"});
 
-    // === HIGH: Core daily grind ===
+    // === HIGH: Core daily grind (do these every day) ===
 
     add("Complete daily goals (3/3)",
         "Three daily goals for rewards. Usually: kill hostiles, complete a mission, "
@@ -253,6 +255,22 @@ void Planner::init_daily_templates() {
         TaskCategory::Combat, TaskPriority::High,
         15, "anytime", false, 95,
         {"daily", "goals", "hostiles"}, 3);
+
+    add("Check/progress active events + milestones",
+        "Solo events, alliance events, and arcs run constantly. Check requirements and "
+        "plan your dailies around maximizing event points. Events are the #1 source of "
+        "premium rewards at G6. Claim completed milestones promptly.",
+        TaskCategory::Events, TaskPriority::High,
+        10, "morning", true, 95,
+        {"daily", "events", "arc", "milestones"});
+
+    add("Deploy mining ships (3-4 ships)",
+        "At G6 you need millions of resources daily. Keep all survey ships on nodes 24/7. "
+        "Focus on whatever resource your current research/build needs most. "
+        "Protected cargo > raw volume at G6.",
+        TaskCategory::Mining, TaskPriority::High,
+        5, "morning", false, 90,
+        {"daily", "mining", "resources"});
 
     add("Kill daily hostile target count",
         "G6 hostile grinding is essential for XP, loot, and event points. "
@@ -269,35 +287,13 @@ void Planner::init_daily_templates() {
         15, "alliance schedule", false, 90,
         {"daily", "armada", "alliance"});
 
-    add("Send alliance helps",
-        "Every help reduces build/research time for alliance members and earns loyalty. "
-        "At G6, alliance cooperation is everything. Help everyone, tap the button often.",
+    add("Alliance: helps + gifts",
+        "Send helps to reduce build/research time for alliance members. "
+        "Open alliance gifts before they expire. Free resources and speed-ups. "
+        "At G6, alliance cooperation is everything.",
         TaskCategory::Alliance, TaskPriority::High,
-        2, "throughout day", false, 85,
-        {"daily", "alliance", "helps"});
-
-    add("Open alliance gifts",
-        "Alliance gifts from chests and member purchases. Free resources, speed-ups, "
-        "and officer shards. Check multiple times per day as they expire.",
-        TaskCategory::Alliance, TaskPriority::High,
-        2, "throughout day", true, 85,
-        {"daily", "alliance", "gifts"});
-
-    add("Deploy mining ships (3-4 ships)",
-        "At G6 you need millions of resources daily. Keep all survey ships on nodes 24/7. "
-        "Focus on whatever resource your current research/build needs most. "
-        "Protected cargo > raw volume at G6.",
-        TaskCategory::Mining, TaskPriority::High,
-        10, "morning", false, 90,
-        {"daily", "mining", "resources"});
-
-    add("Check/progress active events",
-        "Solo events, alliance events, and arcs run constantly. Check requirements and "
-        "plan your dailies around maximizing event points. Events are the #1 source of "
-        "premium rewards at G6.",
-        TaskCategory::Events, TaskPriority::High,
-        10, "morning", false, 95,
-        {"daily", "events", "arc"});
+        3, "throughout day", true, 85,
+        {"daily", "alliance", "helps", "gifts"});
 
     add("Use officer XP and promote officers",
         "Spend accumulated officer XP on priority officers. At G6, focus on officers "
@@ -307,38 +303,9 @@ void Planner::init_daily_templates() {
         5, "anytime", false, 85,
         {"daily", "officers", "xp", "promote"});
 
-    // === MEDIUM: Important but flexible ===
+    // === MEDIUM: Important but flexible (do when time allows) ===
 
-    add("Refine raw resources",
-        "Refinery converts raw (G3) resources to refined (G4+). At G6 this is critical "
-        "for ship tiering and research. Queue all 3 refinery slots. Check timers.",
-        TaskCategory::Mining, TaskPriority::Medium,
-        3, "anytime", false, 85,
-        {"daily", "refinery", "resources"});
-
-    add("Scan and complete away missions",
-        "Away team missions give officer shards, speed-ups, and resources. "
-        "At G6, scan for epic missions. Send highest-power away teams.",
-        TaskCategory::Combat, TaskPriority::Medium,
-        5, "anytime", false, 70,
-        {"daily", "missions", "away"});
-
-    add("Collect completed research/build rewards",
-        "When research or buildings finish, collect them and immediately start the next. "
-        "Dead queue time is wasted progression.",
-        TaskCategory::Research, TaskPriority::Medium,
-        2, "check periodically", true, 90,
-        {"daily", "research", "building", "queue"});
-
-    add("PvP daily: defend or raid",
-        "At G6 PvP is core gameplay. Either defend your mining nodes from raiders "
-        "or go raiding. Use the best PvP crew from the optimizer. "
-        "Pick battles wisely -- repair costs are steep at G6.",
-        TaskCategory::Combat, TaskPriority::Medium,
-        20, "peak hours", false, 75,
-        {"daily", "pvp", "combat"});
-
-    add("Ship leveling: spend ship XP",
+    add("Ship XP: level priority ship",
         "Accumulated ship XP should be spent on your priority ships. "
         "At G6: focus on your main PvP ship, then armada ship, then dailies ship. "
         "Don't spread XP thin across too many ships.",
@@ -346,20 +313,20 @@ void Planner::init_daily_templates() {
         5, "anytime", false, 80,
         {"daily", "ships", "xp"});
 
-    add("Check galaxy map for new systems/events",
-        "New systems, armada targets, or special event nodes appear on the galaxy map. "
-        "Scout for high-value mining nodes (4* crystal/gas/ore). "
-        "Check for displaced hostiles during events.",
-        TaskCategory::Misc, TaskPriority::Medium,
-        5, "anytime", false, 60,
-        {"daily", "exploration", "galaxy"});
+    add("Away missions",
+        "Away team missions give officer shards, speed-ups, and resources. "
+        "At G6, scan for epic missions. Send highest-power away teams.",
+        TaskCategory::Combat, TaskPriority::Medium,
+        5, "anytime", false, 70,
+        {"daily", "missions", "away"});
 
-    add("Claim event milestone rewards",
-        "Events have milestone tiers. Claim completed milestones promptly. "
-        "Plan which milestones are reachable and focus effort accordingly.",
-        TaskCategory::Events, TaskPriority::Medium,
-        3, "check periodically", true, 90,
-        {"daily", "events", "milestones"});
+    add("PvP: defend or raid",
+        "At G6 PvP is core gameplay. Either defend your mining nodes from raiders "
+        "or go raiding. Use the best PvP crew from the optimizer. "
+        "Pick battles wisely -- repair costs are steep at G6.",
+        TaskCategory::Combat, TaskPriority::Medium,
+        20, "peak hours", false, 75,
+        {"daily", "pvp", "combat"});
 
     add("Use speed-ups strategically",
         "At G6, speed-ups are precious. Use them to finish research/builds just before "
@@ -371,39 +338,19 @@ void Planner::init_daily_templates() {
 
     // === LOW: Nice to do, do if time allows ===
 
-    add("Check alliance store",
+    add("Check alliance + faction stores",
         "Alliance store refreshes with officer shards, speed-ups, and resources. "
-        "Buy priority officer shards first, then speed-ups.",
+        "Buy priority officer shards first, then speed-ups. Check faction stores too.",
         TaskCategory::Store, TaskPriority::Low,
         3, "after reset", true, 70,
-        {"daily", "store", "alliance"});
+        {"daily", "store", "alliance", "faction"});
 
-    add("Send gifts to alliance",
-        "Costs nothing, builds goodwill. Gift alliance members when prompted.",
-        TaskCategory::Alliance, TaskPriority::Low,
-        1, "anytime", false, 50,
-        {"daily", "alliance", "social"});
-
-    add("Reorganize ship crews",
+    add("Reorganize ship crews (if roster changed)",
         "If you unlocked new officers or leveled existing ones, re-run the crew optimizer. "
         "Update crews across all 7 docks.",
         TaskCategory::Officers, TaskPriority::Low,
         10, "evening", false, 65,
         {"daily", "crews", "optimizer"});
-
-    add("Review battle logs",
-        "Check recent battle outcomes. Identify losses and why. "
-        "Feed data into the crew optimizer's weakness analysis.",
-        TaskCategory::Combat, TaskPriority::Low,
-        5, "evening", false, 60,
-        {"daily", "battlelogs", "analysis"});
-
-    add("Scout enemy bases (PvP intel)",
-        "If your alliance is planning operations, scout target bases. "
-        "Note defense platform levels, active ships, and alliance tags.",
-        TaskCategory::Combat, TaskPriority::Low,
-        5, "anytime", false, 40,
-        {"daily", "pvp", "scouting"});
 }
 
 // ---------------------------------------------------------------------------
@@ -649,6 +596,246 @@ void Planner::update_goal_progress(WeeklyPlan& plan, int goal_id, int progress) 
             g.progress_current = std::min(progress, g.progress_total);
             g.completed = (g.progress_current >= g.progress_total);
             break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enrich plan with player data context
+// ---------------------------------------------------------------------------
+
+void Planner::enrich_plan_with_player_data(DailyPlan& plan,
+                                            const PlayerData& pd,
+                                            const GameData& gd) const {
+    // Pre-classify jobs by type
+    std::vector<const PlayerJob*> research_jobs, building_jobs, ship_jobs, officer_jobs;
+    for (const auto& j : pd.jobs) {
+        if (j.completed) continue;
+        switch (j.job_type) {
+            case 1: research_jobs.push_back(&j); break;
+            case 2: building_jobs.push_back(&j); break;
+            case 3: case 4: ship_jobs.push_back(&j); break;
+            case 5: officer_jobs.push_back(&j); break;
+        }
+    }
+
+    // Find officers near rank-up: those with shard_count that might be enough
+    // Typical shard requirements by rank: rank2=10, rank3=30, rank4=100, rank5=200, rank6=400
+    static const int rank_shard_thresholds[] = {0, 0, 10, 30, 100, 200, 400};
+    std::vector<std::string> rankup_hints;
+    for (const auto& po : pd.officers) {
+        if (po.rank < 1 || po.rank > 5) continue;
+        int next_rank = po.rank + 1;
+        if (next_rank > 6) continue;
+        int needed = (next_rank <= 6) ? rank_shard_thresholds[next_rank] : 9999;
+        if (po.shard_count >= needed && needed > 0) {
+            rankup_hints.push_back(po.name + " (Rk" + std::to_string(po.rank) +
+                                   " -> " + std::to_string(next_rank) +
+                                   ", " + std::to_string(po.shard_count) + " shards)");
+        }
+    }
+
+    // Identify key resource amounts (parsteel, tritanium, dilithium by name pattern)
+    auto find_resource_amount = [&](const std::string& pattern) -> int64_t {
+        for (const auto& r : pd.resources) {
+            // Case-insensitive contains check
+            std::string lower_name = r.name;
+            for (auto& c : lower_name) c = static_cast<char>(std::tolower(c));
+            std::string lower_pat = pattern;
+            for (auto& c : lower_pat) c = static_cast<char>(std::tolower(c));
+            if (lower_name.find(lower_pat) != std::string::npos) return r.amount;
+        }
+        return -1;
+    };
+
+    // Format resource amount with K/M/B suffix
+    auto fmt_amount = [](int64_t v) -> std::string {
+        if (v < 0) return "?";
+        if (v >= 1000000000LL) {
+            char buf[32]; std::snprintf(buf, sizeof(buf), "%.1fB", v / 1e9); return buf;
+        }
+        if (v >= 1000000LL) {
+            char buf[32]; std::snprintf(buf, sizeof(buf), "%.1fM", v / 1e6); return buf;
+        }
+        if (v >= 1000LL) {
+            char buf[32]; std::snprintf(buf, sizeof(buf), "%.1fK", v / 1e3); return buf;
+        }
+        return std::to_string(v);
+    };
+
+    // Find top ships by tier
+    std::vector<std::pair<std::string, int>> top_ships;
+    for (const auto& ps : pd.ships) {
+        top_ships.push_back({ps.name, ps.tier});
+    }
+    std::sort(top_ships.begin(), top_ships.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    // Now enrich each task based on its tags/category
+    for (auto& task : plan.tasks) {
+        task.context_hints.clear();
+        task.has_active_job = false;
+        task.queue_idle = false;
+
+        // --- Research tasks ---
+        if (task.tags.count("research") || task.category == TaskCategory::Research) {
+            if (research_jobs.empty()) {
+                task.queue_idle = true;
+                task.context_hints.push_back("!! RESEARCH QUEUE IDLE - start something!");
+            } else {
+                for (const auto* j : research_jobs) {
+                    task.has_active_job = true;
+                    int remaining = job_remaining_seconds(*j);
+                    std::string name = "Research";
+                    // Try to resolve research name
+                    if (j->research_id > 0) {
+                        auto it = gd.researches.find(j->research_id);
+                        if (it != gd.researches.end() && !it->second.name.empty()) {
+                            name = it->second.name;
+                            if (j->level > 0) name += " Lv" + std::to_string(j->level);
+                        }
+                    }
+                    if (remaining > 0) {
+                        task.context_hints.push_back(name + " - " + format_duration_short(remaining) + " left");
+                    } else {
+                        task.context_hints.push_back(name + " - DONE! Collect & start next");
+                    }
+                }
+            }
+            // Show total research nodes
+            if (!pd.researches.empty()) {
+                task.context_hints.push_back("You have " + std::to_string(pd.researches.size()) + " researched nodes");
+            }
+        }
+
+        // --- Building tasks ---
+        if (task.tags.count("building") || task.category == TaskCategory::SpeedUps) {
+            if (task.tags.count("building") || task.title.find("building") != std::string::npos
+                || task.title.find("Building") != std::string::npos
+                || task.title.find("queue") != std::string::npos) {
+                if (building_jobs.empty()) {
+                    task.queue_idle = true;
+                    task.context_hints.push_back("!! BUILD QUEUE IDLE - start something!");
+                } else {
+                    for (const auto* j : building_jobs) {
+                        task.has_active_job = true;
+                        int remaining = job_remaining_seconds(*j);
+                        std::string name = "Building";
+                        // Building jobs don't have research_id, show type
+                        if (remaining > 0) {
+                            task.context_hints.push_back(name + " job - " + format_duration_short(remaining) + " left");
+                        } else {
+                            task.context_hints.push_back(name + " job - DONE! Collect & start next");
+                        }
+                    }
+                }
+                // Show ops level
+                if (pd.ops_level > 0) {
+                    task.context_hints.push_back("Ops Level: " + std::to_string(pd.ops_level));
+                }
+            }
+        }
+
+        // --- Officer tasks ---
+        if (task.tags.count("officers") || task.category == TaskCategory::Officers) {
+            if (!rankup_hints.empty()) {
+                task.context_hints.push_back("Officers ready to rank up:");
+                int shown = 0;
+                for (const auto& h : rankup_hints) {
+                    task.context_hints.push_back("  " + h);
+                    if (++shown >= 5) {
+                        if (rankup_hints.size() > 5) {
+                            task.context_hints.push_back("  ...and " +
+                                std::to_string(rankup_hints.size() - 5) + " more");
+                        }
+                        break;
+                    }
+                }
+            } else if (!pd.officers.empty()) {
+                task.context_hints.push_back("No officers ready for rank-up (need more shards)");
+            }
+            if (!pd.officers.empty()) {
+                // Show highest level officers
+                auto sorted = pd.officers;
+                std::sort(sorted.begin(), sorted.end(),
+                          [](const auto& a, const auto& b) { return a.level > b.level; });
+                std::string top3;
+                for (int i = 0; i < 3 && i < (int)sorted.size(); ++i) {
+                    if (i > 0) top3 += ", ";
+                    top3 += sorted[i].name + " Lv" + std::to_string(sorted[i].level);
+                }
+                task.context_hints.push_back("Top officers: " + top3);
+            }
+        }
+
+        // --- Ship tasks ---
+        if (task.tags.count("ships") || task.category == TaskCategory::Ships) {
+            if (!ship_jobs.empty()) {
+                for (const auto* j : ship_jobs) {
+                    task.has_active_job = true;
+                    int remaining = job_remaining_seconds(*j);
+                    std::string label = (j->job_type == 3) ? "Ship Build" : "Ship Upgrade";
+                    if (remaining > 0) {
+                        task.context_hints.push_back(label + " - " + format_duration_short(remaining) + " left");
+                    } else {
+                        task.context_hints.push_back(label + " - DONE!");
+                    }
+                }
+            }
+            // Show top ships by tier
+            if (!top_ships.empty()) {
+                std::string top;
+                for (int i = 0; i < 3 && i < (int)top_ships.size(); ++i) {
+                    if (i > 0) top += ", ";
+                    top += top_ships[i].first + " T" + std::to_string(top_ships[i].second);
+                }
+                task.context_hints.push_back("Top ships: " + top);
+            }
+        }
+
+        // --- Mining/resource tasks ---
+        if (task.tags.count("mining") || task.tags.count("resources") ||
+            task.category == TaskCategory::Mining) {
+            // Show key resource amounts
+            int64_t parsteel = find_resource_amount("parsteel");
+            int64_t tritanium = find_resource_amount("tritanium");
+            int64_t dilithium = find_resource_amount("dilithium");
+            if (parsteel >= 0 || tritanium >= 0 || dilithium >= 0) {
+                std::string res_line;
+                if (parsteel >= 0) res_line += "Par:" + fmt_amount(parsteel);
+                if (tritanium >= 0) {
+                    if (!res_line.empty()) res_line += "  ";
+                    res_line += "Tri:" + fmt_amount(tritanium);
+                }
+                if (dilithium >= 0) {
+                    if (!res_line.empty()) res_line += "  ";
+                    res_line += "Dil:" + fmt_amount(dilithium);
+                }
+                task.context_hints.push_back(res_line);
+            }
+            // Show total resource types tracked
+            if (!pd.resources.empty()) {
+                task.context_hints.push_back(std::to_string(pd.resources.size()) + " resource types in inventory");
+            }
+        }
+
+        // --- Speed-up tasks ---
+        if (task.tags.count("speedups") || task.tags.count("strategy")) {
+            // Show all active jobs that speed-ups could apply to
+            int total_active = static_cast<int>(research_jobs.size() + building_jobs.size() + ship_jobs.size());
+            if (total_active > 0) {
+                task.context_hints.push_back(std::to_string(total_active) + " active job(s) that can be sped up");
+                for (const auto* j : research_jobs) {
+                    int rem = job_remaining_seconds(*j);
+                    if (rem > 0) task.context_hints.push_back("  Research: " + format_duration_short(rem) + " left");
+                }
+                for (const auto* j : building_jobs) {
+                    int rem = job_remaining_seconds(*j);
+                    if (rem > 0) task.context_hints.push_back("  Building: " + format_duration_short(rem) + " left");
+                }
+            } else {
+                task.context_hints.push_back("No active jobs - save speed-ups for later");
+            }
         }
     }
 }

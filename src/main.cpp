@@ -12,6 +12,8 @@
 
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
+#include "ftxui/component/event.hpp"
+#include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/dom/table.hpp"
 
@@ -60,6 +62,10 @@ struct AppState {
     // Ship browser state
     int selected_ship = 0;
     std::string ship_filter;
+
+    // Sync tab browser state
+    int sync_view_mode = 0;   // 0=officers, 1=ships, 2=resources, 3=buildings, 4=research, 5=jobs, 6=buffs
+    int sync_selected_row = 0;
 
     // Planner state
     Planner planner;
@@ -113,6 +119,12 @@ struct AppState {
             }
         }
 
+        // Load player data from cache and resolve names against game data
+        player_data = ingress_server.get_player_data();
+        if (data_loaded) {
+            resolve_player_names(player_data, game_data);
+        }
+
         // Generate today's plans
         daily_plan = planner.generate_daily_plan();
         weekly_plan = planner.generate_weekly_plan();
@@ -120,6 +132,11 @@ struct AppState {
         // Load saved state if available
         planner.load_daily(daily_plan, "data/player_data/daily_plan.json");
         planner.load_weekly(weekly_plan, "data/player_data/weekly_plan.json");
+
+        // Enrich daily plan with player data context
+        if (data_loaded) {
+            planner.enrich_plan_with_player_data(daily_plan, player_data, game_data);
+        }
 
         // Load roster if available
         if (fs::exists("roster.csv")) {
@@ -249,66 +266,194 @@ static Color category_color(TaskCategory c) {
 }
 
 // ---------------------------------------------------------------------------
-// View: Overview
+// View: Overview — Player-centric dashboard
 // ---------------------------------------------------------------------------
 
 static Element render_overview(AppState& state) {
     auto& gd = state.game_data;
+    auto& pd = state.player_data;
+    bool has_player = !pd.officers.empty() || !pd.ships.empty() || !pd.resources.empty();
 
-    std::vector<std::vector<std::string>> table_data = {
-        {"Category", "Count"},
-        {"Officers", std::to_string(gd.officers.size())},
-        {"Ships", std::to_string(gd.ships.size())},
-        {"Research", std::to_string(gd.researches.size())},
-        {"Buildings", std::to_string(gd.buildings.size())},
-        {"Resources", std::to_string(gd.resources.size())},
-    };
+    // --- Player identity header ---
+    std::string player_label = pd.player_name.empty() ? "Unknown Commander" : pd.player_name;
+    std::string ops_label = pd.ops_level > 0 ? "Ops " + std::to_string(pd.ops_level) : "";
 
-    auto table = Table(table_data);
-    table.SelectAll().Border(LIGHT);
-    table.SelectRow(0).Decorate(bold);
-    table.SelectRow(0).DecorateCells(center);
-    table.SelectColumn(1).DecorateCells(center);
-
-    int interceptors = 0, explorers = 0, battleships = 0, surveys = 0;
-    for (auto& [id, ship] : gd.ships) {
-        switch (ship.hull_type) {
-            case 0: interceptors++; break;
-            case 1: surveys++; break;
-            case 2: explorers++; break;
-            case 3: battleships++; break;
-        }
+    // Last sync time
+    std::string sync_label = "Never";
+    if (pd.last_sync != std::chrono::system_clock::time_point{}) {
+        auto tt = std::chrono::system_clock::to_time_t(pd.last_sync);
+        std::tm tm_buf{};
+        localtime_r(&tt, &tm_buf);
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+            tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+            tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+        sync_label = buf;
     }
 
-    int common = 0, uncommon = 0, rare = 0, epic = 0;
-    for (auto& [id, officer] : gd.officers) {
-        switch (officer.rarity) {
-            case 1: common++; break;
-            case 2: uncommon++; break;
-            case 3: rare++; break;
-            case 4: epic++; break;
+    auto identity_box = vbox({
+        hbox({
+            text(player_label) | bold | color(Color::Cyan),
+            ops_label.empty() ? text("") : hbox({text("  "), text(ops_label) | color(Color::Yellow) | bold}),
+            filler(),
+            text("Last sync: ") | dim,
+            text(sync_label) | (pd.last_sync != std::chrono::system_clock::time_point{}
+                ? color(Color::Green) : color(Color::GrayDark)),
+        }),
+    });
+
+    // --- Resources panel (key resources with amounts) ---
+    // Well-known resource IDs for STFC
+    // We'll show all resources sorted by amount, highlighting the big 3 if found
+    Elements resource_lines;
+    resource_lines.push_back(text("Resources") | bold);
+    resource_lines.push_back(separator());
+
+    if (has_player && !pd.resources.empty()) {
+        // Sort by amount descending, show top 12
+        auto sorted_res = pd.resources;
+        std::sort(sorted_res.begin(), sorted_res.end(),
+            [](const PlayerResource& a, const PlayerResource& b) {
+                return a.amount > b.amount;
+            });
+
+        int shown = 0;
+        for (auto& r : sorted_res) {
+            if (shown >= 12) break;
+            if (r.amount == 0) continue;
+            std::string name = r.name.empty() ? ("ID:" + std::to_string(r.resource_id)) : r.name;
+            // Truncate long names
+            if (name.size() > 22) name = name.substr(0, 20) + "..";
+            resource_lines.push_back(hbox({
+                text("  " + name) | size(WIDTH, EQUAL, 24),
+                text(format_number(r.amount)) | bold | color(Color::Green),
+            }));
+            shown++;
         }
+        if (shown == 0) {
+            resource_lines.push_back(text("  No resources tracked") | dim);
+        }
+    } else {
+        resource_lines.push_back(text("  No player data synced yet") | dim);
+        resource_lines.push_back(text("  Start sync with [S]") | dim);
     }
 
-    auto ship_breakdown = vbox({
-        text("Ships by Type") | bold,
-        separator(),
-        hbox({text("  Interceptors: "), text(std::to_string(interceptors)) | color(Color::Cyan)}),
-        hbox({text("  Explorers:    "), text(std::to_string(explorers)) | color(Color::Green)}),
-        hbox({text("  Battleships:  "), text(std::to_string(battleships)) | color(Color::Red)}),
-        hbox({text("  Surveys:      "), text(std::to_string(surveys)) | color(Color::Yellow)}),
-    });
+    // --- Active Jobs panel ---
+    Elements job_lines;
+    job_lines.push_back(text("Active Jobs") | bold);
+    job_lines.push_back(separator());
 
-    auto officer_breakdown = vbox({
-        text("Officers by Rarity") | bold,
-        separator(),
-        hbox({text("  Common:   "), text(std::to_string(common)) | color(Color::White)}),
-        hbox({text("  Uncommon: "), text(std::to_string(uncommon)) | color(Color::Green)}),
-        hbox({text("  Rare:     "), text(std::to_string(rare)) | color(Color::Blue)}),
-        hbox({text("  Epic:     "), text(std::to_string(epic)) | color(Color::Magenta)}),
-    });
+    if (has_player) {
+        int active_count = 0;
+        for (auto& j : pd.jobs) {
+            if (j.completed) continue;
+            int remaining = job_remaining_seconds(j);
+            if (remaining < -3600) continue; // Skip jobs finished >1hr ago
 
-    // Quick daily summary
+            std::string type_str = job_type_str(j.job_type);
+            std::string time_str = remaining > 0
+                ? format_duration_short(remaining)
+                : "DONE";
+            Color time_color = remaining > 0
+                ? (remaining < 300 ? Color::Yellow : Color::White)
+                : Color::Green;
+
+            job_lines.push_back(hbox({
+                text("  " + type_str) | size(WIDTH, EQUAL, 18),
+                text(time_str) | bold | color(time_color),
+            }));
+            active_count++;
+        }
+        if (active_count == 0) {
+            job_lines.push_back(text("  No active jobs") | dim);
+            job_lines.push_back(text("  Queue is empty!") | color(Color::Yellow));
+        }
+    } else {
+        job_lines.push_back(text("  Awaiting sync data") | dim);
+    }
+
+    // --- Ship progression panel ---
+    Elements ship_lines;
+    ship_lines.push_back(text("Ship Fleet") | bold);
+    ship_lines.push_back(separator());
+
+    if (has_player && !pd.ships.empty()) {
+        // Group by hull type, show top tier ships
+        auto sorted_ships = pd.ships;
+        std::sort(sorted_ships.begin(), sorted_ships.end(),
+            [](const PlayerShip& a, const PlayerShip& b) {
+                return a.tier > b.tier || (a.tier == b.tier && a.level > b.level);
+            });
+
+        ship_lines.push_back(hbox({
+            text("  Total: ") | dim,
+            text(std::to_string(pd.ships.size())) | bold,
+            text(" ships") | dim,
+        }));
+
+        int shown = 0;
+        for (auto& s : sorted_ships) {
+            if (shown >= 6) break;
+            std::string name = s.name.empty() ? ("Hull#" + std::to_string(s.hull_id)) : s.name;
+            if (name.size() > 18) name = name.substr(0, 16) + "..";
+
+            // Look up hull type from game data
+            std::string type_tag = "";
+            auto git = gd.ships.find(s.hull_id);
+            if (git != gd.ships.end()) {
+                type_tag = std::string(hull_type_str(git->second.hull_type)).substr(0, 3);
+            }
+
+            ship_lines.push_back(hbox({
+                text("  " + name) | size(WIDTH, EQUAL, 20),
+                text("T" + std::to_string(s.tier)) | bold | color(Color::Cyan),
+                text(" Lv" + std::to_string(s.level)) | dim,
+                type_tag.empty() ? text("") : hbox({text(" "), text(type_tag) | dim}),
+            }));
+            shown++;
+        }
+        if (pd.ships.size() > 6) {
+            ship_lines.push_back(text("  +" + std::to_string(pd.ships.size() - 6) + " more...") | dim);
+        }
+    } else {
+        ship_lines.push_back(text("  Awaiting sync data") | dim);
+    }
+
+    // --- Officer roster summary ---
+    Elements officer_lines;
+    officer_lines.push_back(text("Officer Roster") | bold);
+    officer_lines.push_back(separator());
+
+    if (has_player && !pd.officers.empty()) {
+        officer_lines.push_back(hbox({
+            text("  Total: ") | dim,
+            text(std::to_string(pd.officers.size())) | bold,
+            text(" officers") | dim,
+        }));
+
+        // Count by rank
+        std::map<int, int> rank_counts;
+        int max_level = 0;
+        for (auto& o : pd.officers) {
+            rank_counts[o.rank]++;
+            if (o.level > max_level) max_level = o.level;
+        }
+        officer_lines.push_back(hbox({
+            text("  Max level: ") | dim,
+            text(std::to_string(max_level)) | bold | color(Color::Yellow),
+        }));
+
+        for (auto& [rank, count] : rank_counts) {
+            officer_lines.push_back(hbox({
+                text("  Rank " + std::to_string(rank) + ": ") | dim,
+                text(std::to_string(count)) | bold,
+            }));
+        }
+    } else {
+        officer_lines.push_back(text("  Awaiting sync data") | dim);
+    }
+
+    // --- Daily progress summary ---
     auto& dp = state.daily_plan;
     std::string pct_str = std::to_string((int)dp.completion_pct()) + "%";
     auto daily_summary = vbox({
@@ -318,6 +463,17 @@ static Element render_overview(AppState& state) {
         hbox({text("  Remaining: "), text(std::to_string(dp.remaining_tasks()) + " (" + std::to_string(dp.remaining_estimated_minutes()) + " min)")}),
         hbox({text("  Progress:  "), text(pct_str) | bold | color(dp.completion_pct() >= 80 ? Color::Green : dp.completion_pct() >= 50 ? Color::Yellow : Color::Red)}),
         gauge(dp.completion_pct() / 100.0) | color(Color::Green),
+    });
+
+    // --- Game data stats (compact) ---
+    auto game_stats = vbox({
+        text("Game Data") | bold,
+        separator(),
+        hbox({text("  Officers:  "), text(std::to_string(gd.officers.size())) | dim}),
+        hbox({text("  Ships:     "), text(std::to_string(gd.ships.size())) | dim}),
+        hbox({text("  Research:  "), text(std::to_string(gd.researches.size())) | dim}),
+        hbox({text("  Buildings: "), text(std::to_string(gd.buildings.size())) | dim}),
+        hbox({text("  Resources: "), text(std::to_string(gd.resources.size())) | dim}),
     });
 
     auto ingress_status = state.ingress_server.is_running()
@@ -331,16 +487,18 @@ static Element render_overview(AppState& state) {
     return vbox({
         text("STFC Tool - Dashboard") | bold | center,
         separator(),
+        identity_box,
+        separator(),
         hbox({
-            table.Render() | flex,
+            vbox({vbox(resource_lines), separator(), vbox(job_lines)}) | flex,
             separator(),
-            vbox({ship_breakdown, separator(), officer_breakdown}) | flex,
+            vbox({vbox(ship_lines), separator(), vbox(officer_lines)}) | flex,
             separator(),
-            daily_summary | flex,
-        }),
+            vbox({daily_summary, separator(), game_stats}) | flex,
+        }) | flex,
         separator(),
         hbox({ingress_status, text("  "), crew_status}),
-    });
+    }) | vscroll_indicator | yframe;
 }
 
 // ---------------------------------------------------------------------------
@@ -351,11 +509,16 @@ static Element render_daily_planner(AppState& state) {
     auto& plan = state.daily_plan;
 
     // Header with date and progress
+    bool has_player_data = !state.player_data.officers.empty() || !state.player_data.jobs.empty();
     auto header = vbox({
         hbox({
             text("Daily Planner") | bold,
             text(" - "),
             text(plan.date) | color(Color::Cyan),
+            text("  "),
+            has_player_data
+                ? (text("[LIVE]") | color(Color::Green) | bold)
+                : (text("[no sync data]") | color(Color::GrayDark)),
             filler(),
             text(std::to_string(plan.completed_tasks()) + "/" + std::to_string(plan.total_tasks()) + " done") | bold,
             text("  ~" + std::to_string(plan.remaining_estimated_minutes()) + " min left") | dim,
@@ -411,12 +574,19 @@ static Element render_daily_planner(AppState& state) {
             text(pri_icon) | color(priority_color(t.priority)),
             text(" "),
             task_text | flex,
+            // Show inline status from player data
+            t.queue_idle
+                ? (text(" IDLE!") | color(Color::Red) | bold)
+                : (t.has_active_job
+                    ? (text(" active") | color(Color::Green) | dim)
+                    : text("")),
+            text(" "),
             text(time_str) | dim,
             text(t.time_sensitive ? " *" : "  ") | color(Color::Yellow),
         });
 
         if (selected) {
-            row = row | inverted;
+            row = row | inverted | focus;
         }
 
         task_rows.push_back(row);
@@ -453,6 +623,23 @@ static Element render_daily_planner(AppState& state) {
             if (cut == std::string::npos || cut == 0) cut = 55;
             detail_lines.push_back(text(desc.substr(0, cut)) | dim);
             desc = desc.substr(cut + (desc[cut] == ' ' ? 1 : 0));
+        }
+
+        // Player data context hints
+        if (!t.context_hints.empty()) {
+            detail_lines.push_back(separator());
+            detail_lines.push_back(text("Your Status:") | bold | color(Color::Cyan));
+            for (const auto& hint : t.context_hints) {
+                Color hint_color = Color::White;
+                if (hint.find("IDLE") != std::string::npos || hint.find("!!") != std::string::npos) {
+                    hint_color = Color::Red;
+                } else if (hint.find("DONE") != std::string::npos) {
+                    hint_color = Color::Green;
+                } else if (hint.find("left") != std::string::npos) {
+                    hint_color = Color::Yellow;
+                }
+                detail_lines.push_back(text("  " + hint) | color(hint_color));
+            }
         }
 
         if (t.progress_total > 0) {
@@ -593,7 +780,7 @@ static Element render_weekly_planner(AppState& state) {
             text(prog_str) | dim,
         });
 
-        if (sel) row = row | inverted;
+        if (sel) row = row | inverted | focus;
         goal_rows.push_back(row);
 
         // Mini progress bar
@@ -724,7 +911,7 @@ static Element render_crew_optimizer(AppState& state) {
             });
 
             if (sel) {
-                row = row | inverted;
+                row = row | inverted | focus;
             }
             result_rows.push_back(row);
             if (i < state.crew_results.size() - 1) {
@@ -902,7 +1089,7 @@ static Element render_loadout(AppState& state) {
         }
 
         auto row = hbox(row_parts);
-        if (sel) row = row | inverted;
+        if (sel) row = row | inverted | focus;
         dock_rows.push_back(row);
 
         // Show BDA for selected dock
@@ -1091,11 +1278,19 @@ static Element render_loadout(AppState& state) {
 }
 
 // ---------------------------------------------------------------------------
-// View: Officers (existing, unchanged)
+// View: Officers — with player data overlay (owned/unowned, levels, ranks)
 // ---------------------------------------------------------------------------
 
 static Element render_officers(AppState& state) {
     auto& gd = state.game_data;
+    auto& pd = state.player_data;
+
+    // Build player officer lookup by officer_id
+    std::map<int64_t, const PlayerOfficer*> player_map;
+    for (auto& po : pd.officers) {
+        player_map[po.officer_id] = &po;
+    }
+    bool has_player = !player_map.empty();
 
     std::vector<const Officer*> officers;
     for (auto& [id, o] : gd.officers) {
@@ -1112,32 +1307,21 @@ static Element render_officers(AppState& state) {
         officers.push_back(&o);
     }
 
-    std::sort(officers.begin(), officers.end(), [](const Officer* a, const Officer* b) {
+    // Sort: owned first (by level desc), then unowned alphabetically
+    std::sort(officers.begin(), officers.end(), [&](const Officer* a, const Officer* b) {
+        auto pa = player_map.find(a->id);
+        auto pb = player_map.find(b->id);
+        bool a_owned = (pa != player_map.end());
+        bool b_owned = (pb != player_map.end());
+        if (a_owned != b_owned) return a_owned > b_owned; // owned first
+        if (a_owned && b_owned) {
+            if (pa->second->level != pb->second->level) return pa->second->level > pb->second->level;
+            if (pa->second->rank != pb->second->rank) return pa->second->rank > pb->second->rank;
+        }
         return a->name < b->name;
     });
 
-    std::vector<std::vector<std::string>> table_data;
-    table_data.push_back({"Name", "Rarity", "Class", "Group", "Max Rank", "Max Atk", "Max Def", "Max HP"});
-
-    for (auto* o : officers) {
-        std::string max_atk = "-", max_def = "-", max_hp = "-";
-        if (!o->stats.empty()) {
-            auto& last = o->stats.back();
-            max_atk = format_number((int64_t)last.attack);
-            max_def = format_number((int64_t)last.defense);
-            max_hp = format_number((int64_t)last.health);
-        }
-        table_data.push_back({
-            o->name.empty() ? o->short_name : o->name,
-            rarity_str(o->rarity),
-            officer_class_str(o->officer_class),
-            o->group_name,
-            std::to_string(o->max_rank),
-            max_atk, max_def, max_hp,
-        });
-    }
-
-    if (table_data.size() <= 1) {
+    if (officers.empty()) {
         return vbox({
             text("Officers") | bold | center,
             separator(),
@@ -1145,23 +1329,195 @@ static Element render_officers(AppState& state) {
         });
     }
 
-    auto table = Table(table_data);
-    table.SelectAll().Border(LIGHT);
-    table.SelectRow(0).Decorate(bold);
+    // Clamp selection
+    state.selected_officer = std::clamp(state.selected_officer, 0, (int)officers.size() - 1);
+
+    // Count owned
+    int owned_count = 0;
+    for (auto* o : officers) {
+        if (player_map.count(o->id)) owned_count++;
+    }
+
+    // Build rows
+    Elements rows;
+
+    // Header row
+    if (has_player) {
+        rows.push_back(hbox({
+            text("Name") | bold | size(WIDTH, EQUAL, 24),
+            text("Lv") | bold | size(WIDTH, EQUAL, 5),
+            text("Rk") | bold | size(WIDTH, EQUAL, 5),
+            text("Shards") | bold | size(WIDTH, EQUAL, 8),
+            text("Rarity") | bold | size(WIDTH, EQUAL, 10),
+            text("Class") | bold | size(WIDTH, EQUAL, 12),
+            text("Group") | bold | size(WIDTH, EQUAL, 20),
+            text("MaxRk") | bold | size(WIDTH, EQUAL, 7),
+        }));
+    } else {
+        rows.push_back(hbox({
+            text("Name") | bold | size(WIDTH, EQUAL, 28),
+            text("Rarity") | bold | size(WIDTH, EQUAL, 10),
+            text("Class") | bold | size(WIDTH, EQUAL, 12),
+            text("Group") | bold | size(WIDTH, EQUAL, 22),
+            text("MaxRk") | bold | size(WIDTH, EQUAL, 7),
+            text("Atk") | bold | size(WIDTH, EQUAL, 10),
+            text("Def") | bold | size(WIDTH, EQUAL, 10),
+            text("HP") | bold | size(WIDTH, EQUAL, 10),
+        }));
+    }
+    rows.push_back(separator());
+
+    for (int i = 0; i < (int)officers.size(); ++i) {
+        auto* o = officers[i];
+        bool sel = (i == state.selected_officer);
+        auto pit = player_map.find(o->id);
+        bool owned = (pit != player_map.end());
+
+        Color rcolor = Color::White;
+        switch (o->rarity) {
+            case 1: rcolor = Color::GrayLight; break;
+            case 2: rcolor = Color::Green; break;
+            case 3: rcolor = Color::Blue; break;
+            case 4: rcolor = Color::Magenta; break;
+        }
+
+        std::string name = o->name.empty() ? o->short_name : o->name;
+        Element row;
+
+        if (has_player) {
+            std::string lv_str = owned ? std::to_string(pit->second->level) : "-";
+            std::string rk_str = owned ? std::to_string(pit->second->rank) : "-";
+            std::string shard_str = owned ? std::to_string(pit->second->shard_count) : "-";
+
+            row = hbox({
+                (owned ? text(name) : text(name) | dim) | size(WIDTH, EQUAL, 24),
+                text(lv_str) | (owned ? bold : dim) | size(WIDTH, EQUAL, 5),
+                text(rk_str) | (owned ? bold : dim) | size(WIDTH, EQUAL, 5),
+                text(shard_str) | dim | size(WIDTH, EQUAL, 8),
+                text(rarity_str(o->rarity)) | color(rcolor) | (owned ? nothing : dim) | size(WIDTH, EQUAL, 10),
+                text(officer_class_str(o->officer_class)) | (owned ? nothing : dim) | size(WIDTH, EQUAL, 12),
+                text(o->group_name) | (owned ? nothing : dim) | size(WIDTH, EQUAL, 20),
+                text(std::to_string(o->max_rank)) | dim | size(WIDTH, EQUAL, 7),
+            });
+        } else {
+            std::string max_atk = "-", max_def = "-", max_hp = "-";
+            if (!o->stats.empty()) {
+                auto& last = o->stats.back();
+                max_atk = format_number((int64_t)last.attack);
+                max_def = format_number((int64_t)last.defense);
+                max_hp = format_number((int64_t)last.health);
+            }
+            row = hbox({
+                text(name) | size(WIDTH, EQUAL, 28),
+                text(rarity_str(o->rarity)) | color(rcolor) | size(WIDTH, EQUAL, 10),
+                text(officer_class_str(o->officer_class)) | size(WIDTH, EQUAL, 12),
+                text(o->group_name) | size(WIDTH, EQUAL, 22),
+                text(std::to_string(o->max_rank)) | size(WIDTH, EQUAL, 7),
+                text(max_atk) | size(WIDTH, EQUAL, 10),
+                text(max_def) | size(WIDTH, EQUAL, 10),
+                text(max_hp) | size(WIDTH, EQUAL, 10),
+            });
+        }
+
+        if (sel) row = row | inverted | focus;
+        rows.push_back(row);
+    }
+
+    // Detail panel for selected officer
+    Element detail = text("");
+    if (state.selected_officer >= 0 && state.selected_officer < (int)officers.size()) {
+        auto* o = officers[state.selected_officer];
+        auto pit = player_map.find(o->id);
+        bool owned = (pit != player_map.end());
+
+        Elements lines;
+        lines.push_back(text(o->name.empty() ? o->short_name : o->name) | bold);
+        if (owned) {
+            lines.push_back(text("OWNED") | bold | color(Color::Green));
+        } else {
+            lines.push_back(text("NOT OWNED") | dim);
+        }
+        lines.push_back(separator());
+        lines.push_back(hbox({text("Rarity: "), text(rarity_str(o->rarity))}));
+        lines.push_back(hbox({text("Class:  "), text(officer_class_str(o->officer_class))}));
+        lines.push_back(hbox({text("Group:  "), text(o->group_name)}));
+        lines.push_back(hbox({text("Ranks:  "), text(std::to_string(o->max_rank))}));
+
+        if (owned) {
+            lines.push_back(separator());
+            lines.push_back(text("Player Stats:") | bold | color(Color::Cyan));
+            lines.push_back(hbox({text("  Level:  "), text(std::to_string(pit->second->level)) | bold}));
+            lines.push_back(hbox({text("  Rank:   "), text(std::to_string(pit->second->rank)) | bold}));
+            lines.push_back(hbox({text("  Shards: "), text(std::to_string(pit->second->shard_count))}));
+        }
+
+        if (!o->stats.empty()) {
+            auto& last = o->stats.back();
+            lines.push_back(separator());
+            lines.push_back(text("Max Stats (Game Data):") | bold);
+            lines.push_back(hbox({text("  Atk: "), text(format_number((int64_t)last.attack)) | color(Color::Red)}));
+            lines.push_back(hbox({text("  Def: "), text(format_number((int64_t)last.defense)) | color(Color::Cyan)}));
+            lines.push_back(hbox({text("  HP:  "), text(format_number((int64_t)last.health)) | color(Color::Green)}));
+
+            // If owned, also show current level stats
+            if (owned && pit->second->level > 0 && pit->second->level <= (int)o->stats.size()) {
+                auto& cur = o->stats[pit->second->level - 1];
+                lines.push_back(separator());
+                lines.push_back(text("Current Stats (Lv" + std::to_string(pit->second->level) + "):") | bold | color(Color::Cyan));
+                lines.push_back(hbox({text("  Atk: "), text(format_number((int64_t)cur.attack)) | color(Color::Red)}));
+                lines.push_back(hbox({text("  Def: "), text(format_number((int64_t)cur.defense)) | color(Color::Cyan)}));
+                lines.push_back(hbox({text("  HP:  "), text(format_number((int64_t)cur.health)) | color(Color::Green)}));
+            }
+        }
+
+        if (!o->description.empty()) {
+            lines.push_back(separator());
+            std::string desc = o->description;
+            while (!desc.empty()) {
+                if (desc.size() <= 38) { lines.push_back(text(desc) | dim); break; }
+                size_t cut = desc.rfind(' ', 38);
+                if (cut == std::string::npos || cut == 0) cut = 38;
+                lines.push_back(text(desc.substr(0, cut)) | dim);
+                desc = desc.substr(cut + (desc[cut] == ' ' ? 1 : 0));
+            }
+        }
+        detail = vbox(lines) | border;
+    }
+
+    std::string title = has_player
+        ? "Officers (" + std::to_string(owned_count) + " owned / " + std::to_string(officers.size()) + " total)"
+        : "Officers (" + std::to_string(officers.size()) + " total)";
 
     return vbox({
-        text("Officers (" + std::to_string(officers.size()) + " total)") | bold | center,
+        hbox({
+            text(title) | bold,
+            filler(),
+            text("[Up/Down] Navigate  [F] Filter") | dim,
+        }),
         separator(),
-        table.Render() | vscroll_indicator | yframe | flex,
+        hbox({
+            vbox(rows) | vscroll_indicator | yframe | flex,
+            separator(),
+            detail | size(WIDTH, EQUAL, 42) | vscroll_indicator | yframe,
+        }) | flex,
     });
 }
 
 // ---------------------------------------------------------------------------
-// View: Ships (existing, unchanged)
+// View: Ships — with player data overlay (owned tier/level)
 // ---------------------------------------------------------------------------
 
 static Element render_ships(AppState& state) {
     auto& gd = state.game_data;
+    auto& pd = state.player_data;
+
+    // Build player ship lookup by hull_id (may have multiple instances of same hull)
+    // Use a multimap since player can have multiple ships of same hull
+    std::map<int64_t, std::vector<const PlayerShip*>> player_hull_map;
+    for (auto& ps : pd.ships) {
+        player_hull_map[ps.hull_id].push_back(&ps);
+    }
+    bool has_player = !pd.ships.empty();
 
     std::vector<const Ship*> ships;
     for (auto& [id, s] : gd.ships) {
@@ -1175,32 +1531,23 @@ static Element render_ships(AppState& state) {
         ships.push_back(&s);
     }
 
-    std::sort(ships.begin(), ships.end(), [](const Ship* a, const Ship* b) {
+    // Sort: owned first (by tier desc), then by grade/name
+    std::sort(ships.begin(), ships.end(), [&](const Ship* a, const Ship* b) {
+        bool a_owned = player_hull_map.count(a->id) > 0;
+        bool b_owned = player_hull_map.count(b->id) > 0;
+        if (a_owned != b_owned) return a_owned > b_owned;
+        if (a_owned && b_owned) {
+            auto& a_ps = player_hull_map[a->id];
+            auto& b_ps = player_hull_map[b->id];
+            int a_tier = a_ps.empty() ? 0 : a_ps[0]->tier;
+            int b_tier = b_ps.empty() ? 0 : b_ps[0]->tier;
+            if (a_tier != b_tier) return a_tier > b_tier;
+        }
         if (a->grade != b->grade) return a->grade < b->grade;
         return a->name < b->name;
     });
 
-    std::vector<std::vector<std::string>> table_data;
-    table_data.push_back({"Name", "Type", "Grade", "Rarity", "Max Tier", "Max Level", "Build Time"});
-
-    for (auto* s : ships) {
-        int hours = s->build_time_seconds / 3600;
-        int mins = (s->build_time_seconds % 3600) / 60;
-        std::string build_time = std::to_string(hours) + "h " + std::to_string(mins) + "m";
-        if (s->build_time_seconds == 0) build_time = "-";
-
-        table_data.push_back({
-            s->name,
-            hull_type_str(s->hull_type),
-            "G" + std::to_string(s->grade),
-            rarity_str(s->rarity),
-            "T" + std::to_string(s->max_tier),
-            std::to_string(s->max_level),
-            build_time,
-        });
-    }
-
-    if (table_data.size() <= 1) {
+    if (ships.empty()) {
         return vbox({
             text("Ships") | bold | center,
             separator(),
@@ -1208,75 +1555,458 @@ static Element render_ships(AppState& state) {
         });
     }
 
-    auto table = Table(table_data);
-    table.SelectAll().Border(LIGHT);
-    table.SelectRow(0).Decorate(bold);
+    // Clamp selection
+    state.selected_ship = std::clamp(state.selected_ship, 0, (int)ships.size() - 1);
+
+    // Count owned
+    int owned_count = 0;
+    for (auto* s : ships) {
+        if (player_hull_map.count(s->id)) owned_count++;
+    }
+
+    // Build rows
+    Elements rows;
+
+    // Header row
+    if (has_player) {
+        rows.push_back(hbox({
+            text("Name") | bold | size(WIDTH, EQUAL, 24),
+            text("Tier") | bold | size(WIDTH, EQUAL, 6),
+            text("Lv") | bold | size(WIDTH, EQUAL, 5),
+            text("Type") | bold | size(WIDTH, EQUAL, 14),
+            text("Grade") | bold | size(WIDTH, EQUAL, 7),
+            text("Rarity") | bold | size(WIDTH, EQUAL, 10),
+            text("MaxT") | bold | size(WIDTH, EQUAL, 6),
+            text("MaxLv") | bold | size(WIDTH, EQUAL, 7),
+        }));
+    } else {
+        rows.push_back(hbox({
+            text("Name") | bold | size(WIDTH, EQUAL, 28),
+            text("Type") | bold | size(WIDTH, EQUAL, 14),
+            text("Grade") | bold | size(WIDTH, EQUAL, 8),
+            text("Rarity") | bold | size(WIDTH, EQUAL, 10),
+            text("MaxTier") | bold | size(WIDTH, EQUAL, 9),
+            text("MaxLv") | bold | size(WIDTH, EQUAL, 8),
+            text("Build") | bold | size(WIDTH, EQUAL, 12),
+        }));
+    }
+    rows.push_back(separator());
+
+    for (int i = 0; i < (int)ships.size(); ++i) {
+        auto* s = ships[i];
+        bool sel = (i == state.selected_ship);
+        auto pit = player_hull_map.find(s->id);
+        bool owned = (pit != player_hull_map.end() && !pit->second.empty());
+
+        Color tcolor = Color::White;
+        switch (s->hull_type) {
+            case 0: tcolor = Color::Cyan; break;
+            case 1: tcolor = Color::Yellow; break;
+            case 2: tcolor = Color::Green; break;
+            case 3: tcolor = Color::Red; break;
+        }
+
+        Element row;
+        if (has_player) {
+            std::string tier_str = owned ? "T" + std::to_string(pit->second[0]->tier) : "-";
+            std::string lv_str = owned ? std::to_string(pit->second[0]->level) : "-";
+
+            row = hbox({
+                (owned ? text(s->name) : text(s->name) | dim) | size(WIDTH, EQUAL, 24),
+                text(tier_str) | (owned ? bold : dim) | color(owned ? Color::Cyan : Color::GrayDark) | size(WIDTH, EQUAL, 6),
+                text(lv_str) | (owned ? bold : dim) | size(WIDTH, EQUAL, 5),
+                text(hull_type_str(s->hull_type)) | color(tcolor) | (owned ? nothing : dim) | size(WIDTH, EQUAL, 14),
+                text("G" + std::to_string(s->grade)) | (owned ? nothing : dim) | size(WIDTH, EQUAL, 7),
+                text(rarity_str(s->rarity)) | (owned ? nothing : dim) | size(WIDTH, EQUAL, 10),
+                text("T" + std::to_string(s->max_tier)) | dim | size(WIDTH, EQUAL, 6),
+                text(std::to_string(s->max_level)) | dim | size(WIDTH, EQUAL, 7),
+            });
+        } else {
+            int hours = s->build_time_seconds / 3600;
+            int mins = (s->build_time_seconds % 3600) / 60;
+            std::string build_time = std::to_string(hours) + "h " + std::to_string(mins) + "m";
+            if (s->build_time_seconds == 0) build_time = "-";
+
+            row = hbox({
+                text(s->name) | size(WIDTH, EQUAL, 28),
+                text(hull_type_str(s->hull_type)) | color(tcolor) | size(WIDTH, EQUAL, 14),
+                text("G" + std::to_string(s->grade)) | size(WIDTH, EQUAL, 8),
+                text(rarity_str(s->rarity)) | size(WIDTH, EQUAL, 10),
+                text("T" + std::to_string(s->max_tier)) | size(WIDTH, EQUAL, 9),
+                text(std::to_string(s->max_level)) | size(WIDTH, EQUAL, 8),
+                text(build_time) | size(WIDTH, EQUAL, 12),
+            });
+        }
+
+        if (sel) row = row | inverted | focus;
+        rows.push_back(row);
+    }
+
+    // Detail panel for selected ship
+    Element detail = text("");
+    if (state.selected_ship >= 0 && state.selected_ship < (int)ships.size()) {
+        auto* s = ships[state.selected_ship];
+        auto pit = player_hull_map.find(s->id);
+        bool owned = (pit != player_hull_map.end() && !pit->second.empty());
+
+        Elements lines;
+        lines.push_back(text(s->name) | bold);
+        if (owned) {
+            lines.push_back(text("OWNED") | bold | color(Color::Green));
+        } else {
+            lines.push_back(text("NOT BUILT") | dim);
+        }
+        lines.push_back(separator());
+        lines.push_back(hbox({text("Type:   "), text(hull_type_str(s->hull_type))}));
+        lines.push_back(hbox({text("Grade:  G"), text(std::to_string(s->grade))}));
+        lines.push_back(hbox({text("Rarity: "), text(rarity_str(s->rarity))}));
+        lines.push_back(hbox({text("MaxTier: T"), text(std::to_string(s->max_tier))}));
+        lines.push_back(hbox({text("MaxLv:  "), text(std::to_string(s->max_level))}));
+
+        if (owned) {
+            lines.push_back(separator());
+            lines.push_back(text("Player Ship:") | bold | color(Color::Cyan));
+            for (auto* ps : pit->second) {
+                lines.push_back(hbox({text("  Tier:  T"), text(std::to_string(ps->tier)) | bold}));
+                lines.push_back(hbox({text("  Level: "), text(std::to_string(ps->level)) | bold}));
+                int pct = (int)(ps->level_percentage * 100);
+                lines.push_back(hbox({text("  Lvl%:  "), text(std::to_string(pct) + "%") | dim}));
+                // Progress to max tier
+                if (ps->tier < s->max_tier) {
+                    lines.push_back(hbox({text("  Progress: T"), text(std::to_string(ps->tier)),
+                        text("/T"), text(std::to_string(s->max_tier)) | color(Color::Yellow)}));
+                    double tier_pct = (double)ps->tier / s->max_tier;
+                    lines.push_back(hbox({text("  "), gauge(tier_pct) | size(WIDTH, EQUAL, 24) | color(Color::Cyan)}));
+                } else {
+                    lines.push_back(text("  MAX TIER") | bold | color(Color::Green));
+                }
+            }
+        }
+
+        if (s->build_time_seconds > 0) {
+            lines.push_back(separator());
+            int h = s->build_time_seconds / 3600;
+            int m = (s->build_time_seconds % 3600) / 60;
+            lines.push_back(hbox({text("Build:  "), text(std::to_string(h) + "h " + std::to_string(m) + "m")}));
+        }
+        if (!s->crew_slots.empty()) {
+            lines.push_back(hbox({text("Crew:   "), text(std::to_string(s->crew_slots.size()) + " slots")}));
+        }
+        detail = vbox(lines) | border;
+    }
+
+    std::string title = has_player
+        ? "Ships (" + std::to_string(owned_count) + " owned / " + std::to_string(ships.size()) + " total)"
+        : "Ships (" + std::to_string(ships.size()) + " total)";
 
     return vbox({
-        text("Ships (" + std::to_string(ships.size()) + " total)") | bold | center,
+        hbox({
+            text(title) | bold,
+            filler(),
+            text("[Up/Down] Navigate  [F] Filter") | dim,
+        }),
         separator(),
-        table.Render() | vscroll_indicator | yframe | flex,
+        hbox({
+            vbox(rows) | vscroll_indicator | yframe | flex,
+            separator(),
+            detail | size(WIDTH, EQUAL, 40) | vscroll_indicator | yframe,
+        }) | flex,
     });
 }
 
 // ---------------------------------------------------------------------------
-// View: Sync (existing, unchanged)
+// View: Sync — Detailed player data browser + ingress status
 // ---------------------------------------------------------------------------
+
+static const char* sync_view_labels[] = {
+    "Officers", "Ships", "Resources", "Buildings", "Research", "Jobs", "Buffs"
+};
+static const int sync_view_count = 7;
 
 static Element render_sync(AppState& state) {
     bool running = state.ingress_server.is_running();
+    auto& pd = state.player_data;
 
-    auto status_box = vbox({
-        text("Ingress Server") | bold,
-        separator(),
-        hbox({
-            text("  Status: "),
-            running ? text("RUNNING") | color(Color::Green) | bold
-                    : text("STOPPED") | color(Color::Red) | bold,
-        }),
-        hbox({text("  Port:   "), text(std::to_string(state.ingress_server.port()))}),
-        hbox({text("  URL:    "), text("http://0.0.0.0:" + std::to_string(state.ingress_server.port()) + "/sync/ingress/")}),
+    // --- Server status (compact) ---
+    auto status_line = hbox({
+        text(" Server: "),
+        running ? text("RUNNING :" + std::to_string(state.ingress_server.port())) | color(Color::Green) | bold
+                : text("STOPPED") | color(Color::Red) | bold,
+        text("  "),
+        text("[S] Toggle") | dim,
+        filler(),
+        text("Last sync: "),
+        pd.last_sync != std::chrono::system_clock::time_point{}
+            ? [&]() {
+                auto tt = std::chrono::system_clock::to_time_t(pd.last_sync);
+                std::tm tb{};
+                localtime_r(&tt, &tb);
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tb.tm_hour, tb.tm_min, tb.tm_sec);
+                return text(std::string(buf)) | color(Color::Green);
+            }()
+            : text("Never") | dim,
     });
 
-    auto player_info = vbox({
-        text("Synced Player Data") | bold,
-        separator(),
-        hbox({text("  Officers:  "), text(std::to_string(state.player_data.officers.size()))}),
-        hbox({text("  Ships:     "), text(std::to_string(state.player_data.ships.size()))}),
-        hbox({text("  Research:  "), text(std::to_string(state.player_data.researches.size()))}),
-        hbox({text("  Buildings: "), text(std::to_string(state.player_data.buildings.size()))}),
-        hbox({text("  Resources: "), text(std::to_string(state.player_data.resources.size()))}),
-        hbox({text("  Buffs:     "), text(std::to_string(state.player_data.buffs.size()))}),
-        hbox({text("  Jobs:      "), text(std::to_string(state.player_data.jobs.size()))}),
-        hbox({text("  Inventory: "), text(std::to_string(state.player_data.inventory.size()))}),
-        hbox({text("  Traits:    "), text(std::to_string(state.player_data.traits.size()))}),
-        hbox({text("  Techs:     "), text(std::to_string(state.player_data.techs.size()))}),
-        hbox({text("  Missions:  "), text(std::to_string(state.player_data.missions.size()))}),
-        hbox({text("  Slots:     "), text(std::to_string(state.player_data.slots.size()))}),
-    });
+    // --- View mode tabs ---
+    Elements view_tabs;
+    for (int i = 0; i < sync_view_count; i++) {
+        int count = 0;
+        switch (i) {
+            case 0: count = (int)pd.officers.size(); break;
+            case 1: count = (int)pd.ships.size(); break;
+            case 2: count = (int)pd.resources.size(); break;
+            case 3: count = (int)pd.buildings.size(); break;
+            case 4: count = (int)pd.researches.size(); break;
+            case 5: count = (int)pd.jobs.size(); break;
+            case 6: count = (int)pd.buffs.size(); break;
+        }
+        std::string label = std::string(sync_view_labels[i]) + "(" + std::to_string(count) + ")";
+        auto tab = text(" " + label + " ");
+        if (i == state.sync_view_mode) {
+            tab = tab | bold | inverted;
+        } else if (count > 0) {
+            tab = tab | color(Color::Cyan);
+        } else {
+            tab = tab | dim;
+        }
+        view_tabs.push_back(tab);
+    }
 
-    // Sync event log
+    // --- Data table for selected view ---
+    Elements data_rows;
+
+    auto add_header = [&](std::vector<std::pair<std::string, int>> cols) {
+        Elements hdr_parts;
+        for (auto& [name, width] : cols) {
+            hdr_parts.push_back(text(name) | bold | size(WIDTH, EQUAL, width));
+        }
+        data_rows.push_back(hbox(std::move(hdr_parts)));
+        data_rows.push_back(separator());
+    };
+
+    int max_rows = 0;
+
+    switch (state.sync_view_mode) {
+    case 0: { // Officers
+        add_header({{"Name", 26}, {"Level", 7}, {"Rank", 6}, {"Shards", 8}, {"ID", 14}});
+        auto sorted = pd.officers;
+        std::sort(sorted.begin(), sorted.end(), [](const PlayerOfficer& a, const PlayerOfficer& b) {
+            return a.level > b.level || (a.level == b.level && a.rank > b.rank);
+        });
+        max_rows = (int)sorted.size();
+        for (int i = 0; i < (int)sorted.size(); ++i) {
+            auto& o = sorted[i];
+            bool sel = (i == state.sync_selected_row);
+            std::string name = o.name.empty() ? ("OID:" + std::to_string(o.officer_id)) : o.name;
+            if (name.size() > 24) name = name.substr(0, 22) + "..";
+            auto row = hbox({
+                text(name) | size(WIDTH, EQUAL, 26),
+                text(std::to_string(o.level)) | bold | size(WIDTH, EQUAL, 7),
+                text(std::to_string(o.rank)) | size(WIDTH, EQUAL, 6),
+                text(std::to_string(o.shard_count)) | size(WIDTH, EQUAL, 8),
+                text(std::to_string(o.officer_id)) | dim | size(WIDTH, EQUAL, 14),
+            });
+            if (sel) row = row | inverted | focus;
+            data_rows.push_back(row);
+        }
+        break;
+    }
+    case 1: { // Ships
+        add_header({{"Name", 26}, {"Tier", 6}, {"Level", 7}, {"Lvl%", 7}, {"Hull ID", 12}});
+        auto sorted = pd.ships;
+        std::sort(sorted.begin(), sorted.end(), [](const PlayerShip& a, const PlayerShip& b) {
+            return a.tier > b.tier || (a.tier == b.tier && a.level > b.level);
+        });
+        max_rows = (int)sorted.size();
+        for (int i = 0; i < (int)sorted.size(); ++i) {
+            auto& s = sorted[i];
+            bool sel = (i == state.sync_selected_row);
+            std::string name = s.name.empty() ? ("Hull:" + std::to_string(s.hull_id)) : s.name;
+            if (name.size() > 24) name = name.substr(0, 22) + "..";
+
+            // Get hull type for color
+            Color tcolor = Color::White;
+            auto git = state.game_data.ships.find(s.hull_id);
+            if (git != state.game_data.ships.end()) {
+                switch (git->second.hull_type) {
+                    case 0: tcolor = Color::Cyan; break;
+                    case 1: tcolor = Color::Yellow; break;
+                    case 2: tcolor = Color::Green; break;
+                    case 3: tcolor = Color::Red; break;
+                }
+            }
+
+            std::string pct_str = std::to_string((int)(s.level_percentage * 100)) + "%";
+            auto row = hbox({
+                text(name) | color(tcolor) | size(WIDTH, EQUAL, 26),
+                text("T" + std::to_string(s.tier)) | bold | size(WIDTH, EQUAL, 6),
+                text(std::to_string(s.level)) | size(WIDTH, EQUAL, 7),
+                text(pct_str) | dim | size(WIDTH, EQUAL, 7),
+                text(std::to_string(s.hull_id)) | dim | size(WIDTH, EQUAL, 12),
+            });
+            if (sel) row = row | inverted | focus;
+            data_rows.push_back(row);
+        }
+        break;
+    }
+    case 2: { // Resources
+        add_header({{"Name", 28}, {"Amount", 16}, {"ID", 14}});
+        auto sorted = pd.resources;
+        std::sort(sorted.begin(), sorted.end(), [](const PlayerResource& a, const PlayerResource& b) {
+            return a.amount > b.amount;
+        });
+        max_rows = (int)sorted.size();
+        for (int i = 0; i < (int)sorted.size(); ++i) {
+            auto& r = sorted[i];
+            bool sel = (i == state.sync_selected_row);
+            std::string name = r.name.empty() ? ("RID:" + std::to_string(r.resource_id)) : r.name;
+            if (name.size() > 26) name = name.substr(0, 24) + "..";
+            auto row = hbox({
+                text(name) | size(WIDTH, EQUAL, 28),
+                text(format_number(r.amount)) | bold | color(Color::Green) | size(WIDTH, EQUAL, 16),
+                text(std::to_string(r.resource_id)) | dim | size(WIDTH, EQUAL, 14),
+            });
+            if (sel) row = row | inverted | focus;
+            data_rows.push_back(row);
+        }
+        break;
+    }
+    case 3: { // Buildings
+        add_header({{"Name", 30}, {"Level", 8}, {"ID", 14}});
+        auto sorted = pd.buildings;
+        std::sort(sorted.begin(), sorted.end(), [](const PlayerBuilding& a, const PlayerBuilding& b) {
+            return a.level > b.level;
+        });
+        max_rows = (int)sorted.size();
+        for (int i = 0; i < (int)sorted.size(); ++i) {
+            auto& b = sorted[i];
+            bool sel = (i == state.sync_selected_row);
+            std::string name = b.name.empty() ? ("BID:" + std::to_string(b.building_id)) : b.name;
+            if (name.size() > 28) name = name.substr(0, 26) + "..";
+            auto row = hbox({
+                text(name) | size(WIDTH, EQUAL, 30),
+                text(std::to_string(b.level)) | bold | size(WIDTH, EQUAL, 8),
+                text(std::to_string(b.building_id)) | dim | size(WIDTH, EQUAL, 14),
+            });
+            if (sel) row = row | inverted | focus;
+            data_rows.push_back(row);
+        }
+        break;
+    }
+    case 4: { // Research
+        add_header({{"Name", 32}, {"Level", 8}, {"ID", 14}});
+        auto sorted = pd.researches;
+        std::sort(sorted.begin(), sorted.end(), [](const PlayerResearch& a, const PlayerResearch& b) {
+            return a.level > b.level;
+        });
+        max_rows = (int)sorted.size();
+        for (int i = 0; i < (int)sorted.size(); ++i) {
+            auto& r = sorted[i];
+            bool sel = (i == state.sync_selected_row);
+            std::string name = r.name.empty() ? ("RID:" + std::to_string(r.research_id)) : r.name;
+            if (name.size() > 30) name = name.substr(0, 28) + "..";
+            auto row = hbox({
+                text(name) | size(WIDTH, EQUAL, 32),
+                text(std::to_string(r.level)) | bold | size(WIDTH, EQUAL, 8),
+                text(std::to_string(r.research_id)) | dim | size(WIDTH, EQUAL, 14),
+            });
+            if (sel) row = row | inverted | focus;
+            data_rows.push_back(row);
+        }
+        break;
+    }
+    case 5: { // Jobs
+        add_header({{"Type", 18}, {"Status", 10}, {"Time Left", 14}, {"Level", 7}});
+        max_rows = (int)pd.jobs.size();
+        for (int i = 0; i < (int)pd.jobs.size(); ++i) {
+            auto& j = pd.jobs[i];
+            bool sel = (i == state.sync_selected_row);
+            std::string type = job_type_str(j.job_type);
+            std::string status_str;
+            Color status_color;
+            if (j.completed) {
+                status_str = "Done";
+                status_color = Color::Green;
+            } else {
+                int remaining = job_remaining_seconds(j);
+                if (remaining <= 0) {
+                    status_str = "Ready";
+                    status_color = Color::Green;
+                } else {
+                    status_str = "Active";
+                    status_color = Color::Yellow;
+                }
+            }
+            int remaining = j.completed ? 0 : job_remaining_seconds(j);
+            std::string time_str = j.completed ? "-" : format_duration_short(remaining);
+
+            auto row = hbox({
+                text(type) | size(WIDTH, EQUAL, 18),
+                text(status_str) | bold | color(status_color) | size(WIDTH, EQUAL, 10),
+                text(time_str) | size(WIDTH, EQUAL, 14),
+                text(std::to_string(j.level)) | dim | size(WIDTH, EQUAL, 7),
+            });
+            if (sel) row = row | inverted | focus;
+            data_rows.push_back(row);
+        }
+        break;
+    }
+    case 6: { // Buffs
+        add_header({{"Buff ID", 14}, {"Level", 8}, {"Status", 12}, {"Expires", 20}});
+        max_rows = (int)pd.buffs.size();
+        for (int i = 0; i < (int)pd.buffs.size(); ++i) {
+            auto& b = pd.buffs[i];
+            bool sel = (i == state.sync_selected_row);
+
+            std::string status_str = b.expired ? "Expired" : "Active";
+            Color status_color = b.expired ? Color::Red : Color::Green;
+
+            std::string expire_str = "-";
+            if (b.expiry_time > 0 && !b.expired) {
+                auto now_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                int remaining = (int)(b.expiry_time - now_epoch);
+                expire_str = remaining > 0 ? format_duration_short(remaining) : "Expired";
+                if (remaining <= 0) {
+                    status_str = "Expired";
+                    status_color = Color::Red;
+                }
+            }
+
+            auto row = hbox({
+                text(std::to_string(b.buff_id)) | size(WIDTH, EQUAL, 14),
+                text(std::to_string(b.level)) | size(WIDTH, EQUAL, 8),
+                text(status_str) | bold | color(status_color) | size(WIDTH, EQUAL, 12),
+                text(expire_str) | size(WIDTH, EQUAL, 20),
+            });
+            if (sel) row = row | inverted | focus;
+            data_rows.push_back(row);
+        }
+        break;
+    }
+    }
+
+    if (data_rows.size() <= 2) { // Only header + separator
+        data_rows.push_back(text("  No data. Start STFC with the community mod to sync.") | dim);
+    }
+
+    // Clamp selection
+    if (max_rows > 0) {
+        state.sync_selected_row = std::clamp(state.sync_selected_row, 0, max_rows - 1);
+    }
+
+    // --- Sync event log (compact, right panel) ---
     auto sync_log = state.ingress_server.get_sync_log();
     Elements log_lines;
-    log_lines.push_back(text("Sync Event Log") | bold);
+    log_lines.push_back(text("Event Log") | bold);
     log_lines.push_back(separator());
     if (sync_log.empty()) {
-        log_lines.push_back(text("  No events yet. Start the server with [S] and") | dim);
-        log_lines.push_back(text("  launch STFC to trigger sync, or test with:") | dim);
-        log_lines.push_back(separatorEmpty());
-        std::string curl_cmd = "  curl -X POST http://localhost:" +
-            std::to_string(state.ingress_server.port()) +
-            "/sync/ingress/ \\";
-        log_lines.push_back(text(curl_cmd) | color(Color::Yellow));
-        log_lines.push_back(text("    -H 'Content-Type: application/json' \\") | color(Color::Yellow));
-        log_lines.push_back(text("    -H 'stfc-sync-token: stfctool-local' \\") | color(Color::Yellow));
-        log_lines.push_back(text("    -d '[{\"type\":\"officer\",\"oid\":1,\"level\":50,\"rank\":5,\"shard_count\":100}]'") | color(Color::Yellow));
+        log_lines.push_back(text("No events yet") | dim);
     } else {
-        // Show most recent events first (reverse order), up to 20
-        int start = std::max(0, (int)sync_log.size() - 20);
+        int start = std::max(0, (int)sync_log.size() - 15);
         for (int i = (int)sync_log.size() - 1; i >= start; i--) {
             auto& ev = sync_log[i];
-            // Format timestamp as HH:MM:SS
             auto time_t = std::chrono::system_clock::to_time_t(ev.timestamp);
             std::tm tm_buf{};
             localtime_r(&time_t, &tm_buf);
@@ -1287,44 +2017,34 @@ static Element render_sync(AppState& state) {
             Elements row;
             row.push_back(text(std::string(time_str) + " ") | dim);
             if (ev.success) {
-                row.push_back(text("OK ") | color(Color::Green) | bold);
-                row.push_back(text(ev.data_type));
-                row.push_back(text(" (" + std::to_string(ev.record_count) + " records)") | dim);
+                row.push_back(text("OK ") | color(Color::Green));
+                row.push_back(text(ev.data_type + "(" + std::to_string(ev.record_count) + ")") | dim);
             } else {
-                row.push_back(text("FAIL ") | color(Color::Red) | bold);
-                row.push_back(text(ev.data_type));
-                if (!ev.error.empty()) {
-                    row.push_back(text(" - " + ev.error) | dim);
-                }
+                row.push_back(text("FAIL ") | color(Color::Red));
+                row.push_back(text(ev.data_type) | dim);
             }
             log_lines.push_back(hbox(std::move(row)));
         }
     }
-    auto log_box = vbox(std::move(log_lines));
-
-    // Config reference
-    auto config_box = vbox({
-        text("Community Mod Config") | bold,
-        separator(),
-        text("  Game dir: community_patch_settings.toml") | dim,
-        separatorEmpty(),
-        text("  [sync.targets.local]") | color(Color::Yellow),
-        text("  token = \"stfctool-local\"") | color(Color::Green),
-        text("  url = \"http://192.168.1.217:" + std::to_string(state.ingress_server.port()) + "/sync/ingress/\"") | color(Color::Green),
-    });
 
     return vbox({
-        text("Mod Sync") | bold | center,
+        text("Mod Sync - Player Data Browser") | bold | center,
+        separator(),
+        status_line,
+        separator(),
+        hbox(view_tabs) | center,
         separator(),
         hbox({
-            vbox({status_box, separator(), player_info}) | flex,
+            vbox(data_rows) | vscroll_indicator | yframe | flex,
             separator(),
-            vbox({log_box}) | flex,
+            vbox(log_lines) | size(WIDTH, EQUAL, 38) | vscroll_indicator | yframe,
         }) | flex,
         separator(),
-        config_box,
-        separator(),
-        text("  [S] Start/stop server  |  Format: bare JSON array [{\"type\":\"officer\",...}]") | dim,
+        hbox({
+            text(" [S] Server  ") | dim,
+            text("[Left/Right] View  ") | dim,
+            text("[Up/Down] Navigate  ") | dim,
+        }),
     });
 }
 
@@ -1334,16 +2054,19 @@ static Element render_sync(AppState& state) {
 
 static Element render_help() {
     return vbox({
-        text("STFC Tool v0.3 - Keyboard Reference") | bold | center,
+        text("STFC Tool v0.5 - Keyboard Reference") | bold | center,
         separator(),
         hbox({
             vbox({
                 text("Global:") | bold | color(Color::Cyan),
-                text("  [H]        Toggle help"),
-                text("  [R]        Refresh game data"),
-                text("  [S]        Toggle ingress server"),
-                text("  [Q]        Quit (saves state)"),
+                text("  [H]              Toggle help"),
+                text("  [R]              Refresh game data"),
+                text("  [S]              Toggle ingress server"),
+                text("  [Q]              Quit (saves state)"),
                 text("  [Tab/Shift+Tab]  Switch tabs"),
+                text("  [PgUp/PgDn]      Scroll 10 rows"),
+                text("  [Home/End]       Jump to top/bottom"),
+                text("  Mouse wheel      Scroll up/down"),
                 separatorEmpty(),
                 text("Daily Planner:") | bold | color(Color::Cyan),
                 text("  [Up/Down]  Navigate tasks"),
@@ -1374,6 +2097,10 @@ static Element render_help() {
                 text("  [B]        Cycle BDA selection"),
                 text("  [L]        Load saved loadout"),
                 separatorEmpty(),
+                text("Officers / Ships:") | bold | color(Color::Cyan),
+                text("  [Up/Down]  Navigate list"),
+                text("  [F]        Clear filter"),
+                separatorEmpty(),
                 text("Data:") | bold | color(Color::Cyan),
                 text("  Cached in data/game_data/"),
                 text("  Roster from roster.csv"),
@@ -1391,7 +2118,7 @@ static Element render_help() {
 
 static Element render_status_bar(AppState& state) {
     return hbox({
-        text(" STFC Tool v0.3 ") | bold | bgcolor(Color::Blue) | color(Color::White),
+        text(" STFC Tool v0.5 ") | bold | bgcolor(Color::Blue) | color(Color::White),
         text(" "),
         text(state.get_status()) | flex,
         text(" "),
@@ -1525,6 +2252,11 @@ int main() {
                             std::to_string(state->game_data.ships.size()) + " ships, " +
                             std::to_string(state->game_data.researches.size()) + " research nodes");
                         state->data_loaded = true;
+                        // Re-resolve player names with fresh game data
+                        resolve_player_names(state->player_data, state->game_data);
+                        // Re-enrich planner with updated context
+                        state->planner.enrich_plan_with_player_data(
+                            state->daily_plan, state->player_data, state->game_data);
                     } else {
                         state->set_status("Failed to fetch game data.");
                     }
@@ -1544,6 +2276,13 @@ int main() {
                     state->ingress_server.set_data_callback([state](const std::string& data_type) {
                         state->set_status("Received sync data: " + data_type);
                         state->player_data = state->ingress_server.get_player_data();
+                        // Resolve names against game data
+                        if (state->data_loaded) {
+                            resolve_player_names(state->player_data, state->game_data);
+                            // Re-enrich planner with updated player data
+                            state->planner.enrich_plan_with_player_data(
+                                state->daily_plan, state->player_data, state->game_data);
+                        }
                     });
                     if (state->ingress_server.start()) {
                         state->set_status("Ingress server started on port " +
@@ -1809,6 +2548,158 @@ int main() {
                 }
                 return true;
             }
+        }
+
+        // === Officers tab events ===
+        if (selected_tab == 5) {
+            if (event == Event::ArrowDown) {
+                int max_off = (int)state->game_data.officers.size() - 1;
+                if (state->selected_officer < max_off) state->selected_officer++;
+                return true;
+            }
+            if (event == Event::ArrowUp) {
+                if (state->selected_officer > 0) state->selected_officer--;
+                return true;
+            }
+            if (event == Event::Character('f') || event == Event::Character('F')) {
+                // TODO: open filter input — for now just clear filter
+                state->officer_filter.clear();
+                state->selected_officer = 0;
+                state->status_message = "Filter cleared.";
+                return true;
+            }
+        }
+
+        // === Ships tab events ===
+        if (selected_tab == 6) {
+            if (event == Event::ArrowDown) {
+                int max_ship = (int)state->game_data.ships.size() - 1;
+                if (state->selected_ship < max_ship) state->selected_ship++;
+                return true;
+            }
+            if (event == Event::ArrowUp) {
+                if (state->selected_ship > 0) state->selected_ship--;
+                return true;
+            }
+            if (event == Event::Character('f') || event == Event::Character('F')) {
+                state->ship_filter.clear();
+                state->selected_ship = 0;
+                state->status_message = "Filter cleared.";
+                return true;
+            }
+        }
+
+        // === Sync tab events ===
+        if (selected_tab == 7) {
+            if (event == Event::ArrowLeft) {
+                if (state->sync_view_mode > 0) {
+                    state->sync_view_mode--;
+                    state->sync_selected_row = 0;
+                }
+                return true;
+            }
+            if (event == Event::ArrowRight) {
+                if (state->sync_view_mode < sync_view_count - 1) {
+                    state->sync_view_mode++;
+                    state->sync_selected_row = 0;
+                }
+                return true;
+            }
+            if (event == Event::ArrowDown) {
+                state->sync_selected_row++;
+                return true;
+            }
+            if (event == Event::ArrowUp) {
+                if (state->sync_selected_row > 0) state->sync_selected_row--;
+                return true;
+            }
+        }
+
+        // === Mouse wheel support (all tabs) ===
+        if (event.is_mouse()) {
+            auto& mouse = event.mouse();
+            if (mouse.button == Mouse::WheelUp) {
+                switch (selected_tab) {
+                    case 1: if (state->selected_daily_task > 0) state->selected_daily_task--; break;
+                    case 2: if (state->selected_weekly_goal > 0) state->selected_weekly_goal--; break;
+                    case 3: if (state->selected_crew > 0) { state->selected_crew--; state->update_crew_bda(); } break;
+                    case 4: if (state->selected_dock > 0) { state->selected_dock--; state->selected_dock_bda = 0; } break;
+                    case 5: if (state->selected_officer > 0) state->selected_officer--; break;
+                    case 6: if (state->selected_ship > 0) state->selected_ship--; break;
+                    case 7: if (state->sync_selected_row > 0) state->sync_selected_row--; break;
+                    default: break;
+                }
+                return true;
+            }
+            if (mouse.button == Mouse::WheelDown) {
+                switch (selected_tab) {
+                    case 1: if (state->selected_daily_task < (int)state->daily_plan.tasks.size() - 1) state->selected_daily_task++; break;
+                    case 2: if (state->selected_weekly_goal < (int)state->weekly_plan.goals.size() - 1) state->selected_weekly_goal++; break;
+                    case 3: if (state->selected_crew < (int)state->crew_results.size() - 1) { state->selected_crew++; state->update_crew_bda(); } break;
+                    case 4: if (state->selected_dock < 6) { state->selected_dock++; state->selected_dock_bda = 0; } break;
+                    case 5: if (state->selected_officer < (int)state->game_data.officers.size() - 1) state->selected_officer++; break;
+                    case 6: if (state->selected_ship < (int)state->game_data.ships.size() - 1) state->selected_ship++; break;
+                    case 7: state->sync_selected_row++; break;
+                    default: break;
+                }
+                return true;
+            }
+        }
+
+        // === PageUp / PageDown (all scrollable tabs, jump 10 rows) ===
+        if (event == Event::PageUp) {
+            switch (selected_tab) {
+                case 1: state->selected_daily_task = std::max(0, state->selected_daily_task - 10); break;
+                case 2: state->selected_weekly_goal = std::max(0, state->selected_weekly_goal - 10); break;
+                case 3: state->selected_crew = std::max(0, state->selected_crew - 10); state->update_crew_bda(); break;
+                case 4: state->selected_dock = std::max(0, state->selected_dock - 10); state->selected_dock_bda = 0; break;
+                case 5: state->selected_officer = std::max(0, state->selected_officer - 10); break;
+                case 6: state->selected_ship = std::max(0, state->selected_ship - 10); break;
+                case 7: state->sync_selected_row = std::max(0, state->sync_selected_row - 10); break;
+                default: break;
+            }
+            return true;
+        }
+        if (event == Event::PageDown) {
+            switch (selected_tab) {
+                case 1: state->selected_daily_task = std::min((int)state->daily_plan.tasks.size() - 1, state->selected_daily_task + 10); break;
+                case 2: state->selected_weekly_goal = std::min((int)state->weekly_plan.goals.size() - 1, state->selected_weekly_goal + 10); break;
+                case 3: state->selected_crew = std::min((int)state->crew_results.size() - 1, state->selected_crew + 10); state->update_crew_bda(); break;
+                case 4: state->selected_dock = std::min(6, state->selected_dock + 10); state->selected_dock_bda = 0; break;
+                case 5: state->selected_officer = std::min((int)state->game_data.officers.size() - 1, state->selected_officer + 10); break;
+                case 6: state->selected_ship = std::min((int)state->game_data.ships.size() - 1, state->selected_ship + 10); break;
+                case 7: state->sync_selected_row += 10; break;
+                default: break;
+            }
+            return true;
+        }
+
+        // === Home / End keys ===
+        if (event == Event::Home) {
+            switch (selected_tab) {
+                case 1: state->selected_daily_task = 0; break;
+                case 2: state->selected_weekly_goal = 0; break;
+                case 3: state->selected_crew = 0; state->update_crew_bda(); break;
+                case 4: state->selected_dock = 0; state->selected_dock_bda = 0; break;
+                case 5: state->selected_officer = 0; break;
+                case 6: state->selected_ship = 0; break;
+                case 7: state->sync_selected_row = 0; break;
+                default: break;
+            }
+            return true;
+        }
+        if (event == Event::End) {
+            switch (selected_tab) {
+                case 1: state->selected_daily_task = std::max(0, (int)state->daily_plan.tasks.size() - 1); break;
+                case 2: state->selected_weekly_goal = std::max(0, (int)state->weekly_plan.goals.size() - 1); break;
+                case 3: state->selected_crew = std::max(0, (int)state->crew_results.size() - 1); state->update_crew_bda(); break;
+                case 4: state->selected_dock = 6; state->selected_dock_bda = 0; break;
+                case 5: state->selected_officer = std::max(0, (int)state->game_data.officers.size() - 1); break;
+                case 6: state->selected_ship = std::max(0, (int)state->game_data.ships.size() - 1); break;
+                case 7: state->sync_selected_row = 999999; break;  // clamped in render
+                default: break;
+            }
+            return true;
         }
 
         return false;

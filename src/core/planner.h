@@ -7,6 +7,8 @@
 #include <ctime>
 #include <functional>
 
+#include "data/models.h"
+
 namespace stfc {
 
 // ---------------------------------------------------------------------------
@@ -72,6 +74,11 @@ struct PlannerTask {
 
     // Tags for filtering
     std::set<std::string> tags;
+
+    // Dynamic context from player data (populated by enrich_plan_with_player_data)
+    std::vector<std::string> context_hints;  // e.g. "Research: Shield Tech Lv12 - 2d 5h left"
+    bool has_active_job = false;             // A related job is currently running
+    bool queue_idle = false;                 // Related queue has no active job (needs attention!)
 };
 
 // ---------------------------------------------------------------------------
@@ -152,6 +159,12 @@ public:
     bool load_daily(DailyPlan& plan, const std::string& path) const;
     bool save_weekly(const WeeklyPlan& plan, const std::string& path) const;
     bool load_weekly(WeeklyPlan& plan, const std::string& path) const;
+
+    // Enrich plan tasks with live player data context
+    // Call after generating a plan AND after receiving new sync data
+    void enrich_plan_with_player_data(DailyPlan& plan,
+                                       const PlayerData& pd,
+                                       const GameData& gd) const;
 
     // Access all known task templates
     const std::vector<PlannerTask>& all_daily_tasks() const { return daily_templates_; }

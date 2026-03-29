@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include <map>
@@ -339,6 +340,118 @@ inline const char* officer_class_str(int cls) {
         case 3: return "Science";
         default: return "Unknown";
     }
+}
+
+// ---------------------------------------------------------------------------
+// Name resolution: cross-reference Player* IDs against GameData
+// Call after sync callback and after loading cached player data.
+// ---------------------------------------------------------------------------
+
+inline void resolve_player_names(PlayerData& pd, const GameData& gd) {
+    for (auto& po : pd.officers) {
+        auto it = gd.officers.find(po.officer_id);
+        if (it != gd.officers.end()) {
+            po.name = it->second.name.empty() ? it->second.short_name : it->second.name;
+        } else {
+            po.name = "Officer#" + std::to_string(po.officer_id);
+        }
+    }
+    for (auto& ps : pd.ships) {
+        auto it = gd.ships.find(ps.hull_id);
+        if (it != gd.ships.end()) {
+            ps.name = it->second.name;
+        } else {
+            ps.name = "Ship#" + std::to_string(ps.hull_id);
+        }
+    }
+    for (auto& pr : pd.researches) {
+        auto it = gd.researches.find(pr.research_id);
+        if (it != gd.researches.end()) {
+            pr.name = it->second.name;
+        } else {
+            pr.name = "Research#" + std::to_string(pr.research_id);
+        }
+    }
+    for (auto& pb : pd.buildings) {
+        auto it = gd.buildings.find(pb.building_id);
+        if (it != gd.buildings.end()) {
+            pb.name = it->second.name;
+        } else {
+            pb.name = "Building#" + std::to_string(pb.building_id);
+        }
+    }
+    for (auto& pr : pd.resources) {
+        auto it = gd.resources.find(pr.resource_id);
+        if (it != gd.resources.end()) {
+            pr.name = it->second.name;
+        } else {
+            pr.name = "Resource#" + std::to_string(pr.resource_id);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Job type helpers (from community mod job_type values)
+// ---------------------------------------------------------------------------
+
+inline const char* job_type_str(int job_type) {
+    switch (job_type) {
+        case 1: return "Research";
+        case 2: return "Building";
+        case 3: return "Ship Build";
+        case 4: return "Ship Upgrade";
+        case 5: return "Officer Training";
+        default: return "Unknown";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Time formatting helpers
+// ---------------------------------------------------------------------------
+
+inline std::string format_duration_hms(int total_seconds) {
+    if (total_seconds <= 0) return "Done";
+    int hours = total_seconds / 3600;
+    int mins = (total_seconds % 3600) / 60;
+    int secs = total_seconds % 60;
+    if (hours > 0) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%dh %02dm %02ds", hours, mins, secs);
+        return buf;
+    }
+    if (mins > 0) {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%dm %02ds", mins, secs);
+        return buf;
+    }
+    return std::to_string(secs) + "s";
+}
+
+inline std::string format_duration_short(int total_seconds) {
+    if (total_seconds <= 0) return "Done";
+    int days = total_seconds / 86400;
+    int hours = (total_seconds % 86400) / 3600;
+    int mins = (total_seconds % 3600) / 60;
+    if (days > 0) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%dd %dh", days, hours);
+        return buf;
+    }
+    if (hours > 0) {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%dh %dm", hours, mins);
+        return buf;
+    }
+    return std::to_string(mins) + "m";
+}
+
+// Compute remaining seconds for a job (negative = overdue)
+inline int job_remaining_seconds(const PlayerJob& job) {
+    auto now = std::chrono::system_clock::now();
+    auto now_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+        now.time_since_epoch()).count();
+    int64_t finish_time = job.start_time + job.duration - job.reduction;
+    return static_cast<int>(finish_time - now_epoch);
 }
 
 } // namespace stfc

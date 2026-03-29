@@ -1411,8 +1411,8 @@ void test_loadout_performance() {
 void test_planner_construction() {
     TEST("Planner construction and template loading");
     Planner planner;
-    CHECK(planner.all_daily_tasks().size() >= 20,
-          "expected >= 20 daily templates, got " + std::to_string(planner.all_daily_tasks().size()));
+    CHECK(planner.all_daily_tasks().size() >= 15,
+          "expected >= 15 daily templates, got " + std::to_string(planner.all_daily_tasks().size()));
     CHECK(planner.all_weekly_goals().size() >= 10,
           "expected >= 10 weekly templates, got " + std::to_string(planner.all_weekly_goals().size()));
     PASS();

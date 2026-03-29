@@ -1,5 +1,5 @@
 set_project("stfctool")
-set_version("0.1.0")
+set_version("0.5.0")
 
 set_languages("c++17")
 set_warnings("all", "error")
