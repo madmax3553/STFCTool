@@ -92,7 +92,7 @@ struct AppState {
     int selected_dock = 0;         // 0-6 dock selection
     int selected_dock_bda = 0;     // BDA selection within a dock
     bool loadout_computed = false;
-    bool loadout_running = false;
+    std::atomic<bool> loadout_running{false};
 
     void init_dock_configs() {
         // Default 7-dock setup — common late-game configuration
@@ -163,7 +163,7 @@ struct AppState {
     }
 
     void run_crew_optimizer() {
-        if (!optimizer) return;
+        if (!optimizer || loadout_running) return;
         const auto& scenarios = all_dock_scenarios();
         if (crew_scenario < 0 || crew_scenario >= (int)scenarios.size()) return;
 
@@ -184,7 +184,7 @@ struct AppState {
     }
 
     void update_crew_bda() {
-        if (!optimizer || crew_results.empty()) return;
+        if (!optimizer || crew_results.empty() || loadout_running) return;
         if (selected_crew < 0 || selected_crew >= (int)crew_results.size()) return;
 
         const auto& scenarios = all_dock_scenarios();
@@ -193,22 +193,33 @@ struct AppState {
             bd.captain, bd.bridge, scenarios[crew_scenario], 3);
     }
 
+    std::string loadout_error;  // non-empty if last optimization failed
+
     void run_loadout_optimizer() {
         if (!optimizer || dock_configs.empty()) return;
         loadout_running = true;
+        loadout_error.clear();
 
-        // Set ship type for loadout
-        ShipType st = ShipType::Explorer;
-        if (crew_ship_type == 1) st = ShipType::Battleship;
-        if (crew_ship_type == 2) st = ShipType::Interceptor;
-        optimizer->set_ship_type(st);
+        try {
+            // Set ship type for loadout
+            ShipType st = ShipType::Explorer;
+            if (crew_ship_type == 1) st = ShipType::Battleship;
+            if (crew_ship_type == 2) st = ShipType::Interceptor;
+            optimizer->set_ship_type(st);
 
-        loadout_result = optimizer->optimize_dock_loadout(dock_configs, 1);
-        loadout_computed = true;
+            loadout_result = optimizer->optimize_dock_loadout(dock_configs, 1);
+            loadout_computed = true;
+
+            // Save loadout
+            CrewOptimizer::save_loadout(loadout_result, ".stfc_loadout.json", st);
+        } catch (const std::exception& e) {
+            loadout_error = std::string("Loadout optimizer failed: ") + e.what();
+            loadout_computed = false;
+        } catch (...) {
+            loadout_error = "Loadout optimizer failed: unknown exception";
+            loadout_computed = false;
+        }
         loadout_running = false;
-
-        // Save loadout
-        CrewOptimizer::save_loadout(loadout_result, ".stfc_loadout.json", st);
     }
 };
 
@@ -1062,18 +1073,30 @@ static Element render_loadout(AppState& state) {
     int safe_ship = std::clamp(state.crew_ship_type, 0, 2);
     std::string ship_name = ship_names[safe_ship];
 
-    auto header = vbox({
-        text("7-Dock Loadout Optimizer") | bold | center,
-        separator(),
-        hbox({
-            text("  Ship: "),
-            text(ship_name) | bold | color(Color::Yellow),
-            text("  [T] cycle") | dim,
-            filler(),
-            text("  [Enter] Optimize All Docks") | dim,
-            text("  [L] Load Saved") | dim,
-        }),
-    });
+    Elements header_lines;
+    header_lines.push_back(text("7-Dock Loadout Optimizer") | bold | center);
+    header_lines.push_back(separator());
+    header_lines.push_back(hbox({
+        text("  Ship: "),
+        text(ship_name) | bold | color(Color::Yellow),
+        text("  [T] cycle") | dim,
+        filler(),
+        text("  [Enter] Optimize All Docks") | dim,
+        text("  [L] Load Saved") | dim,
+    }));
+    if (!state.loadout_error.empty()) {
+        header_lines.push_back(separator());
+        header_lines.push_back(
+            text("  ERROR: " + state.loadout_error)
+                | color(Color::Red) | bold);
+    }
+    if (state.loadout_running) {
+        header_lines.push_back(separator());
+        header_lines.push_back(
+            text("  Optimizing... (running in background)")
+                | color(Color::Yellow) | bold);
+    }
+    auto header = vbox(header_lines);
 
     // Dock list (left panel)
     Elements dock_rows;
@@ -2544,15 +2567,25 @@ int main() {
                 }
                 return true;
             }
-            // Run loadout optimizer
+            // Run loadout optimizer (background thread)
             if (event == Event::Return) {
                 if (state->optimizer && !state->loadout_running) {
-                    state->status_message = "Optimizing 7-dock loadout...";
-                    state->run_loadout_optimizer();
-                    state->status_message = "Loadout optimized! " +
-                        std::to_string(state->loadout_result.total_officers_used) +
-                        " officers assigned across " +
-                        std::to_string(state->loadout_result.docks.size()) + " docks.";
+                    state->set_status("Optimizing 7-dock loadout (background)...");
+                    state->loadout_running = true;
+                    std::thread([state]() {
+                        state->run_loadout_optimizer();
+                        if (!state->loadout_error.empty()) {
+                            state->set_status(state->loadout_error);
+                        } else {
+                            state->set_status("Loadout optimized! " +
+                                std::to_string(state->loadout_result.total_officers_used) +
+                                " officers assigned across " +
+                                std::to_string(state->loadout_result.docks.size()) + " docks.");
+                        }
+                        // Trigger screen redraw
+                        auto screen = ScreenInteractive::Active();
+                        if (screen) screen->PostEvent(Event::Custom);
+                    }).detach();
                 }
                 return true;
             }

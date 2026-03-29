@@ -1520,95 +1520,156 @@ LoadoutResult CrewOptimizer::optimize_dock_loadout(
     int top_n)
 {
     LoadoutResult loadout;
+    loadout.docks.resize(dock_configs.size());
     std::set<std::string> excluded;
     ShipType original_ship = ship_type_;
 
-    for (size_t i = 0; i < dock_configs.size() && i < 7; ++i) {
+    const size_t n_docks = std::min(dock_configs.size(), size_t(7));
+
+    // -----------------------------------------------------------------------
+    // Phase 0: Handle locked docks first — they always claim their officers
+    // -----------------------------------------------------------------------
+    for (size_t i = 0; i < n_docks; ++i) {
         const auto& cfg = dock_configs[i];
-        int dock_num = static_cast<int>(i) + 1;
+        if (!cfg.locked || cfg.locked_captain.empty()) continue;
 
-        const auto& rec = get_ship_recommendation(cfg.scenario);
-        std::string ship_recommended = ship_type_str(rec.best);
-        std::string ship_used = cfg.ship_override.empty()
-            ? ship_recommended
-            : cfg.ship_override;
-
-        DockResult dr;
-        dr.dock_num = dock_num;
+        auto& dr = loadout.docks[i];
+        dr.dock_num = static_cast<int>(i) + 1;
         dr.scenario = cfg.scenario;
         dr.scenario_label_str = scenario_label(cfg.scenario);
-        dr.ship_recommended = ship_recommended;
-        dr.ship_used = ship_used;
-        dr.locked = cfg.locked;
 
-        if (cfg.locked && !cfg.locked_captain.empty()) {
-            // --- LOCKED DOCK ---
-            dr.captain = cfg.locked_captain;
-            dr.bridge = cfg.locked_bridge;
+        const auto& rec = get_ship_recommendation(cfg.scenario);
+        dr.ship_recommended = ship_type_str(rec.best);
+        dr.ship_used = cfg.ship_override.empty()
+            ? dr.ship_recommended : cfg.ship_override;
+        dr.locked = true;
+        dr.captain = cfg.locked_captain;
+        dr.bridge = cfg.locked_bridge;
 
-            // Find officer objects for scoring
-            const ClassifiedOfficer* cap_off = nullptr;
-            const ClassifiedOfficer* b1_off = nullptr;
-            const ClassifiedOfficer* b2_off = nullptr;
-
-            for (const auto& off : officers_) {
-                if (off.name == cfg.locked_captain) cap_off = &off;
-                if (cfg.locked_bridge.size() > 0 && off.name == cfg.locked_bridge[0]) b1_off = &off;
-                if (cfg.locked_bridge.size() > 1 && off.name == cfg.locked_bridge[1]) b2_off = &off;
-            }
-
-            if (cap_off && b1_off && b2_off) {
-                // Score the locked crew for display
-                CrewResult cr = score_scenario_crew(*cap_off, *b1_off, *b2_off, cfg.scenario);
-                dr.score = cr.score;
-                dr.breakdown = cr.breakdown;
-            }
-
-            // Reserve these officers
-            excluded.insert(cfg.locked_captain);
-            for (const auto& b : cfg.locked_bridge) excluded.insert(b);
-
-        } else {
-            // --- OPTIMIZED DOCK ---
-
-            // Switch ship type if needed
-            ShipType target_ship = ship_type_from_str(ship_used);
-            if (target_ship != ship_type_) {
-                set_ship_type(target_ship);
-            }
-
-            auto crews = find_best_crews(cfg.scenario, top_n, excluded);
-
-            if (!crews.empty()) {
-                const auto& best = crews[0];
-                dr.captain = best.breakdown.captain;
-                dr.bridge = best.breakdown.bridge;
-                dr.score = best.score;
-                dr.breakdown = best.breakdown;
-
-                // Reserve these officers
-                excluded.insert(dr.captain);
-                for (const auto& b : dr.bridge) excluded.insert(b);
-
-                // Find BDA suggestions
-                dr.bda_suggestions = find_best_bda(
-                    dr.captain, dr.bridge, cfg.scenario, 3, excluded);
-            } else {
-                dr.captain = "N/A";
-                dr.bridge = {"N/A", "N/A"};
-                dr.score = 0.0;
-            }
-
-            // Restore ship type if changed
-            if (ship_type_ != original_ship) {
-                set_ship_type(original_ship);
-            }
+        // Score the locked crew for display
+        const ClassifiedOfficer* cap_off = nullptr;
+        const ClassifiedOfficer* b1_off = nullptr;
+        const ClassifiedOfficer* b2_off = nullptr;
+        for (const auto& off : officers_) {
+            if (off.name == cfg.locked_captain) cap_off = &off;
+            if (cfg.locked_bridge.size() > 0 && off.name == cfg.locked_bridge[0]) b1_off = &off;
+            if (cfg.locked_bridge.size() > 1 && off.name == cfg.locked_bridge[1]) b2_off = &off;
+        }
+        if (cap_off && b1_off && b2_off) {
+            CrewResult cr = score_scenario_crew(*cap_off, *b1_off, *b2_off, cfg.scenario);
+            dr.score = cr.score;
+            dr.breakdown = cr.breakdown;
         }
 
-        loadout.docks.push_back(std::move(dr));
+        excluded.insert(cfg.locked_captain);
+        for (const auto& b : cfg.locked_bridge) excluded.insert(b);
     }
 
-    // Build sorted excluded list
+    // -----------------------------------------------------------------------
+    // Phase 1: Assess constraint level of each unlocked dock
+    //
+    // "Most constrained" = fewest viable specialists. Mining and loot docks
+    // typically have very few officers with relevant tags, so they should
+    // pick first before combat scenarios eat all the good stat sticks.
+    // -----------------------------------------------------------------------
+    struct DockOrder {
+        size_t index;
+        int viable_count;  // # officers scoring above median threshold
+    };
+    std::vector<DockOrder> unlocked_order;
+
+    for (size_t i = 0; i < n_docks; ++i) {
+        if (dock_configs[i].locked && !dock_configs[i].locked_captain.empty()) continue;
+
+        const auto& cfg = dock_configs[i];
+
+        // Temporarily switch ship type for scoring
+        ShipType target_ship = ship_type_from_str(
+            cfg.ship_override.empty()
+                ? ship_type_str(get_ship_recommendation(cfg.scenario).best)
+                : cfg.ship_override);
+        if (target_ship != ship_type_) set_ship_type(target_ship);
+
+        // Score all non-excluded officers for this scenario
+        int viable = 0;
+        double total_score = 0.0;
+        int n_scored = 0;
+        for (const auto& off : officers_) {
+            if (excluded.count(off.name)) continue;
+            double s = score_scenario_individual(off, cfg.scenario);
+            total_score += s;
+            ++n_scored;
+        }
+        // Count officers above the mean score as "viable specialists"
+        double mean = (n_scored > 0) ? total_score / n_scored : 0.0;
+        for (const auto& off : officers_) {
+            if (excluded.count(off.name)) continue;
+            double s = score_scenario_individual(off, cfg.scenario);
+            if (s > mean * 1.5) ++viable;  // well above average = specialist
+        }
+
+        if (ship_type_ != original_ship) set_ship_type(original_ship);
+
+        unlocked_order.push_back({i, viable});
+    }
+
+    // Sort: fewest viable specialists first (most constrained)
+    std::sort(unlocked_order.begin(), unlocked_order.end(),
+              [](const DockOrder& a, const DockOrder& b) {
+                  return a.viable_count < b.viable_count;
+              });
+
+    // -----------------------------------------------------------------------
+    // Phase 2: Optimize docks in most-constrained-first order
+    // -----------------------------------------------------------------------
+    for (const auto& dord : unlocked_order) {
+        size_t i = dord.index;
+        const auto& cfg = dock_configs[i];
+        auto& dr = loadout.docks[i];
+
+        dr.dock_num = static_cast<int>(i) + 1;
+        dr.scenario = cfg.scenario;
+        dr.scenario_label_str = scenario_label(cfg.scenario);
+
+        const auto& rec = get_ship_recommendation(cfg.scenario);
+        dr.ship_recommended = ship_type_str(rec.best);
+        dr.ship_used = cfg.ship_override.empty()
+            ? dr.ship_recommended : cfg.ship_override;
+        dr.locked = false;
+
+        // Switch ship type if needed
+        ShipType target_ship = ship_type_from_str(dr.ship_used);
+        if (target_ship != ship_type_) set_ship_type(target_ship);
+
+        auto crews = find_best_crews(cfg.scenario, top_n, excluded);
+
+        if (!crews.empty()) {
+            const auto& best = crews[0];
+            dr.captain = best.breakdown.captain;
+            dr.bridge = best.breakdown.bridge;
+            dr.score = best.score;
+            dr.breakdown = best.breakdown;
+
+            // Reserve these officers
+            excluded.insert(dr.captain);
+            for (const auto& b : dr.bridge) excluded.insert(b);
+
+            // Find BDA suggestions
+            dr.bda_suggestions = find_best_bda(
+                dr.captain, dr.bridge, cfg.scenario, 3, excluded);
+        } else {
+            dr.captain = "N/A";
+            dr.bridge = {"N/A", "N/A"};
+            dr.score = 0.0;
+        }
+
+        // Restore ship type if changed
+        if (ship_type_ != original_ship) set_ship_type(original_ship);
+    }
+
+    // -----------------------------------------------------------------------
+    // Finalize: build excluded list
+    // -----------------------------------------------------------------------
     loadout.excluded_officers.assign(excluded.begin(), excluded.end());
     std::sort(loadout.excluded_officers.begin(), loadout.excluded_officers.end());
     loadout.total_officers_used = static_cast<int>(excluded.size());
