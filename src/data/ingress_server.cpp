@@ -39,6 +39,26 @@ PlayerData IngressServer::get_player_data() {
     return player_data_;
 }
 
+std::vector<SyncEvent> IngressServer::get_sync_log() {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    return sync_log_;
+}
+
+void IngressServer::add_sync_event(const std::string& data_type, int count, bool success, const std::string& error) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    SyncEvent ev;
+    ev.timestamp = std::chrono::system_clock::now();
+    ev.data_type = data_type;
+    ev.record_count = count;
+    ev.success = success;
+    ev.error = error;
+    sync_log_.push_back(ev);
+    // Keep at most 50 events
+    if (sync_log_.size() > 50) {
+        sync_log_.erase(sync_log_.begin());
+    }
+}
+
 void IngressServer::run_server() {
     httplib::Server svr;
 
@@ -54,6 +74,7 @@ void IngressServer::run_server() {
         if (!validate_token(token_header)) {
             res.status = 401;
             res.set_content(R"({"error":"invalid token"})", "application/json");
+            add_sync_event("auth_fail", 0, false, "invalid token");
             return;
         }
 
@@ -75,6 +96,7 @@ void IngressServer::run_server() {
         save_sync_data(data_type, req.body);
 
         // Parse and update player data
+        int record_count = 0;
         try {
             auto j = json::parse(req.body);
             std::lock_guard<std::mutex> lock(data_mutex_);
@@ -89,6 +111,7 @@ void IngressServer::run_server() {
                         po.rank = o.value("rank", 0);
                         player_data_.officers.push_back(po);
                     }
+                    record_count = (int)player_data_.officers.size();
                 }
             } else if (data_type == "ships" || data_type == "ship") {
                 player_data_.ships.clear();
@@ -100,6 +123,7 @@ void IngressServer::run_server() {
                         ps.level = s.value("level", 0);
                         player_data_.ships.push_back(ps);
                     }
+                    record_count = (int)player_data_.ships.size();
                 }
             } else if (data_type == "resources" || data_type == "resource") {
                 player_data_.resources.clear();
@@ -110,6 +134,7 @@ void IngressServer::run_server() {
                         pr.amount = r.value("amount", (int64_t)0);
                         player_data_.resources.push_back(pr);
                     }
+                    record_count = (int)player_data_.resources.size();
                 }
             } else if (data_type == "research") {
                 player_data_.researches.clear();
@@ -120,6 +145,7 @@ void IngressServer::run_server() {
                         pr.level = r.value("level", 0);
                         player_data_.researches.push_back(pr);
                     }
+                    record_count = (int)player_data_.researches.size();
                 }
             } else if (data_type == "buildings" || data_type == "building") {
                 player_data_.buildings.clear();
@@ -130,11 +156,22 @@ void IngressServer::run_server() {
                         pb.level = b.value("level", 0);
                         player_data_.buildings.push_back(pb);
                     }
+                    record_count = (int)player_data_.buildings.size();
+                }
+            } else {
+                // Unknown data type — still count records if there's a data array
+                if (j.contains("data") && j["data"].is_array()) {
+                    record_count = (int)j["data"].size();
                 }
             }
-        } catch (...) {
-            // Store raw even if parse fails
+        } catch (const std::exception& e) {
+            add_sync_event(data_type, 0, false, e.what());
+            res.set_content(R"({"status":"ok"})", "application/json");
+            return;
         }
+
+        // Log the successful event
+        add_sync_event(data_type, record_count, true);
 
         // Notify callback
         if (data_cb_) {

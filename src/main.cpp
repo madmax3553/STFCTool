@@ -1226,25 +1226,8 @@ static Element render_ships(AppState& state) {
 static Element render_sync(AppState& state) {
     bool running = state.ingress_server.is_running();
 
-    auto config_example = vbox({
-        text("Community Mod Config (config.toml)") | bold,
-        separator(),
-        text("[sync]") | color(Color::Yellow),
-        text("url = \"http://localhost:" + std::to_string(state.ingress_server.port()) + "/sync/ingress/\"") | color(Color::Green),
-        text("token = \"your-token-here\"") | color(Color::Green),
-        text("resources = true"),
-        text("battlelogs = true"),
-        text("officer = true"),
-        text("missions = true"),
-        text("research = true"),
-        text("tech = true"),
-        text("traits = true"),
-        text("buildings = true"),
-        text("ships = true"),
-    });
-
     auto status_box = vbox({
-        text("Ingress Server Status") | bold,
+        text("Ingress Server") | bold,
         separator(),
         hbox({
             text("  Status: "),
@@ -1265,17 +1248,77 @@ static Element render_sync(AppState& state) {
         hbox({text("  Resources: "), text(std::to_string(state.player_data.resources.size()))}),
     });
 
+    // Sync event log
+    auto sync_log = state.ingress_server.get_sync_log();
+    Elements log_lines;
+    log_lines.push_back(text("Sync Event Log") | bold);
+    log_lines.push_back(separator());
+    if (sync_log.empty()) {
+        log_lines.push_back(text("  No events yet. Start the server with [S] and") | dim);
+        log_lines.push_back(text("  launch STFC to trigger sync, or test with:") | dim);
+        log_lines.push_back(separatorEmpty());
+        std::string curl_cmd = "  curl -X POST http://localhost:" +
+            std::to_string(state.ingress_server.port()) +
+            "/sync/ingress/ \\";
+        log_lines.push_back(text(curl_cmd) | color(Color::Yellow));
+        log_lines.push_back(text("    -H 'Content-Type: application/json' \\") | color(Color::Yellow));
+        log_lines.push_back(text("    -d '{\"type\":\"officers\",\"data\":[{\"id\":1,\"level\":50,\"rank\":5}]}'") | color(Color::Yellow));
+    } else {
+        // Show most recent events first (reverse order), up to 20
+        int start = std::max(0, (int)sync_log.size() - 20);
+        for (int i = (int)sync_log.size() - 1; i >= start; i--) {
+            auto& ev = sync_log[i];
+            // Format timestamp as HH:MM:SS
+            auto time_t = std::chrono::system_clock::to_time_t(ev.timestamp);
+            std::tm tm_buf{};
+            localtime_r(&time_t, &tm_buf);
+            char time_str[16];
+            std::snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d",
+                          tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+
+            Elements row;
+            row.push_back(text(std::string(time_str) + " ") | dim);
+            if (ev.success) {
+                row.push_back(text("OK ") | color(Color::Green) | bold);
+                row.push_back(text(ev.data_type));
+                row.push_back(text(" (" + std::to_string(ev.record_count) + " records)") | dim);
+            } else {
+                row.push_back(text("FAIL ") | color(Color::Red) | bold);
+                row.push_back(text(ev.data_type));
+                if (!ev.error.empty()) {
+                    row.push_back(text(" - " + ev.error) | dim);
+                }
+            }
+            log_lines.push_back(hbox(std::move(row)));
+        }
+    }
+    auto log_box = vbox(std::move(log_lines));
+
+    // Config reference
+    auto config_box = vbox({
+        text("Community Mod Config") | bold,
+        separator(),
+        text("  community/community_patch_settings.toml:") | dim,
+        separatorEmpty(),
+        text("  [sync.targets.local]") | color(Color::Yellow),
+        text("  token = \"\"") | color(Color::Green),
+        text("  url = \"http://localhost:" + std::to_string(state.ingress_server.port()) + "/sync/ingress/\"") | color(Color::Green),
+    });
+
     return vbox({
-        text("Mod Sync Configuration") | bold | center,
+        text("Mod Sync") | bold | center,
         separator(),
         hbox({
             vbox({status_box, separator(), player_info}) | flex,
             separator(),
-            config_example | flex,
-        }),
+            vbox({log_box}) | flex,
+        }) | flex,
         separator(),
-        text("  Press [S] to start/stop the ingress server") | dim,
-        text("  Configure the community mod to point to this URL") | dim,
+        config_box,
+        separator(),
+        text("  [S] Start/stop server  |  Test: curl -X POST localhost:" +
+             std::to_string(state.ingress_server.port()) +
+             "/sync/ingress/ -H 'Content-Type: application/json' -d '{\"type\":\"test\",\"data\":[]}'") | dim,
     });
 }
 
@@ -1294,7 +1337,7 @@ static Element render_help() {
                 text("  [R]        Refresh game data"),
                 text("  [S]        Toggle ingress server"),
                 text("  [Q]        Quit (saves state)"),
-                text("  [Tab/1-8]  Switch tabs"),
+                text("  [Tab/Shift+Tab]  Switch tabs"),
                 separatorEmpty(),
                 text("Daily Planner:") | bold | color(Color::Cyan),
                 text("  [Up/Down]  Navigate tasks"),
@@ -1374,10 +1417,26 @@ int main() {
     };
 
     int selected_tab = 0;
-    auto tab_toggle = Toggle(&tab_labels, &selected_tab);
+    const int tab_count = (int)tab_labels.size();
+
+    // Tab bar is a plain renderer — no Toggle component, so arrow keys are free
+    // for per-tab use. Tab switching is handled exclusively via Tab/Shift+Tab
+    // in the CatchEvent below.
+    auto tab_bar = Renderer([&]() {
+        Elements tabs;
+        for (int i = 0; i < tab_count; i++) {
+            auto label = text(" " + tab_labels[i] + " ");
+            if (i == selected_tab) {
+                label = label | bold | inverted;
+            }
+            tabs.push_back(label);
+            if (i < tab_count - 1) tabs.push_back(text(" "));
+        }
+        return hbox(std::move(tabs));
+    });
 
     // Main renderer
-    auto main_renderer = Renderer(tab_toggle, [&]() {
+    auto main_renderer = Renderer(tab_bar, [&]() {
         // Help overlay takes over the whole screen
         if (state->show_help) {
             return vbox({
@@ -1399,7 +1458,7 @@ int main() {
         }
 
         return vbox({
-            tab_toggle->Render() | center,
+            tab_bar->Render() | center,
             separator(),
             content | flex,
             separator(),
@@ -1421,6 +1480,16 @@ int main() {
                 state->show_help = false;
                 return true;
             }
+            return true;
+        }
+
+        // Global: Tab / Shift+Tab to switch tabs
+        if (event == Event::Tab) {
+            selected_tab = (selected_tab + 1) % tab_count;
+            return true;
+        }
+        if (event == Event::TabReverse) {
+            selected_tab = (selected_tab - 1 + tab_count) % tab_count;
             return true;
         }
 
