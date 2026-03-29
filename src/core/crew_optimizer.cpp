@@ -286,15 +286,16 @@ void CrewOptimizer::classify_officers() {
             off.is_dual_use = true;
         }
 
-        // Ability amplifier
+        // Ability amplifier — officers that boost all officer stats/abilities
+        // "Increase all officer stats" (Kirk, Cadet Kirk, Kumak, etc.)
+        // "effectiveness of all officer" / "all officers" patterns
         if (contains_any(d, {"effectiveness of all officer",
-                             "all officer stats", "all officers"})) {
+                             "all officer stats", "all officers",
+                             "increase officer stats",
+                             "increase all officer",
+                             "officer ability"})) {
             off.ability_amplifier = true;
         }
-        // Note: Python also checks "increase.*officer abilit" but it's substring, not regex.
-        // Since ".*" is left as literal, it would match "increase.*officer abilit" literally.
-        // This rarely if ever matches, but we include it for faithfulness.
-        if (contains(d, "increase.*officer abilit")) off.ability_amplifier = true;
 
         // Stat booster
         if (contains_any(d, {"officer stats", "all officer", "officer attack",
@@ -316,17 +317,30 @@ void CrewOptimizer::classify_officers() {
         };
         static const StatePattern state_patterns[] = {
             {"morale",
-             {"morale for", "inspire morale", "apply morale"},
-             {"whenmorale", "with morale", "has morale", "ship has morale", "shipmorale"}},
+             {"morale for", "inspire morale", "apply morale", "cause morale"},
+             // Real roster text: "ship has morale", "with morale", "has morale",
+             // "when ship has morale", "when the ship has morale"
+             {"ship has morale", "with morale", "has morale",
+              "when morale", "while morale"}},
             {"breach",
              {"hull breach for", "apply hull breach", "cause hull breach", "inflict hull breach"},
-             {"has hull breach", "with hull breach", "opponenthull breach", "hull breach,"}},
+             // Real roster text: "opponent has hull breach", "with hull breach",
+             // "has hull breach", "enemy player has hull breach",
+             // "fighting a player with hull breach"
+             {"has hull breach", "with hull breach", "opponent hull breach",
+              "player has hull breach", "enemy has hull breach",
+              "when hull breach"}},
             {"burning",
              {"burning for", "apply burning", "cause burning", "inflict burning"},
-             {"is burning", "has burning", "opponentburning", "burning,"}},
+             // Real roster text: "opponent is burning", "is burning",
+             // "has burning", "enemy player has burning", "afflicted by burning"
+             {"is burning", "has burning", "opponent burning",
+              "player has burning", "afflicted by burning",
+              "when burning", "whilst burning"}},
             {"assimilate",
              {"assimilate for", "apply assimilate"},
-             {"with assimilate", "has assimilate"}},
+             {"with assimilate", "has assimilate",
+              "when assimilate", "is assimilated"}},
         };
 
         for (const auto& sp : state_patterns) {
@@ -334,6 +348,9 @@ void CrewOptimizer::classify_officers() {
                 off.pvp_tags.insert(sp.state);
                 if (off.causes_effect) {
                     off.states_applied.insert(sp.state);
+                } else {
+                    // effect column lists the state, but causes_effect=N → benefits from it
+                    off.states_benefit.insert(sp.state);
                 }
             }
             for (auto kw : sp.apply_kw) {
@@ -783,6 +800,26 @@ void CrewOptimizer::apply_oa_ship_penalty(double& total, CrewBreakdown& bd,
     }
 }
 
+// OA% bonus: all bridge officers' Officer Abilities fire passively.
+// Officers with higher OA% have stronger abilities. BDAs (cm_pct >= 10000)
+// are excluded since they're designed as below-deck.
+void CrewOptimizer::apply_oa_bonus(double& total, CrewBreakdown& bd,
+                                    const ClassifiedOfficer* crew[3]) const {
+    double oa_bonus = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        if (crew[i]->is_bda()) continue;  // BDA officers don't have meaningful OA%
+        double oa = crew[i]->oa_pct;
+        if (oa <= 0) continue;
+        // Cap at 1500% — beyond that it's usually a special mechanic (e.g. 290000%)
+        // that doesn't linearly scale with the percentage value
+        double capped = std::min(oa, 1500.0);
+        oa_bonus += capped * 20.0;  // 20 per OA%, so 100% OA = +2000, 1500% = +30000
+    }
+    if (oa_bonus > 0) {
+        total += oa_bonus;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Crew scoring: PvP
 // ---------------------------------------------------------------------------
@@ -869,6 +906,9 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
             }
         }
     }
+
+    // OA% bonus — bridge officers with strong abilities
+    apply_oa_bonus(total, bd, crew);
 
     // OA ship-lock penalty
     apply_oa_ship_penalty(total, bd, b1, b2);
@@ -982,6 +1022,9 @@ CrewResult CrewOptimizer::score_hybrid_crew(const ClassifiedOfficer& captain,
             bd.penalties.push_back("PvP-only officer '" + crew[i]->name + "' -- dead weight in PvE");
         }
     }
+
+    // OA% bonus — bridge officers with strong abilities
+    apply_oa_bonus(total, bd, crew);
 
     // OA ship-lock penalty
     apply_oa_ship_penalty(total, bd, b1, b2);
@@ -1208,6 +1251,9 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
         }
     }
 
+    // OA% bonus — bridge officers with strong abilities
+    apply_oa_bonus(total, bd, crew);
+
     // OA ship-lock penalty
     apply_oa_ship_penalty(total, bd, b1, b2);
 
@@ -1235,11 +1281,38 @@ std::vector<CrewResult> CrewOptimizer::find_best_crews(
     std::sort(scored.begin(), scored.end(),
               [](const auto& a, const auto& b) { return a.first > b.first; });
 
-    // Take top 40 candidates
-    const int N = std::min(static_cast<int>(scored.size()), 40);
-    std::vector<size_t> candidates;
-    candidates.reserve(N);
-    for (int i = 0; i < N; ++i) candidates.push_back(scored[i].second);
+    // Take top 40 candidates by individual score
+    const int BASE_N = std::min(static_cast<int>(scored.size()), 40);
+    std::set<size_t> candidate_set;
+    for (int i = 0; i < BASE_N; ++i) candidate_set.insert(scored[i].second);
+
+    // Synergy reserve: also include officers outside top 40 who have synergy
+    // value that can't be captured by individual scoring alone.
+    // State applicators/beneficiaries, ability amplifiers, and high CM% officers
+    // are often low-stat but create massive crew-level bonuses.
+    for (const auto& [s, idx] : scored) {
+        if (candidate_set.count(idx)) continue;
+        const auto& o = officers_[idx];
+        bool has_synergy = !o.states_applied.empty()
+                        || !o.states_benefit.empty()
+                        || o.ability_amplifier
+                        || o.cm_pct >= 40;
+        if (has_synergy) candidate_set.insert(idx);
+    }
+
+    // Cap at 55 to keep search time reasonable (C(55,3)*3 = ~78K evals)
+    std::vector<size_t> candidates(candidate_set.begin(), candidate_set.end());
+    if (candidates.size() > 55) {
+        // Sort by individual score descending, keep top 55
+        std::map<size_t, double> score_map;
+        for (const auto& [s, idx] : scored) score_map[idx] = s;
+        std::sort(candidates.begin(), candidates.end(),
+                  [&score_map](size_t a, size_t b) {
+                      return score_map[a] > score_map[b];
+                  });
+        candidates.resize(55);
+    }
+    const int N = static_cast<int>(candidates.size());
 
     // Evaluate all C(N,3) x 3 captain rotations
     std::vector<CrewResult> results;

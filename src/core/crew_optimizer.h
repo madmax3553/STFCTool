@@ -314,6 +314,8 @@ private:
     void apply_oa_ship_penalty(double& total, CrewBreakdown& bd,
                                const ClassifiedOfficer& b1,
                                const ClassifiedOfficer& b2) const;
+    void apply_oa_bonus(double& total, CrewBreakdown& bd,
+                        const ClassifiedOfficer* crew[3]) const;
 
     std::vector<ClassifiedOfficer> officers_;
     ShipType ship_type_ = ShipType::Explorer;
