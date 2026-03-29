@@ -90,7 +90,7 @@ struct Ship {
     int build_time_seconds = 0;
     int64_t faction = -1;
     int blueprints_required = 0;
-    int hull_type = 0;           // 1=interceptor, 2=explorer, 3=battleship, 4=survey
+    int hull_type = 0;           // 0=interceptor, 1=survey, 2=explorer, 3=battleship
     int max_level = 0;
     std::vector<ShipBuildCost> build_cost;
     std::vector<ShipCrewSlot> crew_slots;

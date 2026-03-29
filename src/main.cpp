@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <atomic>
+#include <mutex>
 
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
@@ -35,10 +37,21 @@ struct AppState {
     ApiClient api_client;
     IngressServer ingress_server;
 
-    int selected_tab = 0;
-    bool data_loaded = false;
-    bool loading = false;
+    int selected_tab_ = 0;  // unused — tab is tracked by local var in main()
+    std::atomic<bool> data_loaded{false};
+    std::atomic<bool> loading{false};
+    bool show_help = false;
+    std::mutex status_mutex;
     std::string status_message = "Press [R] to refresh game data, [H] for help";
+
+    void set_status(const std::string& msg) {
+        std::lock_guard<std::mutex> lk(status_mutex);
+        status_message = msg;
+    }
+    std::string get_status() {
+        std::lock_guard<std::mutex> lk(status_mutex);
+        return status_message;
+    }
 
     // Officer browser state
     int selected_officer = 0;
@@ -88,6 +101,18 @@ struct AppState {
     }
 
     AppState() : api_client("data/game_data"), ingress_server("data/player_data", 8270) {
+        // Auto-load cached game data if available
+        if (fs::exists("data/game_data/officers.json")) {
+            api_client.fetch_all(game_data);
+            data_loaded = !game_data.officers.empty();
+            if (data_loaded) {
+                status_message = "Loaded " +
+                    std::to_string(game_data.officers.size()) + " officers, " +
+                    std::to_string(game_data.ships.size()) + " ships, " +
+                    std::to_string(game_data.researches.size()) + " research. [R] to refresh, [H] help";
+            }
+        }
+
         // Generate today's plans
         daily_plan = planner.generate_daily_plan();
         weekly_plan = planner.generate_weekly_plan();
@@ -641,10 +666,12 @@ static Element render_crew_optimizer(AppState& state) {
     }
 
     const auto& scenarios = all_dock_scenarios();
-    std::string scenario_name = scenario_label(scenarios[state.crew_scenario]);
+    int safe_scenario = std::clamp(state.crew_scenario, 0, (int)scenarios.size() - 1);
+    std::string scenario_name = scenario_label(scenarios[safe_scenario]);
 
     static const char* ship_names[] = {"Explorer", "Battleship", "Interceptor"};
-    std::string ship_name = ship_names[state.crew_ship_type];
+    int safe_ship = std::clamp(state.crew_ship_type, 0, 2);
+    std::string ship_name = ship_names[safe_ship];
 
     auto header = vbox({
         text("Crew Optimizer") | bold | center,
@@ -690,9 +717,9 @@ static Element render_crew_optimizer(AppState& state) {
                 }),
                 hbox({
                     text("    Bridge: "),
-                    text(bd.bridge[0]) | color(Color::Cyan),
+                    text(bd.bridge.size() > 0 ? bd.bridge[0] : "?") | color(Color::Cyan),
                     text(" + "),
-                    text(bd.bridge[1]) | color(Color::Cyan),
+                    text(bd.bridge.size() > 1 ? bd.bridge[1] : "?") | color(Color::Cyan),
                 }),
             });
 
@@ -827,7 +854,8 @@ static Element render_loadout(AppState& state) {
 
     // Header
     static const char* ship_names[] = {"Explorer", "Battleship", "Interceptor"};
-    std::string ship_name = ship_names[state.crew_ship_type];
+    int safe_ship = std::clamp(state.crew_ship_type, 0, 2);
+    std::string ship_name = ship_names[safe_ship];
 
     auto header = vbox({
         text("7-Dock Loadout Optimizer") | bold | center,
@@ -1252,6 +1280,63 @@ static Element render_sync(AppState& state) {
 }
 
 // ---------------------------------------------------------------------------
+// Help overlay
+// ---------------------------------------------------------------------------
+
+static Element render_help() {
+    return vbox({
+        text("STFC Tool v0.3 - Keyboard Reference") | bold | center,
+        separator(),
+        hbox({
+            vbox({
+                text("Global:") | bold | color(Color::Cyan),
+                text("  [H]        Toggle help"),
+                text("  [R]        Refresh game data"),
+                text("  [S]        Toggle ingress server"),
+                text("  [Q]        Quit (saves state)"),
+                text("  [Tab/1-8]  Switch tabs"),
+                separatorEmpty(),
+                text("Daily Planner:") | bold | color(Color::Cyan),
+                text("  [Up/Down]  Navigate tasks"),
+                text("  [Space]    Toggle task complete"),
+                text("  [S]        Skip task"),
+                text("  [C]        Show/hide completed"),
+                separatorEmpty(),
+                text("Weekly Planner:") | bold | color(Color::Cyan),
+                text("  [Left/Right] Switch day"),
+                text("  [Up/Down]  Navigate goals"),
+                text("  [+/-]      Adjust goal progress"),
+                text("  [Space]    Complete next task"),
+            }) | flex,
+            separator(),
+            vbox({
+                text("Crew Optimizer:") | bold | color(Color::Cyan),
+                text("  [</> or ,/.]  Cycle scenario"),
+                text("  [T]           Cycle ship type"),
+                text("  [Enter]       Run optimizer"),
+                text("  [Up/Down]     Navigate results"),
+                separatorEmpty(),
+                text("Loadout:") | bold | color(Color::Cyan),
+                text("  [Up/Down]  Navigate docks"),
+                text("  [</>]      Change dock scenario"),
+                text("  [T]        Cycle ship type"),
+                text("  [Enter]    Optimize all docks"),
+                text("  [K]        Lock/unlock dock"),
+                text("  [B]        Cycle BDA selection"),
+                text("  [L]        Load saved loadout"),
+                separatorEmpty(),
+                text("Data:") | bold | color(Color::Cyan),
+                text("  Cached in data/game_data/"),
+                text("  Roster from roster.csv"),
+                text("  Plans in data/player_data/"),
+            }) | flex,
+        }),
+        separator(),
+        text("Press [H] to close") | center | dim,
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Status bar
 // ---------------------------------------------------------------------------
 
@@ -1259,9 +1344,9 @@ static Element render_status_bar(AppState& state) {
     return hbox({
         text(" STFC Tool v0.3 ") | bold | bgcolor(Color::Blue) | color(Color::White),
         text(" "),
-        text(state.status_message) | flex,
+        text(state.get_status()) | flex,
         text(" "),
-        text(" [R]efresh [S]ync [Q]uit ") | dim,
+        text(" [R]efresh [S]ync [H]elp [Q]uit ") | dim,
     });
 }
 
@@ -1293,6 +1378,13 @@ int main() {
 
     // Main renderer
     auto main_renderer = Renderer(tab_toggle, [&]() {
+        // Help overlay takes over the whole screen
+        if (state->show_help) {
+            return vbox({
+                render_help() | flex,
+            }) | border;
+        }
+
         Element content;
         switch (selected_tab) {
             case 0: content = render_overview(*state); break;
@@ -1317,6 +1409,21 @@ int main() {
 
     // Handle keyboard events
     auto main_component = CatchEvent(main_renderer, [&](Event event) {
+        // Global: Help toggle (must come first so H works from anywhere)
+        if (event == Event::Character('h') || event == Event::Character('H')) {
+            state->show_help = !state->show_help;
+            return true;
+        }
+
+        // If help is showing, block all other input
+        if (state->show_help) {
+            if (event == Event::Escape) {
+                state->show_help = false;
+                return true;
+            }
+            return true;
+        }
+
         // Global: Quit
         if (event == Event::Character('q') || event == Event::Character('Q')) {
             state->save_plans();
@@ -1329,22 +1436,22 @@ int main() {
         if (event == Event::Character('r') || event == Event::Character('R')) {
             if (!state->loading) {
                 state->loading = true;
-                state->status_message = "Fetching game data from api.spocks.club...";
+                state->set_status("Fetching game data from api.spocks.club...");
                 std::thread([state]() {
                     state->api_client.set_progress_callback(
                         [state](const std::string& step, int, int) {
-                            state->status_message = "Loading " + step + "...";
+                            state->set_status("Loading " + step + "...");
                         }
                     );
                     bool ok = state->api_client.fetch_all(state->game_data);
                     if (ok) {
-                        state->status_message = "Loaded " +
+                        state->set_status("Loaded " +
                             std::to_string(state->game_data.officers.size()) + " officers, " +
                             std::to_string(state->game_data.ships.size()) + " ships, " +
-                            std::to_string(state->game_data.researches.size()) + " research nodes";
+                            std::to_string(state->game_data.researches.size()) + " research nodes");
                         state->data_loaded = true;
                     } else {
-                        state->status_message = "Failed to fetch game data.";
+                        state->set_status("Failed to fetch game data.");
                     }
                     state->loading = false;
                 }).detach();
@@ -1357,17 +1464,17 @@ int main() {
             if (selected_tab != 1) {  // 's' on Daily tab means skip
                 if (state->ingress_server.is_running()) {
                     state->ingress_server.stop();
-                    state->status_message = "Ingress server stopped.";
+                    state->set_status("Ingress server stopped.");
                 } else {
                     state->ingress_server.set_data_callback([state](const std::string& data_type) {
-                        state->status_message = "Received sync data: " + data_type;
+                        state->set_status("Received sync data: " + data_type);
                         state->player_data = state->ingress_server.get_player_data();
                     });
                     if (state->ingress_server.start()) {
-                        state->status_message = "Ingress server started on port " +
-                            std::to_string(state->ingress_server.port());
+                        state->set_status("Ingress server started on port " +
+                            std::to_string(state->ingress_server.port()));
                     } else {
-                        state->status_message = "Failed to start ingress server!";
+                        state->set_status("Failed to start ingress server!");
                     }
                 }
                 return true;
