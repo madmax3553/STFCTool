@@ -526,11 +526,18 @@ static Element render_daily_planner(AppState& state) {
         gauge(plan.completion_pct() / 100.0) | color(Color::Green),
     });
 
-    // Task list grouped by category
+    // Task list sorted by effective_score (impact + dynamic boost)
+    // No category grouping — priority order IS the display order
     Elements task_rows;
 
-    TaskCategory last_cat = TaskCategory::Misc;
-    bool first_group = true;
+    // Find the first incomplete task index (for "DO THIS FIRST" highlight)
+    int first_incomplete = -1;
+    for (size_t i = 0; i < plan.tasks.size(); ++i) {
+        if (!plan.tasks[i].completed && !plan.tasks[i].skipped) {
+            first_incomplete = static_cast<int>(i);
+            break;
+        }
+    }
 
     for (size_t i = 0; i < plan.tasks.size(); ++i) {
         const auto& t = plan.tasks[i];
@@ -539,24 +546,13 @@ static Element render_daily_planner(AppState& state) {
         if (!state.show_completed && t.completed) continue;
         if (t.skipped && !state.show_completed) continue;
 
-        // Category header
-        if (first_group || t.category != last_cat) {
-            if (!first_group) task_rows.push_back(separatorEmpty());
-            task_rows.push_back(
-                hbox({
-                    text(std::string(category_icon(t.category)) + " ") | color(category_color(t.category)),
-                    text(category_str(t.category)) | bold | color(category_color(t.category)),
-                })
-            );
-            last_cat = t.category;
-            first_group = false;
-        }
-
         // Task row
         bool selected = ((int)i == state.selected_daily_task);
+        bool is_top_task = ((int)i == first_incomplete);
+        auto dp = t.display_priority();
 
         std::string check = t.completed ? "[x]" : (t.skipped ? "[-]" : "[ ]");
-        std::string pri_icon = priority_icon(t.priority);
+        std::string pri_icon = priority_icon(dp);
         std::string time_str = t.estimated_minutes > 0
             ? "~" + std::to_string(t.estimated_minutes) + "m"
             : "";
@@ -567,12 +563,25 @@ static Element render_daily_planner(AppState& state) {
                 ? text(t.title) | dim
                 : text(t.title));
 
+        // "DO THIS FIRST" marker for the top incomplete task
+        auto top_marker = is_top_task
+            ? (text(" >> DO THIS FIRST") | color(Color::Green) | bold)
+            : text("");
+
+        // Urgency badge: [!] shown separately from priority for time-sensitive tasks
+        auto urgency_badge = (t.urgent && !t.completed && !t.skipped)
+            ? (text("[!]") | color(Color::Yellow) | bold)
+            : text("   ");
+
         auto row = hbox({
             text("  "),
             text(check) | color(t.completed ? Color::Green : (t.skipped ? Color::GrayDark : Color::White)),
             text(" "),
-            text(pri_icon) | color(priority_color(t.priority)),
+            text(pri_icon) | color(priority_color(dp)),
             text(" "),
+            urgency_badge,
+            text(" "),
+            text(std::string(category_icon(t.category)) + " ") | color(category_color(t.category)) | dim,
             task_text | flex,
             // Show inline status from player data
             t.queue_idle
@@ -580,9 +589,9 @@ static Element render_daily_planner(AppState& state) {
                 : (t.has_active_job
                     ? (text(" active") | color(Color::Green) | dim)
                     : text("")),
+            top_marker,
             text(" "),
             text(time_str) | dim,
-            text(t.time_sensitive ? " *" : "  ") | color(Color::Yellow),
         });
 
         if (selected) {
@@ -597,18 +606,27 @@ static Element render_daily_planner(AppState& state) {
     if (state.selected_daily_task >= 0 && state.selected_daily_task < (int)plan.tasks.size()) {
         const auto& t = plan.tasks[state.selected_daily_task];
         Elements detail_lines;
+        auto dp = t.display_priority();
         detail_lines.push_back(text(t.title) | bold);
         detail_lines.push_back(separator());
-        detail_lines.push_back(hbox({text("Priority: "), text(priority_str(t.priority)) | color(priority_color(t.priority))}));
+        detail_lines.push_back(hbox({
+            text("Priority: "),
+            text(priority_str(dp)) | color(priority_color(dp)),
+            text("  (impact:" + std::to_string(t.impact_score)),
+            t.dynamic_boost > 0
+                ? (text("+" + std::to_string(t.dynamic_boost)) | color(Color::Green))
+                : text(""),
+            text(")") | dim,
+        }));
         detail_lines.push_back(hbox({text("Category: "), text(category_str(t.category)) | color(category_color(t.category))}));
+        if (t.urgent) {
+            detail_lines.push_back(text("[!] TIME SENSITIVE") | color(Color::Yellow) | bold);
+        }
         if (t.estimated_minutes > 0) {
             detail_lines.push_back(hbox({text("Time:     ~"), text(std::to_string(t.estimated_minutes) + " min")}));
         }
         if (!t.best_time.empty()) {
             detail_lines.push_back(hbox({text("When:     "), text(t.best_time) | color(Color::Cyan)}));
-        }
-        if (t.time_sensitive) {
-            detail_lines.push_back(text("** TIME SENSITIVE **") | color(Color::Yellow) | bold);
         }
         detail_lines.push_back(separator());
 

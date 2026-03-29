@@ -45,6 +45,36 @@ struct PlannerTask {
     std::string title;
     std::string description;       // Detailed how-to / why
     TaskCategory category = TaskCategory::Misc;
+
+    // --- Two-axis priority model ---
+    // impact_score: How much this task moves your account forward (0-100)
+    //   100 = core progression (research, building, ship tiering)
+    //    80 = significant (officer rank-ups, armadas, events)
+    //    60 = meaningful (hostile grinding, mining, daily goals)
+    //    40 = helpful (store claims, away missions)
+    //    20 = minor (crew review, planning)
+    int impact_score = 50;
+
+    // dynamic_boost: Added by enrich_plan_with_player_data() based on live state
+    //   e.g. +50 for idle research queue, +30 for officers ready to rank up
+    int dynamic_boost = 0;
+
+    // urgent: Time-sensitive (resets, expiring events) — shown as badge, NOT a sort key
+    bool urgent = false;
+
+    // Effective score used for sorting (impact_score + dynamic_boost)
+    int effective_score() const { return impact_score + dynamic_boost; }
+
+    // Derived display priority from effective score
+    TaskPriority display_priority() const {
+        int s = effective_score();
+        if (s >= 120) return TaskPriority::Critical;
+        if (s >= 80)  return TaskPriority::High;
+        if (s >= 50)  return TaskPriority::Medium;
+        return TaskPriority::Low;
+    }
+
+    // Legacy field kept for persistence compatibility
     TaskPriority priority = TaskPriority::Medium;
 
     bool completed = false;
@@ -70,6 +100,7 @@ struct PlannerTask {
     int progress_total = 0;        // 0 = single-step task
 
     // G6 relevance score (0-100, higher = more important at G6)
+    // DEPRECATED: use impact_score instead. Kept for test compat.
     int g6_relevance = 50;
 
     // Tags for filtering

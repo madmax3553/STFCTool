@@ -185,11 +185,14 @@ Planner::Planner() {
 // ---------------------------------------------------------------------------
 
 void Planner::init_daily_templates() {
+    // Two-axis priority: impact (account progression) + urgent (time-sensitive)
+    // impact: 0-100, how much this moves your G6 account forward
+    // urgent: shown as badge, NOT used as primary sort key
+    // dynamic_boost: added later by enrich_plan_with_player_data()
     auto add = [this](
         const char* title, const char* desc,
-        TaskCategory cat, TaskPriority pri,
+        TaskCategory cat, int impact, bool urgent_flag,
         int minutes, const char* best_time,
-        bool time_sensitive, int g6_rel,
         std::initializer_list<const char*> tags_init = {},
         int prog_total = 0) {
 
@@ -198,158 +201,185 @@ void Planner::init_daily_templates() {
         t.title = title;
         t.description = desc;
         t.category = cat;
-        t.priority = pri;
+        t.impact_score = impact;
+        t.urgent = urgent_flag;
+        t.time_sensitive = urgent_flag;
         t.estimated_minutes = minutes;
         t.best_time = best_time;
-        t.time_sensitive = time_sensitive;
         t.daily = true;
-        t.g6_relevance = g6_rel;
+        t.g6_relevance = impact;  // compat
+        t.priority = t.display_priority();
         t.progress_total = prog_total;
         for (auto tag : tags_init) t.tags.insert(tag);
         daily_templates_.push_back(std::move(t));
     };
 
-    // === CRITICAL: Time-sensitive daily resets ===
+    // =====================================================================
+    // IMPACT TIERS (base scores, before dynamic boosts):
+    //   100 = Core progression: research queue, building queue
+    //    90 = Events (premium rewards source)
+    //    85 = Officer rank-ups, ship tiering
+    //    80 = Armadas (ship BPs, officer shards)
+    //    75 = Daily goals, hostile grinding
+    //    70 = Speed-up strategy, mining deployment
+    //    65 = Generators/refinery collection
+    //    60 = Alliance cooperation, PvP
+    //    50 = Away missions
+    //    45 = Alliance/faction stores
+    //    40 = Free store packs, login rewards
+    //    30 = Crew review/planning
+    //
+    // DYNAMIC BOOSTS (added by enrich_plan_with_player_data):
+    //   +50 = Queue IDLE (research or build not running!)
+    //   +30 = Officers ready to rank up
+    //   +20 = Job just finished (collect & start next)
+    //   +15 = Active event detected
+    // =====================================================================
 
-    add("Claim daily login rewards",
-        "Check the daily login calendar. Claim any milestone rewards. "
-        "Missing a day breaks streak bonuses.",
-        TaskCategory::Store, TaskPriority::Critical,
-        1, "morning", true, 95,
-        {"daily", "login", "free"});
-
-    add("Collect free store packs",
-        "Free energy, speed-ups, and resource packs in the store reset daily. "
-        "Check Featured, Resources, and Offers tabs. Don't leave free stuff on the table.",
-        TaskCategory::Store, TaskPriority::Critical,
-        2, "morning", true, 95,
-        {"daily", "store", "free"});
-
-    add("Collect generators + refinery",
-        "Parsteel/Trit/Dil generators cap out over time. At G6 these are significant. "
-        "Also check refinery: queue all 3 slots. Refined resources gate late-G6 content.",
-        TaskCategory::Mining, TaskPriority::Critical,
-        2, "morning", true, 95,
-        {"daily", "generators", "refinery", "resources"});
+    // --- Progression core (impact 100) ---
+    // These are #1 and #2 because idle queues = wasted time at G6
 
     add("Start/queue research",
         "Never let the research queue sit idle. At G6 research times are 10-30+ days. "
         "Queue the next research before current one finishes. Use speed-ups strategically. "
         "Focus: Combat > Galaxy > Station for PvP progression.",
-        TaskCategory::Research, TaskPriority::Critical,
-        3, "morning", false, 100,
+        TaskCategory::Research, 100, false,
+        3, "morning",
         {"daily", "research", "queue"});
 
     add("Start/queue building upgrades",
         "Two builder slots should always be active. At G6 builds are 7-20+ days. "
         "Prioritize: Ops prereqs > Research Lab > Drydock > Academy > Defense platforms.",
-        TaskCategory::SpeedUps, TaskPriority::Critical,
-        3, "morning", false, 100,
+        TaskCategory::SpeedUps, 100, false,
+        3, "morning",
         {"daily", "building", "queue"});
 
-    // === HIGH: Core daily grind (do these every day) ===
-
-    add("Complete daily goals (3/3)",
-        "Three daily goals for rewards. Usually: kill hostiles, complete a mission, "
-        "donate to alliance. These stack into weekly goals. Never skip.",
-        TaskCategory::Combat, TaskPriority::High,
-        15, "anytime", false, 95,
-        {"daily", "goals", "hostiles"}, 3);
+    // --- High-impact progression (impact 85-90) ---
 
     add("Check/progress active events + milestones",
         "Solo events, alliance events, and arcs run constantly. Check requirements and "
         "plan your dailies around maximizing event points. Events are the #1 source of "
         "premium rewards at G6. Claim completed milestones promptly.",
-        TaskCategory::Events, TaskPriority::High,
-        10, "morning", true, 95,
+        TaskCategory::Events, 90, true,
+        10, "morning",
         {"daily", "events", "arc", "milestones"});
-
-    add("Deploy mining ships (3-4 ships)",
-        "At G6 you need millions of resources daily. Keep all survey ships on nodes 24/7. "
-        "Focus on whatever resource your current research/build needs most. "
-        "Protected cargo > raw volume at G6.",
-        TaskCategory::Mining, TaskPriority::High,
-        5, "morning", false, 90,
-        {"daily", "mining", "resources"});
-
-    add("Kill daily hostile target count",
-        "G6 hostile grinding is essential for XP, loot, and event points. "
-        "Run your best PvE crew. Target hostiles at your max efficient level. "
-        "Use auto-combat for efficiency.",
-        TaskCategory::Combat, TaskPriority::High,
-        30, "anytime", false, 90,
-        {"daily", "hostiles", "pve", "xp"});
-
-    add("Run daily armada",
-        "Alliance armadas give high-value loot: uncommon/rare ship BPs, officer shards, "
-        "armada credits. At G6, run Eclipse or higher armadas. Coordinate with alliance.",
-        TaskCategory::Combat, TaskPriority::High,
-        15, "alliance schedule", false, 90,
-        {"daily", "armada", "alliance"});
-
-    add("Alliance: helps + gifts",
-        "Send helps to reduce build/research time for alliance members. "
-        "Open alliance gifts before they expire. Free resources and speed-ups. "
-        "At G6, alliance cooperation is everything.",
-        TaskCategory::Alliance, TaskPriority::High,
-        3, "throughout day", true, 85,
-        {"daily", "alliance", "helps", "gifts"});
 
     add("Use officer XP and promote officers",
         "Spend accumulated officer XP on priority officers. At G6, focus on officers "
         "you actually use in crews. Check if any officers are ready to rank up (promote). "
         "Promoting is gated by shards, not XP.",
-        TaskCategory::Officers, TaskPriority::High,
-        5, "anytime", false, 85,
+        TaskCategory::Officers, 85, false,
+        5, "anytime",
         {"daily", "officers", "xp", "promote"});
-
-    // === MEDIUM: Important but flexible (do when time allows) ===
 
     add("Ship XP: level priority ship",
         "Accumulated ship XP should be spent on your priority ships. "
         "At G6: focus on your main PvP ship, then armada ship, then dailies ship. "
         "Don't spread XP thin across too many ships.",
-        TaskCategory::Ships, TaskPriority::Medium,
-        5, "anytime", false, 80,
+        TaskCategory::Ships, 85, false,
+        5, "anytime",
         {"daily", "ships", "xp"});
 
-    add("Away missions",
-        "Away team missions give officer shards, speed-ups, and resources. "
-        "At G6, scan for epic missions. Send highest-power away teams.",
-        TaskCategory::Combat, TaskPriority::Medium,
-        5, "anytime", false, 70,
-        {"daily", "missions", "away"});
+    // --- Core daily grind (impact 75-80) ---
 
-    add("PvP: defend or raid",
-        "At G6 PvP is core gameplay. Either defend your mining nodes from raiders "
-        "or go raiding. Use the best PvP crew from the optimizer. "
-        "Pick battles wisely -- repair costs are steep at G6.",
-        TaskCategory::Combat, TaskPriority::Medium,
-        20, "peak hours", false, 75,
-        {"daily", "pvp", "combat"});
+    add("Run daily armada",
+        "Alliance armadas give high-value loot: uncommon/rare ship BPs, officer shards, "
+        "armada credits. At G6, run Eclipse or higher armadas. Coordinate with alliance.",
+        TaskCategory::Combat, 80, false,
+        15, "alliance schedule",
+        {"daily", "armada", "alliance"});
+
+    add("Complete daily goals (3/3)",
+        "Three daily goals for rewards. Usually: kill hostiles, complete a mission, "
+        "donate to alliance. These stack into weekly goals. Never skip.",
+        TaskCategory::Combat, 75, false,
+        15, "anytime",
+        {"daily", "goals", "hostiles"}, 3);
+
+    add("Kill daily hostile target count",
+        "G6 hostile grinding is essential for XP, loot, and event points. "
+        "Run your best PvE crew. Target hostiles at your max efficient level. "
+        "Use auto-combat for efficiency.",
+        TaskCategory::Combat, 75, false,
+        30, "anytime",
+        {"daily", "hostiles", "pve", "xp"});
+
+    // --- Resource & strategy (impact 60-70) ---
 
     add("Use speed-ups strategically",
         "At G6, speed-ups are precious. Use them to finish research/builds just before "
         "events end or to hit milestones. Don't waste speed-ups on non-critical items. "
         "Save big speed-ups for events that reward based on speed-up usage.",
-        TaskCategory::SpeedUps, TaskPriority::Medium,
-        5, "when needed", false, 85,
+        TaskCategory::SpeedUps, 70, false,
+        5, "when needed",
         {"daily", "speedups", "strategy"});
 
-    // === LOW: Nice to do, do if time allows ===
+    add("Deploy mining ships (3-4 ships)",
+        "At G6 you need millions of resources daily. Keep all survey ships on nodes 24/7. "
+        "Focus on whatever resource your current research/build needs most. "
+        "Protected cargo > raw volume at G6.",
+        TaskCategory::Mining, 70, false,
+        5, "morning",
+        {"daily", "mining", "resources"});
+
+    add("Collect generators + refinery",
+        "Parsteel/Trit/Dil generators cap out over time. At G6 these are significant. "
+        "Also check refinery: queue all 3 slots. Refined resources gate late-G6 content.",
+        TaskCategory::Mining, 65, true,
+        2, "morning",
+        {"daily", "generators", "refinery", "resources"});
+
+    add("Alliance: helps + gifts",
+        "Send helps to reduce build/research time for alliance members. "
+        "Open alliance gifts before they expire. Free resources and speed-ups. "
+        "At G6, alliance cooperation is everything.",
+        TaskCategory::Alliance, 60, true,
+        3, "throughout day",
+        {"daily", "alliance", "helps", "gifts"});
+
+    add("PvP: defend or raid",
+        "At G6 PvP is core gameplay. Either defend your mining nodes from raiders "
+        "or go raiding. Use the best PvP crew from the optimizer. "
+        "Pick battles wisely -- repair costs are steep at G6.",
+        TaskCategory::Combat, 60, false,
+        20, "peak hours",
+        {"daily", "pvp", "combat"});
+
+    // --- Housekeeping (impact 30-50) ---
+
+    add("Away missions",
+        "Away team missions give officer shards, speed-ups, and resources. "
+        "At G6, scan for epic missions. Send highest-power away teams.",
+        TaskCategory::Combat, 50, false,
+        5, "anytime",
+        {"daily", "missions", "away"});
 
     add("Check alliance + faction stores",
         "Alliance store refreshes with officer shards, speed-ups, and resources. "
         "Buy priority officer shards first, then speed-ups. Check faction stores too.",
-        TaskCategory::Store, TaskPriority::Low,
-        3, "after reset", true, 70,
+        TaskCategory::Store, 45, true,
+        3, "after reset",
         {"daily", "store", "alliance", "faction"});
+
+    add("Claim daily login rewards",
+        "Check the daily login calendar. Claim any milestone rewards. "
+        "Missing a day breaks streak bonuses.",
+        TaskCategory::Store, 40, true,
+        1, "morning",
+        {"daily", "login", "free"});
+
+    add("Collect free store packs",
+        "Free energy, speed-ups, and resource packs in the store reset daily. "
+        "Check Featured, Resources, and Offers tabs. Don't leave free stuff on the table.",
+        TaskCategory::Store, 40, true,
+        2, "morning",
+        {"daily", "store", "free"});
 
     add("Reorganize ship crews (if roster changed)",
         "If you unlocked new officers or leveled existing ones, re-run the crew optimizer. "
         "Update crews across all 7 docks.",
-        TaskCategory::Officers, TaskPriority::Low,
-        10, "evening", false, 65,
+        TaskCategory::Officers, 30, false,
+        10, "evening",
         {"daily", "crews", "optimizer"});
 }
 
@@ -526,12 +556,16 @@ DailyPlan Planner::generate_daily_plan_for(int day_of_week,
         plan.tasks.push_back(tmpl);
     }
 
-    // Sort by priority (critical first), then by time sensitivity, then by g6_relevance
+    // Sort by effective_score (impact + dynamic boost), highest first
+    // Urgency is NOT a sort key — it's a badge shown in the UI
     std::sort(plan.tasks.begin(), plan.tasks.end(),
               [](const PlannerTask& a, const PlannerTask& b) {
-                  if (a.priority != b.priority) return a.priority < b.priority;
-                  if (a.time_sensitive != b.time_sensitive) return a.time_sensitive > b.time_sensitive;
-                  return a.g6_relevance > b.g6_relevance;
+                  int sa = a.effective_score();
+                  int sb = b.effective_score();
+                  if (sa != sb) return sa > sb;
+                  // Tiebreaker: urgent tasks first among equal scores
+                  if (a.urgent != b.urgent) return a.urgent > b.urgent;
+                  return a.impact_score > b.impact_score;
               });
 
     return plan;
@@ -676,11 +710,13 @@ void Planner::enrich_plan_with_player_data(DailyPlan& plan,
         task.context_hints.clear();
         task.has_active_job = false;
         task.queue_idle = false;
+        task.dynamic_boost = 0;  // Reset boost each enrichment pass
 
         // --- Research tasks ---
         if (task.tags.count("research") || task.category == TaskCategory::Research) {
             if (research_jobs.empty()) {
                 task.queue_idle = true;
+                task.dynamic_boost += 50;  // IDLE QUEUE: massive boost to top of list
                 task.context_hints.push_back("!! RESEARCH QUEUE IDLE - start something!");
             } else {
                 for (const auto* j : research_jobs) {
@@ -695,10 +731,11 @@ void Planner::enrich_plan_with_player_data(DailyPlan& plan,
                             if (j->level > 0) name += " Lv" + std::to_string(j->level);
                         }
                     }
-                    if (remaining > 0) {
-                        task.context_hints.push_back(name + " - " + format_duration_short(remaining) + " left");
-                    } else {
+                    if (remaining <= 0) {
+                        task.dynamic_boost += 20;  // Job done, collect & queue next
                         task.context_hints.push_back(name + " - DONE! Collect & start next");
+                    } else {
+                        task.context_hints.push_back(name + " - " + format_duration_short(remaining) + " left");
                     }
                 }
             }
@@ -715,17 +752,18 @@ void Planner::enrich_plan_with_player_data(DailyPlan& plan,
                 || task.title.find("queue") != std::string::npos) {
                 if (building_jobs.empty()) {
                     task.queue_idle = true;
+                    task.dynamic_boost += 50;  // IDLE QUEUE: massive boost
                     task.context_hints.push_back("!! BUILD QUEUE IDLE - start something!");
                 } else {
                     for (const auto* j : building_jobs) {
                         task.has_active_job = true;
                         int remaining = job_remaining_seconds(*j);
                         std::string name = "Building";
-                        // Building jobs don't have research_id, show type
-                        if (remaining > 0) {
-                            task.context_hints.push_back(name + " job - " + format_duration_short(remaining) + " left");
-                        } else {
+                        if (remaining <= 0) {
+                            task.dynamic_boost += 20;  // Job done
                             task.context_hints.push_back(name + " job - DONE! Collect & start next");
+                        } else {
+                            task.context_hints.push_back(name + " job - " + format_duration_short(remaining) + " left");
                         }
                     }
                 }
@@ -739,6 +777,7 @@ void Planner::enrich_plan_with_player_data(DailyPlan& plan,
         // --- Officer tasks ---
         if (task.tags.count("officers") || task.category == TaskCategory::Officers) {
             if (!rankup_hints.empty()) {
+                task.dynamic_boost += 30;  // Officers ready to promote!
                 task.context_hints.push_back("Officers ready to rank up:");
                 int shown = 0;
                 for (const auto& h : rankup_hints) {
@@ -837,6 +876,22 @@ void Planner::enrich_plan_with_player_data(DailyPlan& plan,
                 task.context_hints.push_back("No active jobs - save speed-ups for later");
             }
         }
+    }
+
+    // Re-sort with dynamic boosts applied — tasks with idle queues / ready
+    // rank-ups will now bubble to the top above their base impact tier
+    std::sort(plan.tasks.begin(), plan.tasks.end(),
+              [](const PlannerTask& a, const PlannerTask& b) {
+                  int sa = a.effective_score();
+                  int sb = b.effective_score();
+                  if (sa != sb) return sa > sb;
+                  if (a.urgent != b.urgent) return a.urgent > b.urgent;
+                  return a.impact_score > b.impact_score;
+              });
+
+    // Update derived priority field for display/persistence
+    for (auto& t : plan.tasks) {
+        t.priority = t.display_priority();
     }
 }
 
