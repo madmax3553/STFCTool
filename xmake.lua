@@ -14,7 +14,7 @@ add_requires("openssl", {system = true})
 
 target("stfctool")
     set_kind("binary")
-    add_files("src/main.cpp", "src/data/*.cpp")
+    add_files("src/main.cpp", "src/data/*.cpp", "src/util/*.cpp", "src/core/*.cpp")
     add_includedirs("src")
     add_sysincludedirs("include")  -- vendored headers: suppress warnings
     add_packages("ftxui", "openssl")
@@ -23,7 +23,7 @@ target("stfctool")
 target("smoke_test")
     set_kind("binary")
     set_default(false)  -- only build when explicitly requested: xmake build smoke_test
-    add_files("src/smoke_test.cpp", "src/data/api_client.cpp")
+    add_files("src/smoke_test.cpp", "src/data/api_client.cpp", "src/util/csv_import.cpp", "src/core/crew_optimizer.cpp")
     add_includedirs("src")
     add_sysincludedirs("include")
     add_packages("openssl")

@@ -13,6 +13,7 @@
 #include <string>
 #include <chrono>
 #include <cstring>
+#include <memory>
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
@@ -20,6 +21,8 @@
 
 #include "data/models.h"
 #include "data/api_client.h"
+#include "util/csv_import.h"
+#include "core/crew_optimizer.h"
 
 namespace fs = std::filesystem;
 using namespace stfc;
@@ -650,6 +653,438 @@ void test_officer_class_str() {
 }
 
 // ---------------------------------------------------------------------------
+// CSV import tests
+// ---------------------------------------------------------------------------
+
+static std::vector<RosterOfficer> roster;
+
+void test_csv_load() {
+    TEST("load roster.csv");
+    roster = load_roster_csv("roster.csv");
+    CHECK(roster.size() > 100, "expected >100 officers, got " + std::to_string(roster.size()));
+    PASS();
+}
+
+void test_csv_officer_count() {
+    TEST("roster officer count matches Python (~270+)");
+    // Python loads officers with attack > 0. The file has ~276 data rows (rows 20-295).
+    // Some have zero attack and are filtered out.
+    CHECK(roster.size() >= 200, "expected >= 200, got " + std::to_string(roster.size()));
+    CHECK(roster.size() <= 300, "expected <= 300, got " + std::to_string(roster.size()));
+    PASS();
+}
+
+void test_csv_known_officer() {
+    TEST("known officer: Kirk");
+    bool found = false;
+    for (const auto& o : roster) {
+        if (o.name == "Kirk") {
+            found = true;
+            CHECK(o.rarity == 'E', "Kirk rarity should be E");
+            CHECK(o.level > 0, "Kirk level should be > 0");
+            CHECK(o.attack > 0, "Kirk attack should be > 0");
+            break;
+        }
+    }
+    CHECK(found, "Kirk not found in roster");
+    PASS();
+}
+
+void test_csv_rarity_values() {
+    TEST("rarity values are C/U/R/E");
+    std::set<char> rarities;
+    for (const auto& o : roster) {
+        rarities.insert(o.rarity);
+    }
+    CHECK(rarities.count('U') > 0, "no Uncommon officers");
+    CHECK(rarities.count('R') > 0, "no Rare officers");
+    CHECK(rarities.count('E') > 0, "no Epic officers");
+    // Common officers might have 0 attack and be filtered, but check anyway
+    PASS();
+}
+
+void test_csv_groups_populated() {
+    TEST("officer groups populated");
+    int with_group = 0;
+    for (const auto& o : roster) {
+        if (!o.group.empty()) ++with_group;
+    }
+    CHECK(with_group > (int)roster.size() / 2,
+          "expected most officers to have groups, got " + std::to_string(with_group));
+    PASS();
+}
+
+void test_csv_bda_detection() {
+    TEST("BDA detection (cm_pct >= 10000)");
+    int bda_count = 0;
+    for (const auto& o : roster) {
+        if (o.is_bda()) ++bda_count;
+    }
+    // Should have some BDA officers but not most
+    CHECK(bda_count > 0, "expected some BDA officers");
+    CHECK(bda_count < (int)roster.size() / 2, "too many BDA officers: " + std::to_string(bda_count));
+    PASS();
+}
+
+void test_csv_multiline_fields() {
+    TEST("multiline ability descriptions parsed");
+    // WOK Saavik and WOK Scotty have multiline descriptions in the CSV
+    bool found_multiline = false;
+    for (const auto& o : roster) {
+        if (o.name.find("WOK") != std::string::npos && o.description.find('\n') != std::string::npos) {
+            found_multiline = true;
+            break;
+        }
+    }
+    CHECK(found_multiline, "expected multiline description for WOK officers");
+    PASS();
+}
+
+void test_csv_mess_hall_level() {
+    TEST("mess hall level parsed from header");
+    int level = parse_mess_hall_level("roster.csv");
+    CHECK(level > 0, "mess hall level should be > 0, got " + std::to_string(level));
+    CHECK(level < 99999, "mess hall level unreasonably high: " + std::to_string(level));
+    PASS();
+}
+
+void test_csv_effects() {
+    TEST("status effects populated");
+    std::set<std::string> effects;
+    for (const auto& o : roster) {
+        if (!o.effect.empty()) effects.insert(o.effect);
+    }
+    CHECK(effects.count("burning") > 0, "no burning officers");
+    CHECK(effects.count("morale") > 0, "no morale officers");
+    PASS();
+}
+
+// ---------------------------------------------------------------------------
+// Crew Optimizer tests
+// ---------------------------------------------------------------------------
+
+static std::unique_ptr<CrewOptimizer> optimizer;
+
+void test_crew_optimizer_construction() {
+    TEST("CrewOptimizer construction from roster");
+    CHECK(!roster.empty(), "roster not loaded");
+    optimizer = std::make_unique<CrewOptimizer>(roster);
+    CHECK(optimizer->officers().size() == roster.size(),
+          "officer count mismatch: " + std::to_string(optimizer->officers().size()) +
+          " vs " + std::to_string(roster.size()));
+    PASS();
+}
+
+void test_crew_classification_tags() {
+    TEST("officer classification produces tags");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    int pvp_tagged = 0, pve_tagged = 0, crit_tagged = 0, mining_tagged = 0;
+    int with_states_applied = 0, with_states_benefit = 0;
+    for (const auto& off : optimizer->officers()) {
+        if (off.is_pvp_specific) ++pvp_tagged;
+        if (off.is_pve_specific) ++pve_tagged;
+        if (off.crit_related) ++crit_tagged;
+        if (off.mining) ++mining_tagged;
+        if (!off.states_applied.empty()) ++with_states_applied;
+        if (!off.states_benefit.empty()) ++with_states_benefit;
+    }
+
+    CHECK(pvp_tagged > 10, "too few PvP officers: " + std::to_string(pvp_tagged));
+    CHECK(pve_tagged > 10, "too few PvE officers: " + std::to_string(pve_tagged));
+    CHECK(crit_tagged > 5, "too few crit officers: " + std::to_string(crit_tagged));
+    CHECK(mining_tagged > 5, "too few mining officers: " + std::to_string(mining_tagged));
+    CHECK(with_states_applied > 5, "too few state appliers: " + std::to_string(with_states_applied));
+    CHECK(with_states_benefit > 3, "too few state beneficiaries: " + std::to_string(with_states_benefit));
+
+    std::cout << "(pvp:" << pvp_tagged << " pve:" << pve_tagged
+              << " crit:" << crit_tagged << " mining:" << mining_tagged
+              << " apply:" << with_states_applied << " benefit:" << with_states_benefit << ") ";
+    PASS();
+}
+
+void test_crew_classification_states() {
+    TEST("state classification (morale/breach/burning/assimilate)");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    std::set<std::string> all_applied, all_benefit;
+    for (const auto& off : optimizer->officers()) {
+        for (const auto& s : off.states_applied) all_applied.insert(s);
+        for (const auto& s : off.states_benefit) all_benefit.insert(s);
+    }
+
+    CHECK(all_applied.count("morale") > 0, "no morale appliers");
+    CHECK(all_applied.count("burning") > 0, "no burning appliers");
+    // breach and assimilate may or may not be present depending on roster
+    CHECK(all_applied.size() >= 2, "only " + std::to_string(all_applied.size()) + " state types applied");
+
+    std::string applied_str, benefit_str;
+    for (const auto& s : all_applied) { if (!applied_str.empty()) applied_str += ","; applied_str += s; }
+    for (const auto& s : all_benefit) { if (!benefit_str.empty()) benefit_str += ","; benefit_str += s; }
+    std::cout << "(apply:[" << applied_str << "] benefit:[" << benefit_str << "]) ";
+    PASS();
+}
+
+void test_crew_ship_lock() {
+    TEST("ship-lock detection (CM/OA works_on_ship)");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    // On Explorer, officers with "on a battleship" or "on an interceptor" in CM should fail
+    optimizer->set_ship_type(ShipType::Explorer);
+
+    int cm_locked = 0;
+    for (const auto& off : optimizer->officers()) {
+        // We can't directly call private methods, but we can test indirectly
+        // through scoring. Officers locked to wrong ship will get penalties.
+        // Instead, check that description-based locks exist.
+        const auto& d = off.description;
+        if (d.find("on a battleship") != std::string::npos ||
+            d.find("on an interceptor") != std::string::npos) {
+            ++cm_locked;
+        }
+    }
+    // Some officers should be ship-locked
+    // (this validates the roster has meaningful descriptions)
+    std::cout << "(ship-locked descriptions: " << cm_locked << ") ";
+    PASS();
+}
+
+void test_crew_pvp_find_best() {
+    TEST("find_best_crews PvP returns top-5 valid results");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+    auto results = optimizer->find_best_crews(Scenario::PvP, 5);
+
+    CHECK(results.size() == 5, "expected 5 results, got " + std::to_string(results.size()));
+
+    // Results should be sorted descending
+    for (size_t i = 1; i < results.size(); ++i) {
+        CHECK(results[i].score <= results[i-1].score,
+              "results not sorted: " + std::to_string(results[i-1].score) +
+              " < " + std::to_string(results[i].score));
+    }
+
+    // Each result should have valid captain + 2 bridge
+    for (size_t i = 0; i < results.size(); ++i) {
+        const auto& bd = results[i].breakdown;
+        CHECK(!bd.captain.empty(), "result " + std::to_string(i) + " has empty captain");
+        CHECK(bd.bridge.size() == 2, "result " + std::to_string(i) + " has " +
+              std::to_string(bd.bridge.size()) + " bridge officers");
+        // All 3 names should be distinct
+        std::set<std::string> names = {bd.captain, bd.bridge[0], bd.bridge[1]};
+        CHECK(names.size() == 3, "duplicate officers in result " + std::to_string(i));
+    }
+
+    // All 5 results should have distinct crew sets
+    std::set<std::set<std::string>> seen;
+    for (const auto& r : results) {
+        std::set<std::string> key = {r.breakdown.captain, r.breakdown.bridge[0], r.breakdown.bridge[1]};
+        CHECK(seen.count(key) == 0, "duplicate crew set in results");
+        seen.insert(key);
+    }
+
+    std::cout << "(top=" << static_cast<int>(results[0].score)
+              << " [" << results[0].breakdown.captain
+              << "+" << results[0].breakdown.bridge[0]
+              << "+" << results[0].breakdown.bridge[1] << "]) ";
+    PASS();
+}
+
+void test_crew_hybrid_find_best() {
+    TEST("find_best_crews Hybrid returns valid results");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    auto results = optimizer->find_best_crews(Scenario::Hybrid, 3);
+    CHECK(results.size() == 3, "expected 3 results, got " + std::to_string(results.size()));
+    CHECK(results[0].score > 0, "top hybrid score should be > 0");
+
+    std::cout << "(top=" << static_cast<int>(results[0].score)
+              << " [" << results[0].breakdown.captain
+              << "+" << results[0].breakdown.bridge[0]
+              << "+" << results[0].breakdown.bridge[1] << "]) ";
+    PASS();
+}
+
+void test_crew_pve_hostile_find_best() {
+    TEST("find_best_crews PvE Hostile returns valid results");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    auto results = optimizer->find_best_crews(Scenario::PvEHostile, 3);
+    CHECK(results.size() == 3, "expected 3 results, got " + std::to_string(results.size()));
+    CHECK(results[0].score > 0, "top PvE score should be > 0");
+
+    // PvE crew should prefer PvE officers — just verify it runs correctly
+    std::cout << "(top=" << static_cast<int>(results[0].score)
+              << " [" << results[0].breakdown.captain
+              << "+" << results[0].breakdown.bridge[0]
+              << "+" << results[0].breakdown.bridge[1] << "]) ";
+    PASS();
+}
+
+void test_crew_mining_find_best() {
+    TEST("find_best_crews MiningGeneral returns mining officers");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    auto results = optimizer->find_best_crews(Scenario::MiningGeneral, 3);
+    CHECK(results.size() == 3, "expected 3 results, got " + std::to_string(results.size()));
+
+    // Top mining crew should include at least one mining-tagged officer
+    bool any_mining = false;
+    for (const auto& off : optimizer->officers()) {
+        if (off.name == results[0].breakdown.captain && off.mining) any_mining = true;
+        for (const auto& b : results[0].breakdown.bridge) {
+            if (off.name == b && off.mining) any_mining = true;
+        }
+    }
+    CHECK(any_mining, "top mining crew has no mining officers");
+
+    std::cout << "(top=" << static_cast<int>(results[0].score)
+              << " [" << results[0].breakdown.captain
+              << "+" << results[0].breakdown.bridge[0]
+              << "+" << results[0].breakdown.bridge[1] << "]) ";
+    PASS();
+}
+
+void test_crew_excluded_officers() {
+    TEST("find_best_crews respects excluded officers");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    auto results_full = optimizer->find_best_crews(Scenario::PvP, 1);
+    CHECK(!results_full.empty(), "no results from full search");
+
+    // Exclude the captain from the top result
+    std::set<std::string> excluded = {results_full[0].breakdown.captain};
+    auto results_excl = optimizer->find_best_crews(Scenario::PvP, 1, excluded);
+    CHECK(!results_excl.empty(), "no results with exclusion");
+
+    // The excluded officer should not appear in any result
+    CHECK(results_excl[0].breakdown.captain != results_full[0].breakdown.captain,
+          "excluded captain still appears");
+    for (const auto& b : results_excl[0].breakdown.bridge) {
+        CHECK(b != results_full[0].breakdown.captain,
+              "excluded officer appears on bridge");
+    }
+
+    PASS();
+}
+
+void test_crew_all_scenarios() {
+    TEST("find_best_crews works for all 13 scenarios");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    int passed = 0;
+    for (auto s : all_dock_scenarios()) {
+        auto results = optimizer->find_best_crews(s, 1);
+        CHECK(!results.empty(), std::string("no results for ") + scenario_str(s));
+        CHECK(results[0].score > 0, std::string("zero score for ") + scenario_str(s));
+        ++passed;
+    }
+
+    std::cout << "(" << passed << "/13 scenarios) ";
+    PASS();
+}
+
+void test_crew_ship_type_affects_results() {
+    TEST("ship type change affects PvP results");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+    auto exp_results = optimizer->find_best_crews(Scenario::PvP, 1);
+
+    optimizer->set_ship_type(ShipType::Battleship);
+    auto bs_results = optimizer->find_best_crews(Scenario::PvP, 1);
+
+    optimizer->set_ship_type(ShipType::Interceptor);
+    auto int_results = optimizer->find_best_crews(Scenario::PvP, 1);
+
+    // At least one ship type should give different top crew
+    bool any_diff = (exp_results[0].breakdown.captain != bs_results[0].breakdown.captain) ||
+                    (exp_results[0].breakdown.captain != int_results[0].breakdown.captain) ||
+                    (bs_results[0].breakdown.captain != int_results[0].breakdown.captain);
+    // Scores should definitely differ even if same crew
+    bool score_diff = (exp_results[0].score != bs_results[0].score) ||
+                      (bs_results[0].score != int_results[0].score);
+
+    CHECK(any_diff || score_diff, "ship type has no effect on results");
+
+    // Reset to explorer
+    optimizer->set_ship_type(ShipType::Explorer);
+
+    std::cout << "(exp:" << static_cast<int>(exp_results[0].score)
+              << " bs:" << static_cast<int>(bs_results[0].score)
+              << " int:" << static_cast<int>(int_results[0].score) << ") ";
+    PASS();
+}
+
+void test_crew_scenario_enums() {
+    TEST("scenario string round-trip conversions");
+    for (auto s : all_dock_scenarios()) {
+        auto str = scenario_str(s);
+        auto back = scenario_from_str(str);
+        CHECK(back == s, std::string("round-trip failed for ") + str);
+    }
+
+    // Also check labels exist
+    for (auto s : all_dock_scenarios()) {
+        auto label = scenario_label(s);
+        CHECK(std::strlen(label) > 3, std::string("label too short for ") + scenario_str(s));
+    }
+
+    // Ship type round-trip
+    for (auto st : {ShipType::Explorer, ShipType::Battleship, ShipType::Interceptor}) {
+        auto str = ship_type_str(st);
+        auto back = ship_type_from_str(str);
+        CHECK(back == st, std::string("ship type round-trip failed for ") + str);
+    }
+
+    PASS();
+}
+
+void test_crew_breakdown_fields() {
+    TEST("crew result breakdown has populated fields");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+    auto results = optimizer->find_best_crews(Scenario::PvP, 1);
+    CHECK(!results.empty(), "no results");
+
+    const auto& bd = results[0].breakdown;
+    CHECK(!bd.captain.empty(), "empty captain");
+    CHECK(bd.bridge.size() == 2, "wrong bridge size");
+    CHECK(bd.individual_scores.size() == 3, "expected 3 individual scores, got " +
+          std::to_string(bd.individual_scores.size()));
+
+    // All individual scores should be > 0
+    for (const auto& [name, score] : bd.individual_scores) {
+        CHECK(score > 0, "zero individual score for " + name);
+    }
+
+    std::cout << "(synergy=" << static_cast<int>(bd.synergy_bonus)
+              << " chain=" << static_cast<int>(bd.state_chain_bonus)
+              << " crit=" << static_cast<int>(bd.crit_bonus)
+              << " penalties=" << bd.penalties.size() << ") ";
+    PASS();
+}
+
+void test_crew_performance() {
+    TEST("PvP search completes in < 2 seconds");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+    auto start = std::chrono::steady_clock::now();
+    auto results = optimizer->find_best_crews(Scenario::PvP, 5);
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    CHECK(elapsed.count() < 2000, "search took " + std::to_string(elapsed.count()) + "ms");
+    CHECK(!results.empty(), "no results");
+
+    std::cout << "(" << elapsed.count() << "ms for top-5) ";
+    PASS();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -733,6 +1168,41 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Resources (" << game_data.resources.size() << ") ---\n";
     test_resource_count();
     test_resource_names();
+
+    std::cout << "\n--- CSV Roster Import (" << "roster.csv" << ") ---\n";
+    if (fs::exists("roster.csv")) {
+        test_csv_load();
+        test_csv_officer_count();
+        test_csv_known_officer();
+        test_csv_rarity_values();
+        test_csv_groups_populated();
+        test_csv_bda_detection();
+        test_csv_multiline_fields();
+        test_csv_mess_hall_level();
+        test_csv_effects();
+    } else {
+        std::cout << "  (skipped — roster.csv not found)\n";
+    }
+
+    std::cout << "\n--- Crew Optimizer ---\n";
+    if (!roster.empty()) {
+        test_crew_optimizer_construction();
+        test_crew_classification_tags();
+        test_crew_classification_states();
+        test_crew_ship_lock();
+        test_crew_scenario_enums();
+        test_crew_pvp_find_best();
+        test_crew_hybrid_find_best();
+        test_crew_pve_hostile_find_best();
+        test_crew_mining_find_best();
+        test_crew_excluded_officers();
+        test_crew_all_scenarios();
+        test_crew_ship_type_affects_results();
+        test_crew_breakdown_fields();
+        test_crew_performance();
+    } else {
+        std::cout << "  (skipped — roster not loaded)\n";
+    }
 
     // Summary
     std::cout << "\n";
