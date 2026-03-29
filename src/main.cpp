@@ -63,8 +63,29 @@ struct AppState {
     int crew_scenario = 0;         // index into all_dock_scenarios()
     int crew_ship_type = 0;        // 0=Explorer, 1=Battleship, 2=Interceptor
     std::vector<CrewResult> crew_results;
+    std::vector<BdaSuggestion> crew_bda_results;  // BDA for selected crew
     int selected_crew = 0;
     bool crew_loaded = false;
+
+    // Loadout state
+    std::vector<DockConfig> dock_configs;
+    LoadoutResult loadout_result;
+    int selected_dock = 0;         // 0-6 dock selection
+    int selected_dock_bda = 0;     // BDA selection within a dock
+    bool loadout_computed = false;
+    bool loadout_running = false;
+
+    void init_dock_configs() {
+        // Default 7-dock setup — common late-game configuration
+        dock_configs.resize(7);
+        dock_configs[0].scenario = Scenario::PvP;
+        dock_configs[1].scenario = Scenario::Hybrid;
+        dock_configs[2].scenario = Scenario::PvEHostile;
+        dock_configs[3].scenario = Scenario::Armada;
+        dock_configs[4].scenario = Scenario::MiningProtected;
+        dock_configs[5].scenario = Scenario::MiningSpeed;
+        dock_configs[6].scenario = Scenario::Loot;
+    }
 
     AppState() : api_client("data/game_data"), ingress_server("data/player_data", 8270) {
         // Generate today's plans
@@ -81,6 +102,14 @@ struct AppState {
             if (!roster.empty()) {
                 optimizer = std::make_unique<CrewOptimizer>(roster);
                 crew_loaded = true;
+            }
+        }
+
+        // Initialize dock configs and try loading saved loadout
+        init_dock_configs();
+        if (fs::exists(".stfc_loadout.json")) {
+            if (CrewOptimizer::load_loadout(loadout_result, ".stfc_loadout.json")) {
+                loadout_computed = true;
             }
         }
     }
@@ -102,6 +131,42 @@ struct AppState {
 
         optimizer->set_ship_type(st);
         crew_results = optimizer->find_best_crews(scenarios[crew_scenario], 5);
+        crew_bda_results.clear();
+
+        // Auto-compute BDA for the top result
+        if (!crew_results.empty()) {
+            const auto& top = crew_results[0].breakdown;
+            crew_bda_results = optimizer->find_best_bda(
+                top.captain, top.bridge, scenarios[crew_scenario], 3);
+        }
+    }
+
+    void update_crew_bda() {
+        if (!optimizer || crew_results.empty()) return;
+        if (selected_crew < 0 || selected_crew >= (int)crew_results.size()) return;
+
+        const auto& scenarios = all_dock_scenarios();
+        const auto& bd = crew_results[selected_crew].breakdown;
+        crew_bda_results = optimizer->find_best_bda(
+            bd.captain, bd.bridge, scenarios[crew_scenario], 3);
+    }
+
+    void run_loadout_optimizer() {
+        if (!optimizer || dock_configs.empty()) return;
+        loadout_running = true;
+
+        // Set ship type for loadout
+        ShipType st = ShipType::Explorer;
+        if (crew_ship_type == 1) st = ShipType::Battleship;
+        if (crew_ship_type == 2) st = ShipType::Interceptor;
+        optimizer->set_ship_type(st);
+
+        loadout_result = optimizer->optimize_dock_loadout(dock_configs, 1);
+        loadout_computed = true;
+        loadout_running = false;
+
+        // Save loadout
+        CrewOptimizer::save_loadout(loadout_result, ".stfc_loadout.json", st);
     }
 };
 
@@ -713,6 +778,25 @@ static Element render_crew_optimizer(AppState& state) {
             }
         }
 
+        // BDA suggestions for this crew
+        if (!state.crew_bda_results.empty()) {
+            lines.push_back(separator());
+            lines.push_back(text("BDA Suggestions:") | bold | color(Color::Magenta));
+            for (size_t bi = 0; bi < state.crew_bda_results.size(); ++bi) {
+                const auto& bda = state.crew_bda_results[bi];
+                lines.push_back(hbox({
+                    text("  #" + std::to_string(bi + 1) + " "),
+                    text(bda.name) | bold | color(Color::Cyan),
+                    filler(),
+                    text("OA:" + std::to_string((int)bda.oa_pct) + "%") | dim,
+                    text("  Score:" + std::to_string((int)bda.score)) | dim,
+                }));
+                for (const auto& reason : bda.reasons) {
+                    lines.push_back(text("     " + reason) | dim | color(Color::Magenta));
+                }
+            }
+        }
+
         detail = vbox(lines);
     }
 
@@ -724,6 +808,257 @@ static Element render_crew_optimizer(AppState& state) {
             separator(),
             detail | size(WIDTH, EQUAL, 55) | vscroll_indicator | yframe,
         }) | flex,
+    });
+}
+
+// ---------------------------------------------------------------------------
+// View: Loadout (7-dock system)
+// ---------------------------------------------------------------------------
+
+static Element render_loadout(AppState& state) {
+    if (!state.crew_loaded) {
+        return vbox({
+            text("7-Dock Loadout Optimizer") | bold | center,
+            separator(),
+            text("No roster loaded.") | center,
+            text("Place roster.csv in the project root and restart.") | center | dim,
+        });
+    }
+
+    // Header
+    static const char* ship_names[] = {"Explorer", "Battleship", "Interceptor"};
+    std::string ship_name = ship_names[state.crew_ship_type];
+
+    auto header = vbox({
+        text("7-Dock Loadout Optimizer") | bold | center,
+        separator(),
+        hbox({
+            text("  Ship: "),
+            text(ship_name) | bold | color(Color::Yellow),
+            text("  [T] cycle") | dim,
+            filler(),
+            text("  [Enter] Optimize All Docks") | dim,
+            text("  [L] Load Saved") | dim,
+        }),
+    });
+
+    // Dock list (left panel)
+    Elements dock_rows;
+    for (int d = 0; d < 7; ++d) {
+        bool sel = (d == state.selected_dock);
+        auto& cfg = state.dock_configs[d];
+        std::string label = "Dock " + std::to_string(d + 1) + ": ";
+        std::string scen = scenario_label(cfg.scenario);
+
+        Elements row_parts;
+        row_parts.push_back(text(label) | bold);
+        row_parts.push_back(text(scen) | color(Color::Cyan));
+
+        if (cfg.locked) {
+            row_parts.push_back(text(" [LOCKED]") | color(Color::Yellow) | dim);
+        }
+
+        // Show crew if computed
+        if (state.loadout_computed && d < (int)state.loadout_result.docks.size()) {
+            const auto& dr = state.loadout_result.docks[d];
+            row_parts.push_back(filler());
+            row_parts.push_back(text(dr.captain) | bold | color(Color::Yellow));
+            if (dr.bridge.size() >= 2) {
+                row_parts.push_back(text(" + ") | dim);
+                row_parts.push_back(text(dr.bridge[0]) | color(Color::Cyan));
+                row_parts.push_back(text(" + ") | dim);
+                row_parts.push_back(text(dr.bridge[1]) | color(Color::Cyan));
+            }
+            row_parts.push_back(text("  "));
+            row_parts.push_back(text(std::to_string((int)dr.score)) | dim);
+        }
+
+        auto row = hbox(row_parts);
+        if (sel) row = row | inverted;
+        dock_rows.push_back(row);
+
+        // Show BDA for selected dock
+        if (sel && state.loadout_computed && d < (int)state.loadout_result.docks.size()) {
+            const auto& dr = state.loadout_result.docks[d];
+            if (!dr.bda_suggestions.empty()) {
+                dock_rows.push_back(text("  BDA Suggestions:") | dim | color(Color::Magenta));
+                for (size_t bi = 0; bi < dr.bda_suggestions.size(); ++bi) {
+                    const auto& bda = dr.bda_suggestions[bi];
+                    bool bda_sel = (sel && (int)bi == state.selected_dock_bda);
+                    auto bda_row = hbox({
+                        text("    #" + std::to_string(bi + 1) + " "),
+                        text(bda.name) | bold | color(Color::Cyan),
+                        filler(),
+                        text("OA:" + std::to_string((int)bda.oa_pct) + "%") | dim,
+                        text("  Score:" + std::to_string((int)bda.score)) | dim,
+                    });
+                    if (bda_sel) bda_row = bda_row | bgcolor(Color::GrayDark);
+                    dock_rows.push_back(bda_row);
+                }
+            }
+        }
+
+        if (d < 6) dock_rows.push_back(separatorLight());
+    }
+
+    // Detail panel (right) — selected dock breakdown
+    Element detail = text("");
+    if (state.loadout_computed && state.selected_dock >= 0 &&
+        state.selected_dock < (int)state.loadout_result.docks.size()) {
+        const auto& dr = state.loadout_result.docks[state.selected_dock];
+        const auto& bd = dr.breakdown;
+        Elements lines;
+
+        lines.push_back(hbox({
+            text("Dock " + std::to_string(dr.dock_num)) | bold,
+            text(" - "),
+            text(dr.scenario_label_str) | color(Color::Cyan),
+        }));
+        lines.push_back(separator());
+
+        lines.push_back(hbox({text("Ship: "), text(dr.ship_used) | bold | color(Color::Yellow)}));
+        if (!dr.ship_recommended.empty() && dr.ship_recommended != dr.ship_used) {
+            lines.push_back(hbox({text("Recommended: "), text(dr.ship_recommended) | dim}));
+        }
+        lines.push_back(separator());
+
+        lines.push_back(hbox({
+            text("Captain: "),
+            text(dr.captain) | bold | color(Color::Yellow),
+        }));
+        if (dr.bridge.size() >= 2) {
+            lines.push_back(hbox({
+                text("Bridge:  "),
+                text(dr.bridge[0]) | color(Color::Cyan),
+                text(" + "),
+                text(dr.bridge[1]) | color(Color::Cyan),
+            }));
+        }
+        lines.push_back(hbox({text("Score:   "), text(std::to_string((int)dr.score)) | bold}));
+
+        if (dr.locked) {
+            lines.push_back(text("[LOCKED - pre-assigned]") | color(Color::Yellow) | dim);
+        }
+
+        // Breakdown
+        lines.push_back(separator());
+        lines.push_back(text("Individual:") | bold);
+        for (const auto& [name, score] : bd.individual_scores) {
+            bool is_cpt = (name == bd.captain);
+            lines.push_back(hbox({
+                text("  "),
+                text(is_cpt ? "[CPT] " : "      "),
+                text(name) | (is_cpt ? bold : nothing),
+                filler(),
+                text(std::to_string((int)score)),
+            }));
+        }
+
+        lines.push_back(separator());
+        lines.push_back(text("Bonuses:") | bold);
+        if (bd.synergy_bonus > 0)
+            lines.push_back(hbox({text("  Synergy:     +"), text(std::to_string((int)bd.synergy_bonus)) | color(Color::Green)}));
+        if (bd.state_chain_bonus > 0)
+            lines.push_back(hbox({text("  State Chain: +"), text(std::to_string((int)bd.state_chain_bonus)) | color(Color::Green)}));
+        if (bd.crit_bonus > 0)
+            lines.push_back(hbox({text("  Crit:        +"), text(std::to_string((int)bd.crit_bonus)) | color(Color::Green)}));
+        if (bd.ship_type_bonus > 0)
+            lines.push_back(hbox({text("  Ship Spec:   +"), text(std::to_string((int)bd.ship_type_bonus)) | color(Color::Green)}));
+        if (bd.scenario_bonus > 0)
+            lines.push_back(hbox({text("  Scenario:    +"), text(std::to_string((int)bd.scenario_bonus)) | color(Color::Green)}));
+
+        if (!bd.penalties.empty()) {
+            lines.push_back(separator());
+            lines.push_back(text("Penalties:") | bold | color(Color::Red));
+            for (const auto& p : bd.penalties) {
+                lines.push_back(text("  " + p) | color(Color::Red) | dim);
+            }
+        }
+
+        // BDA detail for selected suggestion
+        if (!dr.bda_suggestions.empty()) {
+            lines.push_back(separator());
+            lines.push_back(text("BDA Details:") | bold | color(Color::Magenta));
+            int bi = state.selected_dock_bda;
+            if (bi >= 0 && bi < (int)dr.bda_suggestions.size()) {
+                const auto& bda = dr.bda_suggestions[bi];
+                lines.push_back(hbox({
+                    text("  "),
+                    text(bda.name) | bold | color(Color::Cyan),
+                    text("  Lv" + std::to_string(bda.level) + " Rk" + std::to_string(bda.rank)),
+                }));
+                lines.push_back(hbox({
+                    text("  Atk:"),
+                    text(std::to_string((int)bda.attack)) | dim,
+                    text("  Def:"),
+                    text(std::to_string((int)bda.defense)) | dim,
+                    text("  HP:"),
+                    text(std::to_string((int)bda.health)) | dim,
+                }));
+                for (const auto& reason : bda.reasons) {
+                    lines.push_back(text("  " + reason) | dim | color(Color::Magenta));
+                }
+            }
+        }
+
+        // Excluded officers
+        if (!state.loadout_result.excluded_officers.empty()) {
+            lines.push_back(separator());
+            lines.push_back(text("Excluded:") | bold | dim);
+            std::string excl;
+            for (size_t ei = 0; ei < state.loadout_result.excluded_officers.size() && ei < 10; ++ei) {
+                if (!excl.empty()) excl += ", ";
+                excl += state.loadout_result.excluded_officers[ei];
+            }
+            if (state.loadout_result.excluded_officers.size() > 10) {
+                excl += " +" + std::to_string(state.loadout_result.excluded_officers.size() - 10) + " more";
+            }
+            // Wrap to ~50 chars
+            while (!excl.empty()) {
+                if (excl.size() <= 50) { lines.push_back(text("  " + excl) | dim); break; }
+                size_t cut = excl.rfind(',', 50);
+                if (cut == std::string::npos || cut == 0) cut = 50;
+                lines.push_back(text("  " + excl.substr(0, cut + 1)) | dim);
+                excl = excl.substr(cut + 1);
+                if (!excl.empty() && excl[0] == ' ') excl = excl.substr(1);
+            }
+        }
+
+        detail = vbox(lines);
+    } else if (!state.loadout_computed) {
+        detail = vbox({
+            text("Press [Enter] to optimize all 7 docks.") | center | dim,
+            separatorEmpty(),
+            text("Use [</>] to change dock scenario.") | center | dim,
+            text("Each dock gets best available crew") | center | dim,
+            text("from the remaining officer pool.") | center | dim,
+        });
+    }
+
+    // Dock config editor line
+    std::string dock_scenario_str;
+    if (state.selected_dock >= 0 && state.selected_dock < (int)state.dock_configs.size()) {
+        dock_scenario_str = scenario_label(state.dock_configs[state.selected_dock].scenario);
+    }
+
+    return vbox({
+        header,
+        separator(),
+        hbox({
+            vbox(dock_rows) | vscroll_indicator | yframe | flex,
+            separator(),
+            detail | size(WIDTH, EQUAL, 55) | vscroll_indicator | yframe,
+        }) | flex,
+        separator(),
+        hbox({
+            text(" Dock " + std::to_string(state.selected_dock + 1) + ": ") | bold,
+            text(dock_scenario_str) | color(Color::Cyan),
+            filler(),
+            text(" [Up/Dn] Dock  ") | dim,
+            text("[</>] Scenario  ") | dim,
+            text("[B] BDA nav  ") | dim,
+            text("[K] Lock/Unlock") | dim,
+        }),
     });
 }
 
@@ -922,7 +1257,7 @@ static Element render_sync(AppState& state) {
 
 static Element render_status_bar(AppState& state) {
     return hbox({
-        text(" STFC Tool v0.2 ") | bold | bgcolor(Color::Blue) | color(Color::White),
+        text(" STFC Tool v0.3 ") | bold | bgcolor(Color::Blue) | color(Color::White),
         text(" "),
         text(state.status_message) | flex,
         text(" "),
@@ -947,6 +1282,7 @@ int main() {
         "Daily",
         "Weekly",
         "Crews",
+        "Loadout",
         "Officers",
         "Ships",
         "Sync",
@@ -963,9 +1299,10 @@ int main() {
             case 1: content = render_daily_planner(*state); break;
             case 2: content = render_weekly_planner(*state); break;
             case 3: content = render_crew_optimizer(*state); break;
-            case 4: content = render_officers(*state); break;
-            case 5: content = render_ships(*state); break;
-            case 6: content = render_sync(*state); break;
+            case 4: content = render_loadout(*state); break;
+            case 5: content = render_officers(*state); break;
+            case 6: content = render_ships(*state); break;
+            case 7: content = render_sync(*state); break;
             default: content = text("Unknown tab");
         }
 
@@ -1141,6 +1478,7 @@ int main() {
                 if (state->crew_scenario > 0) {
                     state->crew_scenario--;
                     state->crew_results.clear();
+                    state->crew_bda_results.clear();
                     state->selected_crew = 0;
                 }
                 return true;
@@ -1149,6 +1487,7 @@ int main() {
                 if (state->crew_scenario < (int)all_dock_scenarios().size() - 1) {
                     state->crew_scenario++;
                     state->crew_results.clear();
+                    state->crew_bda_results.clear();
                     state->selected_crew = 0;
                 }
                 return true;
@@ -1156,6 +1495,7 @@ int main() {
             if (event == Event::Character('t') || event == Event::Character('T')) {
                 state->crew_ship_type = (state->crew_ship_type + 1) % 3;
                 state->crew_results.clear();
+                state->crew_bda_results.clear();
                 state->selected_crew = 0;
                 return true;
             }
@@ -1174,11 +1514,117 @@ int main() {
             if (event == Event::ArrowDown) {
                 if (state->selected_crew < (int)state->crew_results.size() - 1) {
                     state->selected_crew++;
+                    state->update_crew_bda();
                 }
                 return true;
             }
             if (event == Event::ArrowUp) {
-                if (state->selected_crew > 0) state->selected_crew--;
+                if (state->selected_crew > 0) {
+                    state->selected_crew--;
+                    state->update_crew_bda();
+                }
+                return true;
+            }
+        }
+
+        // === Loadout tab events ===
+        if (selected_tab == 4) {
+            if (event == Event::ArrowDown) {
+                if (state->selected_dock < 6) {
+                    state->selected_dock++;
+                    state->selected_dock_bda = 0;
+                }
+                return true;
+            }
+            if (event == Event::ArrowUp) {
+                if (state->selected_dock > 0) {
+                    state->selected_dock--;
+                    state->selected_dock_bda = 0;
+                }
+                return true;
+            }
+            // Change dock scenario
+            if (event == Event::Character('<') || event == Event::Character(',')) {
+                auto& cfg = state->dock_configs[state->selected_dock];
+                const auto& all = all_dock_scenarios();
+                auto it = std::find(all.begin(), all.end(), cfg.scenario);
+                if (it != all.begin()) {
+                    cfg.scenario = *std::prev(it);
+                    state->loadout_computed = false;
+                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) +
+                        " -> " + scenario_label(cfg.scenario);
+                }
+                return true;
+            }
+            if (event == Event::Character('>') || event == Event::Character('.')) {
+                auto& cfg = state->dock_configs[state->selected_dock];
+                const auto& all = all_dock_scenarios();
+                auto it = std::find(all.begin(), all.end(), cfg.scenario);
+                if (it != all.end() && std::next(it) != all.end()) {
+                    cfg.scenario = *std::next(it);
+                    state->loadout_computed = false;
+                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) +
+                        " -> " + scenario_label(cfg.scenario);
+                }
+                return true;
+            }
+            // Cycle ship type
+            if (event == Event::Character('t') || event == Event::Character('T')) {
+                state->crew_ship_type = (state->crew_ship_type + 1) % 3;
+                state->loadout_computed = false;
+                return true;
+            }
+            // Lock/unlock dock
+            if (event == Event::Character('k') || event == Event::Character('K')) {
+                auto& cfg = state->dock_configs[state->selected_dock];
+                if (cfg.locked) {
+                    cfg.locked = false;
+                    cfg.locked_captain.clear();
+                    cfg.locked_bridge.clear();
+                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) + " unlocked.";
+                } else if (state->loadout_computed &&
+                           state->selected_dock < (int)state->loadout_result.docks.size()) {
+                    // Lock with current assignment
+                    const auto& dr = state->loadout_result.docks[state->selected_dock];
+                    cfg.locked = true;
+                    cfg.locked_captain = dr.captain;
+                    cfg.locked_bridge = dr.bridge;
+                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) +
+                        " locked: " + dr.captain;
+                }
+                return true;
+            }
+            // Navigate BDA suggestions
+            if (event == Event::Character('b') || event == Event::Character('B')) {
+                if (state->loadout_computed &&
+                    state->selected_dock < (int)state->loadout_result.docks.size()) {
+                    int max_bda = (int)state->loadout_result.docks[state->selected_dock].bda_suggestions.size();
+                    if (max_bda > 0) {
+                        state->selected_dock_bda = (state->selected_dock_bda + 1) % max_bda;
+                    }
+                }
+                return true;
+            }
+            // Run loadout optimizer
+            if (event == Event::Return) {
+                if (state->optimizer && !state->loadout_running) {
+                    state->status_message = "Optimizing 7-dock loadout...";
+                    state->run_loadout_optimizer();
+                    state->status_message = "Loadout optimized! " +
+                        std::to_string(state->loadout_result.total_officers_used) +
+                        " officers assigned across " +
+                        std::to_string(state->loadout_result.docks.size()) + " docks.";
+                }
+                return true;
+            }
+            // Load saved loadout
+            if (event == Event::Character('l') || event == Event::Character('L')) {
+                if (CrewOptimizer::load_loadout(state->loadout_result, ".stfc_loadout.json")) {
+                    state->loadout_computed = true;
+                    state->status_message = "Loaded saved loadout from .stfc_loadout.json";
+                } else {
+                    state->status_message = "No saved loadout found.";
+                }
                 return true;
             }
         }
