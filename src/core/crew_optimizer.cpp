@@ -4,6 +4,10 @@
 #include <cmath>
 #include <numeric>
 #include <sstream>
+#include <fstream>
+#include <filesystem>
+
+#include "json.hpp"
 
 namespace stfc {
 
@@ -1281,6 +1285,442 @@ std::vector<CrewResult> CrewOptimizer::find_best_crews(
     }
 
     return unique;
+}
+
+// ---------------------------------------------------------------------------
+// BDA suggestion system (port of find_best_bda)
+// ---------------------------------------------------------------------------
+
+std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
+    const std::string& captain_name,
+    const std::vector<std::string>& bridge_names,
+    Scenario mode,
+    int top_n,
+    const std::set<std::string>& excluded) const
+{
+    // Build exclusion set: crew members + externally excluded
+    std::set<std::string> excl = excluded;
+    excl.insert(captain_name);
+    for (const auto& b : bridge_names) excl.insert(b);
+
+    // Profile the existing crew
+    std::set<std::string> crew_applied, crew_benefit;
+    bool has_crit = false, has_shield = false, has_mitigation = false;
+
+    for (const auto& off : officers_) {
+        if (off.name == captain_name ||
+            std::find(bridge_names.begin(), bridge_names.end(), off.name) != bridge_names.end()) {
+            crew_applied.insert(off.states_applied.begin(), off.states_applied.end());
+            crew_benefit.insert(off.states_benefit.begin(), off.states_benefit.end());
+            if (off.crit_related) has_crit = true;
+            if (off.shield_related) has_shield = true;
+            if (off.mitigation_related) has_mitigation = true;
+        }
+    }
+
+    // Score every non-excluded officer
+    struct ScoredBda {
+        const ClassifiedOfficer* off;
+        double score;
+        std::vector<std::string> reasons;
+    };
+    std::vector<ScoredBda> candidates;
+
+    for (const auto& off : officers_) {
+        if (excl.count(off.name)) continue;
+        if (off.attack <= 0) continue;
+
+        double score = 0.0;
+        std::vector<std::string> reasons;
+
+        // 1. Base OA value
+        if (off.oa_pct >= 10000.0) {
+            score += 5000.0;
+            reasons.push_back("Designed as BDA officer");
+        }
+        score += std::min(off.oa_pct, 500.0) * 10.0;
+
+        // 2. State synergy: BDA applies states the crew benefits from
+        std::set<std::string> chain_add;
+        for (const auto& s : off.states_applied) {
+            if (crew_benefit.count(s)) chain_add.insert(s);
+        }
+        if (!chain_add.empty()) {
+            score += static_cast<double>(chain_add.size()) * 20000.0;
+            std::string states_str;
+            for (const auto& s : chain_add) {
+                if (!states_str.empty()) states_str += ", ";
+                states_str += s;
+            }
+            reasons.push_back("Applies " + states_str + " (crew benefits)");
+        }
+
+        // 3. State synergy: BDA benefits from states the crew applies
+        std::set<std::string> chain_receive;
+        for (const auto& s : off.states_benefit) {
+            if (crew_applied.count(s)) chain_receive.insert(s);
+        }
+        if (!chain_receive.empty()) {
+            score += static_cast<double>(chain_receive.size()) * 15000.0;
+            std::string states_str;
+            for (const auto& s : chain_receive) {
+                if (!states_str.empty()) states_str += ", ";
+                states_str += s;
+            }
+            reasons.push_back("Benefits from " + states_str + " (crew applies)");
+        }
+
+        // 4. Cover missing crew capabilities
+        if (!has_crit && off.crit_related) {
+            score += 10000.0;
+            reasons.push_back("Adds crit coverage");
+        }
+        if (!has_shield && off.shield_related) {
+            score += 8000.0;
+            reasons.push_back("Adds shield support");
+        }
+        if (!has_mitigation && off.mitigation_related) {
+            score += 8000.0;
+            reasons.push_back("Adds mitigation");
+        }
+
+        // 5. Stat contribution (BDA gives partial stats)
+        double stat_score = off.attack * 0.2 + off.defense * 0.15 + off.health * 0.1;
+        score += stat_score;
+
+        // 6. Ship-type match multiplier
+        if (off.is_ship_specific) {
+            score *= 1.2;
+        }
+
+        // 7. OA ship compatibility penalty
+        if (!oa_works_on_ship(off)) {
+            score *= 0.3;
+        }
+
+        // 8. Hybrid dual-use bonus
+        if (mode == Scenario::Hybrid && off.is_dual_use) {
+            score *= 1.15;
+        }
+
+        // 9. Default reason
+        if (reasons.empty()) {
+            reasons.push_back("General stat contribution");
+        }
+
+        candidates.push_back({&off, score, std::move(reasons)});
+    }
+
+    // Sort by score descending
+    std::sort(candidates.begin(), candidates.end(),
+              [](const ScoredBda& a, const ScoredBda& b) { return a.score > b.score; });
+
+    // Build result
+    std::vector<BdaSuggestion> result;
+    int n = std::min(top_n, static_cast<int>(candidates.size()));
+    result.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        const auto& c = candidates[i];
+        BdaSuggestion bda;
+        bda.name = c.off->name;
+        bda.level = c.off->level;
+        bda.rank = c.off->rank;
+        bda.attack = c.off->attack;
+        bda.defense = c.off->defense;
+        bda.health = c.off->health;
+        bda.oa_pct = c.off->oa_pct;
+        bda.display = c.off->description;
+        bda.score = std::round(c.score);
+        bda.reasons = c.reasons;
+        result.push_back(std::move(bda));
+    }
+
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// 7-dock loadout optimization (port of optimize_dock_loadout)
+// ---------------------------------------------------------------------------
+
+LoadoutResult CrewOptimizer::optimize_dock_loadout(
+    const std::vector<DockConfig>& dock_configs,
+    int top_n)
+{
+    LoadoutResult loadout;
+    std::set<std::string> excluded;
+    ShipType original_ship = ship_type_;
+
+    for (size_t i = 0; i < dock_configs.size() && i < 7; ++i) {
+        const auto& cfg = dock_configs[i];
+        int dock_num = static_cast<int>(i) + 1;
+
+        const auto& rec = get_ship_recommendation(cfg.scenario);
+        std::string ship_recommended = ship_type_str(rec.best);
+        std::string ship_used = cfg.ship_override.empty()
+            ? ship_recommended
+            : cfg.ship_override;
+
+        DockResult dr;
+        dr.dock_num = dock_num;
+        dr.scenario = cfg.scenario;
+        dr.scenario_label_str = scenario_label(cfg.scenario);
+        dr.ship_recommended = ship_recommended;
+        dr.ship_used = ship_used;
+        dr.locked = cfg.locked;
+
+        if (cfg.locked && !cfg.locked_captain.empty()) {
+            // --- LOCKED DOCK ---
+            dr.captain = cfg.locked_captain;
+            dr.bridge = cfg.locked_bridge;
+
+            // Find officer objects for scoring
+            const ClassifiedOfficer* cap_off = nullptr;
+            const ClassifiedOfficer* b1_off = nullptr;
+            const ClassifiedOfficer* b2_off = nullptr;
+
+            for (const auto& off : officers_) {
+                if (off.name == cfg.locked_captain) cap_off = &off;
+                if (cfg.locked_bridge.size() > 0 && off.name == cfg.locked_bridge[0]) b1_off = &off;
+                if (cfg.locked_bridge.size() > 1 && off.name == cfg.locked_bridge[1]) b2_off = &off;
+            }
+
+            if (cap_off && b1_off && b2_off) {
+                // Score the locked crew for display
+                CrewResult cr = score_scenario_crew(*cap_off, *b1_off, *b2_off, cfg.scenario);
+                dr.score = cr.score;
+                dr.breakdown = cr.breakdown;
+            }
+
+            // Reserve these officers
+            excluded.insert(cfg.locked_captain);
+            for (const auto& b : cfg.locked_bridge) excluded.insert(b);
+
+        } else {
+            // --- OPTIMIZED DOCK ---
+
+            // Switch ship type if needed
+            ShipType target_ship = ship_type_from_str(ship_used);
+            if (target_ship != ship_type_) {
+                set_ship_type(target_ship);
+            }
+
+            auto crews = find_best_crews(cfg.scenario, top_n, excluded);
+
+            if (!crews.empty()) {
+                const auto& best = crews[0];
+                dr.captain = best.breakdown.captain;
+                dr.bridge = best.breakdown.bridge;
+                dr.score = best.score;
+                dr.breakdown = best.breakdown;
+
+                // Reserve these officers
+                excluded.insert(dr.captain);
+                for (const auto& b : dr.bridge) excluded.insert(b);
+
+                // Find BDA suggestions
+                dr.bda_suggestions = find_best_bda(
+                    dr.captain, dr.bridge, cfg.scenario, 3, excluded);
+            } else {
+                dr.captain = "N/A";
+                dr.bridge = {"N/A", "N/A"};
+                dr.score = 0.0;
+            }
+
+            // Restore ship type if changed
+            if (ship_type_ != original_ship) {
+                set_ship_type(original_ship);
+            }
+        }
+
+        loadout.docks.push_back(std::move(dr));
+    }
+
+    // Build sorted excluded list
+    loadout.excluded_officers.assign(excluded.begin(), excluded.end());
+    std::sort(loadout.excluded_officers.begin(), loadout.excluded_officers.end());
+    loadout.total_officers_used = static_cast<int>(excluded.size());
+
+    return loadout;
+}
+
+// ---------------------------------------------------------------------------
+// Loadout JSON persistence
+// ---------------------------------------------------------------------------
+
+using json = nlohmann::json;
+
+bool CrewOptimizer::save_loadout(const LoadoutResult& result,
+                                  const std::string& path,
+                                  ShipType ship,
+                                  const std::string& ship_display)
+{
+    json j;
+
+    json docks_arr = json::array();
+    for (const auto& dr : result.docks) {
+        json dj;
+        dj["dock_num"] = dr.dock_num;
+        dj["scenario"] = scenario_str(dr.scenario);
+        dj["scenario_label"] = dr.scenario_label_str;
+        dj["ship_recommended"] = dr.ship_recommended;
+        dj["ship_used"] = dr.ship_used;
+        dj["locked"] = dr.locked;
+
+        json crew;
+        crew["captain"] = dr.captain;
+        crew["bridge"] = dr.bridge;
+        crew["score"] = static_cast<int>(std::round(dr.score));
+
+        // Flatten breakdown (Python compat: synergy_notes, penalties, scenario_bonus, individual_scores)
+        json syn_notes = json::array();
+        for (const auto& n : dr.breakdown.synergy_notes) syn_notes.push_back(n);
+        crew["synergy_notes"] = syn_notes;
+
+        json penalties = json::array();
+        for (const auto& p : dr.breakdown.penalties) penalties.push_back(p);
+        crew["penalties"] = penalties;
+
+        crew["scenario_bonus"] = static_cast<int>(dr.breakdown.scenario_bonus);
+
+        json ind_scores;
+        for (const auto& [name, sc] : dr.breakdown.individual_scores) {
+            ind_scores[name] = static_cast<int>(std::round(sc));
+        }
+        crew["individual_scores"] = ind_scores;
+
+        dj["crew"] = crew;
+
+        // BDA suggestions
+        json bda_arr = json::array();
+        for (const auto& b : dr.bda_suggestions) {
+            json bj;
+            bj["name"] = b.name;
+            bj["level"] = b.level;
+            bj["rank"] = b.rank;
+            bj["attack"] = b.attack;
+            bj["defense"] = b.defense;
+            bj["health"] = b.health;
+            bj["oa_pct"] = b.oa_pct;
+            bj["display"] = b.display;
+            bj["score"] = static_cast<int>(b.score);
+            json reasons_arr = json::array();
+            for (const auto& r : b.reasons) reasons_arr.push_back(r);
+            bj["reasons"] = reasons_arr;
+            bda_arr.push_back(bj);
+        }
+        dj["bda_suggestions"] = bda_arr;
+
+        docks_arr.push_back(dj);
+    }
+
+    j["docks"] = docks_arr;
+
+    json excl_arr = json::array();
+    for (const auto& e : result.excluded_officers) excl_arr.push_back(e);
+    j["excluded_officers"] = excl_arr;
+    j["total_officers_used"] = result.total_officers_used;
+    j["ship"] = ship_type_str(ship);
+    j["ship_display"] = ship_display.empty() ? ship_type_str(ship) : ship_display;
+
+    namespace fs = std::filesystem;
+    fs::create_directories(fs::path(path).parent_path());
+    std::ofstream f(path);
+    if (!f.is_open()) return false;
+    f << j.dump(2);
+    return f.good();
+}
+
+bool CrewOptimizer::load_loadout(LoadoutResult& result, const std::string& path)
+{
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+
+    try {
+        json j = json::parse(f);
+
+        result.docks.clear();
+        if (j.contains("docks") && j["docks"].is_array()) {
+            for (const auto& dj : j["docks"]) {
+                DockResult dr;
+                if (dj.contains("dock_num")) dr.dock_num = dj["dock_num"].get<int>();
+                if (dj.contains("scenario")) dr.scenario = scenario_from_str(dj["scenario"].get<std::string>());
+                if (dj.contains("scenario_label")) dr.scenario_label_str = dj["scenario_label"].get<std::string>();
+                if (dj.contains("ship_recommended")) dr.ship_recommended = dj["ship_recommended"].get<std::string>();
+                if (dj.contains("ship_used")) dr.ship_used = dj["ship_used"].get<std::string>();
+                if (dj.contains("locked")) dr.locked = dj["locked"].get<bool>();
+
+                if (dj.contains("crew")) {
+                    const auto& cj = dj["crew"];
+                    if (cj.contains("captain")) dr.captain = cj["captain"].get<std::string>();
+                    if (cj.contains("bridge")) {
+                        for (const auto& b : cj["bridge"]) {
+                            dr.bridge.push_back(b.get<std::string>());
+                        }
+                    }
+                    if (cj.contains("score")) dr.score = cj["score"].get<double>();
+
+                    // Load flattened breakdown fields
+                    dr.breakdown.captain = dr.captain;
+                    dr.breakdown.bridge = dr.bridge;
+                    if (cj.contains("synergy_notes")) {
+                        for (const auto& n : cj["synergy_notes"]) {
+                            dr.breakdown.synergy_notes.push_back(n.get<std::string>());
+                        }
+                    }
+                    if (cj.contains("penalties")) {
+                        for (const auto& p : cj["penalties"]) {
+                            dr.breakdown.penalties.push_back(p.get<std::string>());
+                        }
+                    }
+                    if (cj.contains("scenario_bonus")) {
+                        dr.breakdown.scenario_bonus = cj["scenario_bonus"].get<double>();
+                    }
+                    if (cj.contains("individual_scores")) {
+                        for (auto& [name, sc] : cj["individual_scores"].items()) {
+                            dr.breakdown.individual_scores[name] = sc.get<double>();
+                        }
+                    }
+                }
+
+                if (dj.contains("bda_suggestions")) {
+                    for (const auto& bj : dj["bda_suggestions"]) {
+                        BdaSuggestion bda;
+                        if (bj.contains("name")) bda.name = bj["name"].get<std::string>();
+                        if (bj.contains("level")) bda.level = bj["level"].get<int>();
+                        if (bj.contains("rank")) bda.rank = bj["rank"].get<int>();
+                        if (bj.contains("attack")) bda.attack = bj["attack"].get<double>();
+                        if (bj.contains("defense")) bda.defense = bj["defense"].get<double>();
+                        if (bj.contains("health")) bda.health = bj["health"].get<double>();
+                        if (bj.contains("oa_pct")) bda.oa_pct = bj["oa_pct"].get<double>();
+                        if (bj.contains("display")) bda.display = bj["display"].get<std::string>();
+                        if (bj.contains("score")) bda.score = bj["score"].get<double>();
+                        if (bj.contains("reasons")) {
+                            for (const auto& r : bj["reasons"]) {
+                                bda.reasons.push_back(r.get<std::string>());
+                            }
+                        }
+                        dr.bda_suggestions.push_back(std::move(bda));
+                    }
+                }
+
+                result.docks.push_back(std::move(dr));
+            }
+        }
+
+        if (j.contains("excluded_officers")) {
+            result.excluded_officers.clear();
+            for (const auto& e : j["excluded_officers"]) {
+                result.excluded_officers.push_back(e.get<std::string>());
+            }
+        }
+        if (j.contains("total_officers_used")) {
+            result.total_officers_used = j["total_officers_used"].get<int>();
+        }
+
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace stfc

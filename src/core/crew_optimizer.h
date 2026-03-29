@@ -182,6 +182,59 @@ struct CrewResult {
 };
 
 // ---------------------------------------------------------------------------
+// BDA suggestion (below-deck assignment)
+// ---------------------------------------------------------------------------
+
+struct BdaSuggestion {
+    std::string name;
+    int level = 0;
+    int rank = 0;
+    double attack = 0.0;
+    double defense = 0.0;
+    double health = 0.0;
+    double oa_pct = 0.0;
+    std::string display;      // full ability description
+    double score = 0.0;
+    std::vector<std::string> reasons;
+};
+
+// ---------------------------------------------------------------------------
+// Dock configuration and loadout result
+// ---------------------------------------------------------------------------
+
+struct DockConfig {
+    Scenario scenario = Scenario::PvP;
+    std::string ship_override;     // empty = use recommendation
+    bool locked = false;
+    std::string locked_captain;    // only when locked
+    std::vector<std::string> locked_bridge;  // only when locked (2 names)
+};
+
+struct DockResult {
+    int dock_num = 0;              // 1-based
+    Scenario scenario = Scenario::PvP;
+    std::string scenario_label_str;
+    std::string ship_recommended;
+    std::string ship_used;
+    bool locked = false;
+
+    // Crew
+    std::string captain;
+    std::vector<std::string> bridge;
+    double score = 0.0;
+    CrewBreakdown breakdown;
+
+    // BDA suggestions
+    std::vector<BdaSuggestion> bda_suggestions;
+};
+
+struct LoadoutResult {
+    std::vector<DockResult> docks;
+    std::vector<std::string> excluded_officers;  // sorted
+    int total_officers_used = 0;
+};
+
+// ---------------------------------------------------------------------------
 // CrewOptimizer — the main engine
 // ---------------------------------------------------------------------------
 
@@ -199,6 +252,27 @@ public:
     std::vector<CrewResult> find_best_crews(
         Scenario scenario, int top_n = 5,
         const std::set<std::string>& excluded = {}) const;
+
+    // Find best BDA (below-deck assignment) for a given crew
+    std::vector<BdaSuggestion> find_best_bda(
+        const std::string& captain_name,
+        const std::vector<std::string>& bridge_names,
+        Scenario mode = Scenario::PvP,
+        int top_n = 5,
+        const std::set<std::string>& excluded = {}) const;
+
+    // Optimize a full 7-dock loadout (mutates ship_type temporarily, restores on return)
+    LoadoutResult optimize_dock_loadout(
+        const std::vector<DockConfig>& dock_configs,
+        int top_n = 1);
+
+    // Loadout persistence
+    static bool save_loadout(const LoadoutResult& result,
+                             const std::string& path,
+                             ShipType ship = ShipType::Explorer,
+                             const std::string& ship_display = "");
+    static bool load_loadout(LoadoutResult& result,
+                             const std::string& path);
 
     // Access classified officers
     const std::vector<ClassifiedOfficer>& officers() const { return officers_; }

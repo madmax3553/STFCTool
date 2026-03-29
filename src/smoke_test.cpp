@@ -1086,6 +1086,325 @@ void test_crew_performance() {
 }
 
 // ---------------------------------------------------------------------------
+// Tests: BDA suggestions
+// ---------------------------------------------------------------------------
+
+void test_bda_pvp_suggestions() {
+    TEST("find_best_bda returns valid BDA suggestions for PvP crew");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+    auto crews = optimizer->find_best_crews(Scenario::PvP, 1);
+    CHECK(!crews.empty(), "no PvP crews found");
+
+    const auto& best = crews[0];
+    auto bdas = optimizer->find_best_bda(
+        best.breakdown.captain, best.breakdown.bridge,
+        Scenario::PvP, 5);
+
+    CHECK(!bdas.empty(), "no BDA suggestions returned");
+    CHECK(bdas.size() <= 5, "too many BDA suggestions");
+
+    // BDA should not include any crew member
+    std::set<std::string> crew_names;
+    crew_names.insert(best.breakdown.captain);
+    for (const auto& b : best.breakdown.bridge) crew_names.insert(b);
+
+    for (const auto& bda : bdas) {
+        CHECK(!bda.name.empty(), "BDA has empty name");
+        CHECK(crew_names.count(bda.name) == 0,
+              "BDA '" + bda.name + "' is already on the bridge");
+        CHECK(bda.score > 0, "BDA score is zero or negative");
+        CHECK(!bda.reasons.empty(), "BDA has no reasons");
+    }
+
+    // Scores should be in descending order
+    for (size_t i = 1; i < bdas.size(); ++i) {
+        CHECK(bdas[i].score <= bdas[i-1].score, "BDA scores not sorted descending");
+    }
+
+    std::cout << "(top=" << (int)bdas[0].score << " [" << bdas[0].name << "] reasons:" << bdas[0].reasons.size() << ") ";
+    PASS();
+}
+
+void test_bda_respects_excluded() {
+    TEST("find_best_bda excludes specified officers");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+    auto crews = optimizer->find_best_crews(Scenario::PvP, 1);
+    CHECK(!crews.empty(), "no PvP crews found");
+
+    const auto& best = crews[0];
+
+    // Get unrestricted BDAs
+    auto bdas_full = optimizer->find_best_bda(
+        best.breakdown.captain, best.breakdown.bridge,
+        Scenario::PvP, 5);
+    CHECK(!bdas_full.empty(), "no unrestricted BDA suggestions");
+
+    // Exclude the top BDA
+    std::set<std::string> excl;
+    excl.insert(bdas_full[0].name);
+
+    auto bdas_excl = optimizer->find_best_bda(
+        best.breakdown.captain, best.breakdown.bridge,
+        Scenario::PvP, 5, excl);
+
+    // Top excluded BDA should not appear
+    for (const auto& bda : bdas_excl) {
+        CHECK(bda.name != bdas_full[0].name,
+              "excluded BDA '" + bdas_full[0].name + "' still appeared");
+    }
+
+    PASS();
+}
+
+void test_bda_state_synergy() {
+    TEST("find_best_bda rewards state synergy (scoring sanity)");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    // Run BDA for any crew — check that at least some results have state-related reasons
+    optimizer->set_ship_type(ShipType::Explorer);
+    auto crews = optimizer->find_best_crews(Scenario::PvP, 1);
+    CHECK(!crews.empty(), "no crews");
+
+    auto bdas = optimizer->find_best_bda(
+        crews[0].breakdown.captain, crews[0].breakdown.bridge,
+        Scenario::PvP, 10);
+
+    int state_synergy_count = 0;
+    for (const auto& bda : bdas) {
+        for (const auto& r : bda.reasons) {
+            if (r.find("Applies") != std::string::npos ||
+                r.find("Benefits from") != std::string::npos) {
+                state_synergy_count++;
+                break;
+            }
+        }
+    }
+
+    // Expect at least 1 candidate with state synergy in top 10
+    CHECK(state_synergy_count > 0,
+          "no BDA candidates with state synergy in top 10");
+
+    std::cout << "(" << state_synergy_count << "/10 have state synergy) ";
+    PASS();
+}
+
+// ---------------------------------------------------------------------------
+// Tests: 7-dock loadout
+// ---------------------------------------------------------------------------
+
+void test_loadout_basic() {
+    TEST("optimize_dock_loadout with 7 standard docks");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+
+    std::vector<DockConfig> configs = {
+        {Scenario::PvP,             "", false, "", {}},
+        {Scenario::Hybrid,          "", false, "", {}},
+        {Scenario::PvEHostile,      "", false, "", {}},
+        {Scenario::Armada,          "", false, "", {}},
+        {Scenario::MiningSpeed,     "", false, "", {}},
+        {Scenario::MiningProtected, "", false, "", {}},
+        {Scenario::MiningGeneral,   "", false, "", {}},
+    };
+
+    auto result = optimizer->optimize_dock_loadout(configs, 1);
+
+    CHECK(result.docks.size() == 7, "expected 7 docks, got " + std::to_string(result.docks.size()));
+    CHECK(result.total_officers_used == 21,
+          "expected 21 unique officers, got " + std::to_string(result.total_officers_used));
+
+    // Every dock should have a valid captain
+    for (const auto& d : result.docks) {
+        CHECK(!d.captain.empty() && d.captain != "N/A",
+              "dock " + std::to_string(d.dock_num) + " has no captain");
+        CHECK(d.bridge.size() == 2,
+              "dock " + std::to_string(d.dock_num) + " doesn't have 2 bridge officers");
+        CHECK(d.score > 0,
+              "dock " + std::to_string(d.dock_num) + " has zero score");
+    }
+
+    std::cout << "(21 officers across 7 docks) ";
+    PASS();
+}
+
+void test_loadout_no_duplicate_officers() {
+    TEST("optimize_dock_loadout assigns no duplicate officers");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+
+    std::vector<DockConfig> configs = {
+        {Scenario::PvP,             "", false, "", {}},
+        {Scenario::Hybrid,          "", false, "", {}},
+        {Scenario::PvEHostile,      "", false, "", {}},
+        {Scenario::Armada,          "", false, "", {}},
+        {Scenario::MiningSpeed,     "", false, "", {}},
+        {Scenario::MiningProtected, "", false, "", {}},
+        {Scenario::MiningGeneral,   "", false, "", {}},
+    };
+
+    auto result = optimizer->optimize_dock_loadout(configs, 1);
+
+    std::set<std::string> all_names;
+    for (const auto& d : result.docks) {
+        CHECK(all_names.count(d.captain) == 0,
+              "duplicate captain: " + d.captain);
+        all_names.insert(d.captain);
+        for (const auto& b : d.bridge) {
+            CHECK(all_names.count(b) == 0,
+                  "duplicate bridge officer: " + b);
+            all_names.insert(b);
+        }
+    }
+
+    CHECK(all_names.size() == 21, "expected 21 unique names, got " + std::to_string(all_names.size()));
+    PASS();
+}
+
+void test_loadout_locked_dock() {
+    TEST("optimize_dock_loadout respects locked docks");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+
+    // Lock dock 1 to a specific crew
+    std::vector<DockConfig> configs = {
+        {Scenario::PvP, "", true, "Kirk", {"Dezoc", "Borg Queen"}},
+        {Scenario::Hybrid,      "", false, "", {}},
+        {Scenario::PvEHostile,  "", false, "", {}},
+    };
+
+    auto result = optimizer->optimize_dock_loadout(configs, 1);
+
+    CHECK(result.docks.size() == 3, "expected 3 docks");
+
+    // Dock 1 should be locked with specified crew
+    CHECK(result.docks[0].locked, "dock 1 not marked locked");
+    CHECK(result.docks[0].captain == "Kirk", "locked captain not Kirk");
+    CHECK(result.docks[0].bridge[0] == "Dezoc" || result.docks[0].bridge[0] == "Borg Queen",
+          "locked bridge doesn't contain expected officers");
+
+    // Dock 2 and 3 should NOT use Kirk, Dezoc, or Borg Queen
+    std::set<std::string> locked_names = {"Kirk", "Dezoc", "Borg Queen"};
+    for (size_t i = 1; i < result.docks.size(); ++i) {
+        CHECK(locked_names.count(result.docks[i].captain) == 0,
+              "dock " + std::to_string(i+1) + " reused locked officer " + result.docks[i].captain);
+        for (const auto& b : result.docks[i].bridge) {
+            CHECK(locked_names.count(b) == 0,
+                  "dock " + std::to_string(i+1) + " reused locked officer " + b);
+        }
+    }
+
+    PASS();
+}
+
+void test_loadout_bda_suggestions() {
+    TEST("optimize_dock_loadout generates BDA suggestions per dock");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+
+    std::vector<DockConfig> configs = {
+        {Scenario::PvP,     "", false, "", {}},
+        {Scenario::Hybrid,  "", false, "", {}},
+    };
+
+    auto result = optimizer->optimize_dock_loadout(configs, 1);
+
+    // Each non-locked dock should have BDA suggestions
+    for (const auto& d : result.docks) {
+        if (!d.locked && d.captain != "N/A") {
+            CHECK(!d.bda_suggestions.empty(),
+                  "dock " + std::to_string(d.dock_num) + " has no BDA suggestions");
+
+            // BDA should not include any crew member
+            std::set<std::string> crew_names;
+            crew_names.insert(d.captain);
+            for (const auto& b : d.bridge) crew_names.insert(b);
+            for (const auto& bda : d.bda_suggestions) {
+                CHECK(crew_names.count(bda.name) == 0,
+                      "BDA " + bda.name + " is on dock " + std::to_string(d.dock_num) + " bridge");
+            }
+        }
+    }
+
+    std::cout << "(dock1 bda:" << result.docks[0].bda_suggestions.size()
+              << " dock2 bda:" << result.docks[1].bda_suggestions.size() << ") ";
+    PASS();
+}
+
+void test_loadout_persistence() {
+    TEST("save and load loadout round-trip");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+
+    std::vector<DockConfig> configs = {
+        {Scenario::PvP,     "", false, "", {}},
+        {Scenario::Hybrid,  "", false, "", {}},
+    };
+
+    auto result = optimizer->optimize_dock_loadout(configs, 1);
+
+    std::string path = "data/player_data/test_loadout.json";
+    namespace fs = std::filesystem;
+    fs::create_directories("data/player_data");
+
+    CHECK(CrewOptimizer::save_loadout(result, path, ShipType::Explorer, "Test Ship"),
+          "save failed");
+    CHECK(fs::exists(path), "save file not created");
+
+    LoadoutResult loaded;
+    CHECK(CrewOptimizer::load_loadout(loaded, path), "load failed");
+    CHECK(loaded.docks.size() == result.docks.size(), "dock count mismatch");
+    CHECK(loaded.total_officers_used == result.total_officers_used, "officer count mismatch");
+
+    // Verify dock 1 data preserved
+    CHECK(loaded.docks[0].captain == result.docks[0].captain,
+          "captain not preserved: " + loaded.docks[0].captain);
+    CHECK(loaded.docks[0].bridge.size() == 2, "bridge size not preserved");
+    CHECK(std::abs(loaded.docks[0].score - result.docks[0].score) < 1.0,
+          "score not preserved");
+
+    fs::remove(path);
+    PASS();
+}
+
+void test_loadout_performance() {
+    TEST("7-dock loadout completes in < 15 seconds");
+    CHECK(optimizer != nullptr, "optimizer not created");
+
+    optimizer->set_ship_type(ShipType::Explorer);
+
+    std::vector<DockConfig> configs = {
+        {Scenario::PvP,             "", false, "", {}},
+        {Scenario::Hybrid,          "", false, "", {}},
+        {Scenario::PvEHostile,      "", false, "", {}},
+        {Scenario::Armada,          "", false, "", {}},
+        {Scenario::MiningSpeed,     "", false, "", {}},
+        {Scenario::MiningProtected, "", false, "", {}},
+        {Scenario::MiningGeneral,   "", false, "", {}},
+    };
+
+    auto start = std::chrono::steady_clock::now();
+    auto result = optimizer->optimize_dock_loadout(configs, 1);
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    CHECK(elapsed.count() < 15000,
+          "loadout took " + std::to_string(elapsed.count()) + "ms (limit 15s)");
+    CHECK(result.docks.size() == 7, "wrong dock count");
+
+    std::cout << "(" << elapsed.count() << "ms for 7 docks) ";
+    PASS();
+}
+
+// ---------------------------------------------------------------------------
 // Tests: Planner
 // ---------------------------------------------------------------------------
 
@@ -1468,6 +1787,19 @@ int main(int argc, char* argv[]) {
         test_crew_ship_type_affects_results();
         test_crew_breakdown_fields();
         test_crew_performance();
+
+        std::cout << "\n--- BDA Suggestions ---\n";
+        test_bda_pvp_suggestions();
+        test_bda_respects_excluded();
+        test_bda_state_synergy();
+
+        std::cout << "\n--- 7-Dock Loadout ---\n";
+        test_loadout_basic();
+        test_loadout_no_duplicate_officers();
+        test_loadout_locked_dock();
+        test_loadout_bda_suggestions();
+        test_loadout_persistence();
+        test_loadout_performance();
     } else {
         std::cout << "  (skipped — roster not loaded)\n";
     }
