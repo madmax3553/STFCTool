@@ -1235,7 +1235,7 @@ static Element render_sync(AppState& state) {
                     : text("STOPPED") | color(Color::Red) | bold,
         }),
         hbox({text("  Port:   "), text(std::to_string(state.ingress_server.port()))}),
-        hbox({text("  URL:    "), text("http://localhost:" + std::to_string(state.ingress_server.port()) + "/sync/ingress/")}),
+        hbox({text("  URL:    "), text("http://0.0.0.0:" + std::to_string(state.ingress_server.port()) + "/sync/ingress/")}),
     });
 
     auto player_info = vbox({
@@ -1246,6 +1246,13 @@ static Element render_sync(AppState& state) {
         hbox({text("  Research:  "), text(std::to_string(state.player_data.researches.size()))}),
         hbox({text("  Buildings: "), text(std::to_string(state.player_data.buildings.size()))}),
         hbox({text("  Resources: "), text(std::to_string(state.player_data.resources.size()))}),
+        hbox({text("  Buffs:     "), text(std::to_string(state.player_data.buffs.size()))}),
+        hbox({text("  Jobs:      "), text(std::to_string(state.player_data.jobs.size()))}),
+        hbox({text("  Inventory: "), text(std::to_string(state.player_data.inventory.size()))}),
+        hbox({text("  Traits:    "), text(std::to_string(state.player_data.traits.size()))}),
+        hbox({text("  Techs:     "), text(std::to_string(state.player_data.techs.size()))}),
+        hbox({text("  Missions:  "), text(std::to_string(state.player_data.missions.size()))}),
+        hbox({text("  Slots:     "), text(std::to_string(state.player_data.slots.size()))}),
     });
 
     // Sync event log
@@ -1262,7 +1269,8 @@ static Element render_sync(AppState& state) {
             "/sync/ingress/ \\";
         log_lines.push_back(text(curl_cmd) | color(Color::Yellow));
         log_lines.push_back(text("    -H 'Content-Type: application/json' \\") | color(Color::Yellow));
-        log_lines.push_back(text("    -d '{\"type\":\"officers\",\"data\":[{\"id\":1,\"level\":50,\"rank\":5}]}'") | color(Color::Yellow));
+        log_lines.push_back(text("    -H 'stfc-sync-token: stfctool-local' \\") | color(Color::Yellow));
+        log_lines.push_back(text("    -d '[{\"type\":\"officer\",\"oid\":1,\"level\":50,\"rank\":5,\"shard_count\":100}]'") | color(Color::Yellow));
     } else {
         // Show most recent events first (reverse order), up to 20
         int start = std::max(0, (int)sync_log.size() - 20);
@@ -1298,11 +1306,11 @@ static Element render_sync(AppState& state) {
     auto config_box = vbox({
         text("Community Mod Config") | bold,
         separator(),
-        text("  community/community_patch_settings.toml:") | dim,
+        text("  Game dir: community_patch_settings.toml") | dim,
         separatorEmpty(),
         text("  [sync.targets.local]") | color(Color::Yellow),
-        text("  token = \"\"") | color(Color::Green),
-        text("  url = \"http://localhost:" + std::to_string(state.ingress_server.port()) + "/sync/ingress/\"") | color(Color::Green),
+        text("  token = \"stfctool-local\"") | color(Color::Green),
+        text("  url = \"http://192.168.1.217:" + std::to_string(state.ingress_server.port()) + "/sync/ingress/\"") | color(Color::Green),
     });
 
     return vbox({
@@ -1316,9 +1324,7 @@ static Element render_sync(AppState& state) {
         separator(),
         config_box,
         separator(),
-        text("  [S] Start/stop server  |  Test: curl -X POST localhost:" +
-             std::to_string(state.ingress_server.port()) +
-             "/sync/ingress/ -H 'Content-Type: application/json' -d '{\"type\":\"test\",\"data\":[]}'") | dim,
+        text("  [S] Start/stop server  |  Format: bare JSON array [{\"type\":\"officer\",...}]") | dim,
     });
 }
 

@@ -68,6 +68,8 @@ private:
     bool save_sync_data(const std::string& data_type, const std::string& json_body);
     bool validate_token(const std::string& provided_token);
     void add_sync_event(const std::string& data_type, int count, bool success, const std::string& error = "");
+    void save_player_data();  // persist player_data_ to JSON on disk
+    void load_player_data();  // restore player_data_ from disk
 };
 
 } // namespace stfc

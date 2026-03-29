@@ -366,11 +366,8 @@ auto_confirm_discovery = true
 # The url of the server to proxy the connection through
 proxy = ""
 
-# The token that is used to provide authentication
-token = ""
-
-# The url of the server to send data to
-url = ""
+# Legacy url/token removed — use [sync.targets.<name>] sections below
+# For spocks.club sync, add your token to [sync.targets.spocksclub] below
 
 # Subgroup: Data
 # --------------
@@ -392,8 +389,8 @@ traits = true
 # Subgroup: Diagnostics
 # ---------------------
 
-debug = false
-logging = false
+debug = true
+logging = true
 
 # Subgroup: Network
 # -----------------
@@ -411,18 +408,15 @@ verify_ssl = true
 #
 #  <[=========================================================================================================================================]>
 
-[sync.targets.nextspocksclub]
-# Ucomment the variables below to set them
-
-# The token that is used to provide authentication
-# token = ""
-
-# The url of the server to send data to
-# url = ""
+[sync.targets.spocksclub]
+# Add your spocks.club sync token here
+# Get it from https://spocks.club/syncing
+# token = "your-token-here"
+# url = "https://spocks.club/sync/ingress/"
 
 [sync.targets.local]
 # STFCTool local ingress server
-token = ""
+token = "stfctool-local"
 url = "http://192.168.1.217:8270/sync/ingress/"
 
 #  <[=============================================================================================================]>
@@ -434,12 +428,3 @@ url = "http://192.168.1.217:8270/sync/ingress/"
 #       ****    ***   *  *    ***          ***    *       ***    ***   *   *  ***     ***     *     ****  ****
 #
 #  <[=============================================================================================================]>
-
-[sync.targets.spocksclub]
-# Ucomment the variables below to set them
-
-# The token that is used to provide authentication
-# token = ""
-
-# The url of the server to send data to
-# url = ""

@@ -5,6 +5,7 @@
 #include <vector>
 #include <map>
 #include <optional>
+#include <chrono>
 
 namespace stfc {
 
@@ -190,6 +191,7 @@ struct PlayerOfficer {
     int64_t officer_id = 0;
     int level = 0;
     int rank = 0;
+    int shard_count = 0;
     double attack = 0.0;
     double defense = 0.0;
     double health = 0.0;
@@ -197,9 +199,11 @@ struct PlayerOfficer {
 };
 
 struct PlayerShip {
-    int64_t ship_id = 0;
+    int64_t ship_id = 0;  // psid from mod
+    int64_t hull_id = 0;
     int tier = 0;
     int level = 0;
+    double level_percentage = 0.0;
     std::string name;  // resolved from game data
 };
 
@@ -219,6 +223,55 @@ struct PlayerResource {
     int64_t resource_id = 0;
     int64_t amount = 0;
     std::string name;  // resolved from game data
+};
+
+struct PlayerBuff {
+    int64_t buff_id = 0;
+    int level = 0;
+    int64_t expiry_time = 0;  // unix timestamp, 0 = no expiry
+    bool expired = false;
+};
+
+struct PlayerJob {
+    std::string uuid;
+    int job_type = 0;
+    int64_t start_time = 0;
+    int duration = 0;        // seconds
+    int reduction = 0;       // seconds reduced
+    int64_t research_id = 0; // associated research if applicable
+    int level = 0;
+    bool completed = false;
+};
+
+struct PlayerInventoryItem {
+    int item_type = 0;
+    int64_t ref_id = 0;
+    int64_t count = 0;
+};
+
+struct PlayerSlot {
+    int64_t slot_id = 0;
+    int slot_type = 0;
+    int64_t spec_id = 0;
+    int64_t item_id = 0;
+};
+
+struct PlayerTrait {
+    int64_t officer_id = 0;
+    int64_t trait_id = 0;
+    int level = 0;
+};
+
+struct PlayerTech {
+    int64_t tech_id = 0;
+    int tier = 0;
+    int level = 0;
+    int shard_count = 0;
+};
+
+struct PlayerMission {
+    int64_t mission_id = 0;
+    bool active = false;   // true = in-progress, false = completed
 };
 
 // ---------------------------------------------------------------------------
@@ -246,8 +299,16 @@ struct PlayerData {
     std::vector<PlayerResearch> researches;
     std::vector<PlayerBuilding> buildings;
     std::vector<PlayerResource> resources;
+    std::vector<PlayerBuff> buffs;
+    std::vector<PlayerJob> jobs;
+    std::vector<PlayerInventoryItem> inventory;
+    std::vector<PlayerSlot> slots;
+    std::vector<PlayerTrait> traits;
+    std::vector<PlayerTech> techs;
+    std::vector<PlayerMission> missions;
     int ops_level = 0;
     std::string player_name;
+    std::chrono::system_clock::time_point last_sync;
 };
 
 // Hull type helpers (API values: 0=interceptor, 1=survey, 2=explorer, 3=battleship)
