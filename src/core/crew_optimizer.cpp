@@ -70,6 +70,62 @@ Scenario scenario_from_str(const std::string& s) {
     return Scenario::PvP;
 }
 
+const char* mining_resource_str(MiningResource r) {
+    switch (r) {
+        case MiningResource::None:      return "none";
+        case MiningResource::General:   return "general";
+        case MiningResource::Gas:       return "gas";
+        case MiningResource::Ore:       return "ore";
+        case MiningResource::Crystal:   return "crystal";
+        case MiningResource::Parsteel:  return "parsteel";
+        case MiningResource::Tritanium: return "tritanium";
+        case MiningResource::Dilithium: return "dilithium";
+    }
+    return "none";
+}
+
+const char* mining_objective_str(MiningObjective o) {
+    switch (o) {
+        case MiningObjective::None:      return "none";
+        case MiningObjective::Speed:     return "speed";
+        case MiningObjective::Protected: return "protected";
+        case MiningObjective::Balanced:  return "balanced";
+    }
+    return "none";
+}
+
+MiningResource scenario_mining_resource(Scenario s) {
+    switch (s) {
+        case Scenario::MiningGas:     return MiningResource::Gas;
+        case Scenario::MiningOre:     return MiningResource::Ore;
+        case Scenario::MiningCrystal: return MiningResource::Crystal;
+        case Scenario::MiningSpeed:
+        case Scenario::MiningProtected:
+        case Scenario::MiningGeneral:
+        case Scenario::Loot:
+            return MiningResource::General;
+        default:
+            return MiningResource::None;
+    }
+}
+
+MiningObjective scenario_mining_objective(Scenario s) {
+    switch (s) {
+        case Scenario::MiningSpeed:
+        case Scenario::MiningGas:
+        case Scenario::MiningOre:
+        case Scenario::MiningCrystal:
+            return MiningObjective::Speed;
+        case Scenario::MiningProtected:
+            return MiningObjective::Protected;
+        case Scenario::MiningGeneral:
+        case Scenario::Loot:
+            return MiningObjective::Balanced;
+        default:
+            return MiningObjective::None;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Ship type conversions
 // ---------------------------------------------------------------------------
@@ -79,11 +135,13 @@ const char* ship_type_str(ShipType s) {
         case ShipType::Explorer:     return "explorer";
         case ShipType::Battleship:   return "battleship";
         case ShipType::Interceptor:  return "interceptor";
+        case ShipType::Survey:       return "survey";
     }
     return "unknown";
 }
 
 ShipType ship_type_from_str(const std::string& s) {
+    if (s == "survey")      return ShipType::Survey;
     if (s == "battleship")  return ShipType::Battleship;
     if (s == "interceptor") return ShipType::Interceptor;
     return ShipType::Explorer;
@@ -96,14 +154,14 @@ const ShipRecommendation& get_ship_recommendation(Scenario s) {
         {Scenario::BaseCracker,     {ShipType::Interceptor, "Interceptors deal the most burst damage, ideal for breaking station defenses quickly"}},
         {Scenario::PvEHostile,      {ShipType::Explorer, "Explorers have the best sustained survivability for hostile grinding"}},
         {Scenario::MissionBoss,     {ShipType::Battleship, "Battleships have the highest raw damage output for single-target boss fights"}},
-        {Scenario::Loot,            {ShipType::Explorer, "Explorers are safest for mining/cargo -- high defense means you survive when jumped"}},
+        {Scenario::Loot,            {ShipType::Survey, "Survey ships are the most efficient cargo and gathering hulls"}},
         {Scenario::Armada,          {ShipType::Explorer, "Explorers provide good balanced stats for sustained armada boss fights"}},
-        {Scenario::MiningSpeed,     {ShipType::Explorer, "Explorers are safest for extended mining operations"}},
-        {Scenario::MiningProtected, {ShipType::Explorer, "Explorers survive ganks while protecting cargo"}},
-        {Scenario::MiningCrystal,   {ShipType::Explorer, "Explorers for crystal mining with defense against raiders"}},
-        {Scenario::MiningGas,       {ShipType::Explorer, "Explorers for gas mining with defense against raiders"}},
-        {Scenario::MiningOre,       {ShipType::Explorer, "Explorers for ore mining with defense against raiders"}},
-        {Scenario::MiningGeneral,   {ShipType::Explorer, "Explorers are the safest all-around mining ship"}},
+        {Scenario::MiningSpeed,     {ShipType::Survey, "Survey ships maximize mining throughput"}},
+        {Scenario::MiningProtected, {ShipType::Survey, "Survey ships are the right base hull for protected cargo mining"}},
+        {Scenario::MiningCrystal,   {ShipType::Survey, "Survey ships are purpose-built for crystal mining"}},
+        {Scenario::MiningGas,       {ShipType::Survey, "Survey ships are purpose-built for gas mining"}},
+        {Scenario::MiningOre,       {ShipType::Survey, "Survey ships are purpose-built for ore mining"}},
+        {Scenario::MiningGeneral,   {ShipType::Survey, "Survey ships are the best all-around mining hulls"}},
     };
     return recs.at(s);
 }
@@ -114,6 +172,80 @@ const ShipRecommendation& get_ship_recommendation(Scenario s) {
 
 static bool contains(const std::string& haystack, const std::string& needle) {
     return haystack.find(needle) != std::string::npos;
+}
+
+static double first_pct(const std::string& text) {
+    static const std::regex pct_re(R"((\d+(?:\.\d+)?)\s*%)");
+    std::smatch match;
+    if (std::regex_search(text, match, pct_re)) {
+        try {
+            return std::stod(match[1].str());
+        } catch (...) {
+            return 0.0;
+        }
+    }
+    return 0.0;
+}
+
+static double captain_mining_value(const ClassifiedOfficer& off, Scenario scenario) {
+    switch (scenario) {
+        case Scenario::MiningSpeed:
+            return off.cm_mining_speed_pct + off.oa_mining_speed_pct * 0.8 + off.oa_cargo_pct * 0.15 + off.oa_protected_cargo_pct * 0.1;
+        case Scenario::MiningProtected:
+            return off.cm_protected_cargo_pct + off.oa_protected_cargo_pct + off.cm_cargo_pct * 0.5 + off.oa_cargo_pct * 0.5;
+        case Scenario::MiningGas:
+            return off.cm_mining_gas_pct * 1.2 + off.oa_mining_gas_pct + off.cm_mining_speed_pct * 0.6 + off.oa_mining_speed_pct * 0.5 + off.oa_protected_cargo_pct * 0.2;
+        case Scenario::MiningOre:
+            return off.cm_mining_ore_pct * 1.2 + off.oa_mining_ore_pct + off.cm_mining_speed_pct * 0.6 + off.oa_mining_speed_pct * 0.5 + off.oa_protected_cargo_pct * 0.2;
+        case Scenario::MiningCrystal:
+            return off.cm_mining_crystal_pct * 1.2 + off.oa_mining_crystal_pct + off.cm_mining_speed_pct * 0.6 + off.oa_mining_speed_pct * 0.5 + off.oa_protected_cargo_pct * 0.2;
+        case Scenario::MiningGeneral:
+        case Scenario::Loot:
+            return off.cm_mining_speed_pct + off.oa_mining_speed_pct + off.cm_cargo_pct * 0.5 + off.oa_cargo_pct * 0.7 + off.cm_protected_cargo_pct * 0.5 + off.oa_protected_cargo_pct * 0.7;
+        default:
+            return 0.0;
+    }
+}
+
+static double bridge_mining_value(const ClassifiedOfficer& off, Scenario scenario) {
+    switch (scenario) {
+        case Scenario::MiningSpeed:
+            return off.oa_mining_speed_pct + off.oa_cargo_pct * 0.15 + off.oa_protected_cargo_pct * 0.1;
+        case Scenario::MiningProtected:
+            return off.oa_protected_cargo_pct + off.oa_cargo_pct * 0.6;
+        case Scenario::MiningGas:
+            return off.oa_mining_gas_pct * 1.1 + off.oa_mining_speed_pct * 0.5 + off.oa_protected_cargo_pct * 0.25 + off.oa_cargo_pct * 0.15;
+        case Scenario::MiningOre:
+            return off.oa_mining_ore_pct * 1.1 + off.oa_mining_speed_pct * 0.5 + off.oa_protected_cargo_pct * 0.25 + off.oa_cargo_pct * 0.15;
+        case Scenario::MiningCrystal:
+            return off.oa_mining_crystal_pct * 1.1 + off.oa_mining_speed_pct * 0.5 + off.oa_protected_cargo_pct * 0.25 + off.oa_cargo_pct * 0.15;
+        case Scenario::MiningGeneral:
+        case Scenario::Loot:
+            return off.oa_mining_speed_pct + off.oa_cargo_pct * 0.7 + off.oa_protected_cargo_pct * 0.7;
+        default:
+            return 0.0;
+    }
+}
+
+static std::string extract_section(const std::string& text, const std::string& marker) {
+    auto start = text.find(marker);
+    if (start == std::string::npos) return "";
+    auto next_cm = text.find(" cm:", start + marker.size());
+    auto next_oa = text.find(" oa:", start + marker.size());
+    auto next_bda = text.find(" bda:", start + marker.size());
+    size_t end = std::string::npos;
+    if (next_cm != std::string::npos) end = next_cm;
+    if (next_oa != std::string::npos) end = next_oa;
+    if (next_bda != std::string::npos) end = std::min(end, next_bda);
+    if (end == std::string::npos) return text.substr(start);
+    return text.substr(start, end - start);
+}
+
+static bool contains_phrase(const std::string& text, std::initializer_list<const char*> phrases) {
+    for (const auto* phrase : phrases) {
+        if (contains(text, phrase)) return true;
+    }
+    return false;
 }
 
 static bool contains_any(const std::string& haystack,
@@ -148,6 +280,9 @@ CrewOptimizer::CrewOptimizer(std::vector<RosterOfficer> roster,
         o.causes_effect = r.causes_effect;
         o.player_uses = r.player_uses;
         o.description = std::move(r.description);
+        o.cm_text = extract_section(o.description, "cm:");
+        o.bda_text = extract_section(o.description, "bda:");
+        o.oa_text = extract_section(o.description, "oa:");
         officers_.push_back(std::move(o));
     }
     classify_officers();
@@ -158,11 +293,41 @@ void CrewOptimizer::set_ship_type(ShipType ship) {
     classify_officers();
 }
 
+void CrewOptimizer::dump_mining_debug(std::ostream& os) const {
+    static const std::set<std::string> watch = {
+        "Three Of Eleven", "T'Pring", "Fess", "Mavery", "Quark", "Ten Of Eleven"
+    };
+    os << "=== Mining Debug Dump ===\n";
+    for (const auto& off : officers_) {
+        if (!watch.count(off.name)) continue;
+        os << off.name
+           << " | lvl=" << off.level
+           << " rank=" << off.rank
+           << " | cm=" << off.cm_pct
+           << " oa=" << off.oa_pct << "\n";
+        os << "  cm_text: " << off.cm_text << "\n";
+        os << "  oa_text: " << off.oa_text << "\n";
+        os << "  parsed cm_speed=" << off.cm_mining_speed_pct
+           << " cm_gas=" << off.cm_mining_gas_pct
+           << " cm_ore=" << off.cm_mining_ore_pct
+           << " cm_crystal=" << off.cm_mining_crystal_pct
+           << " cm_pcargo=" << off.cm_protected_cargo_pct
+           << " cm_cargo=" << off.cm_cargo_pct << "\n";
+        os << "  parsed oa_speed=" << off.oa_mining_speed_pct
+           << " oa_gas=" << off.oa_mining_gas_pct
+           << " oa_ore=" << off.oa_mining_ore_pct
+           << " oa_crystal=" << off.oa_mining_crystal_pct
+           << " oa_pcargo=" << off.oa_protected_cargo_pct
+           << " oa_cargo=" << off.oa_cargo_pct << "\n";
+    }
+}
+
 std::vector<std::string> CrewOptimizer::other_ship_types() const {
     switch (ship_type_) {
         case ShipType::Explorer:     return {"interceptor", "battleship"};
         case ShipType::Battleship:   return {"interceptor", "explorer"};
         case ShipType::Interceptor:  return {"battleship", "explorer"};
+        case ShipType::Survey:       return {"interceptor", "battleship", "explorer"};
     }
     return {};
 }
@@ -213,6 +378,18 @@ void CrewOptimizer::classify_officers() {
         off.mining_speed = false;
         off.protected_cargo = false;
         off.node_defense = false;
+        off.cm_mining_speed_pct = 0.0;
+        off.cm_mining_gas_pct = 0.0;
+        off.cm_mining_ore_pct = 0.0;
+        off.cm_mining_crystal_pct = 0.0;
+        off.cm_protected_cargo_pct = 0.0;
+        off.cm_cargo_pct = 0.0;
+        off.oa_mining_speed_pct = 0.0;
+        off.oa_mining_gas_pct = 0.0;
+        off.oa_mining_ore_pct = 0.0;
+        off.oa_mining_crystal_pct = 0.0;
+        off.oa_protected_cargo_pct = 0.0;
+        off.oa_cargo_pct = 0.0;
 
         // Base cracker / station combat
         if (contains_any(d, {"attacking a station", "defence platform",
@@ -254,6 +431,36 @@ void CrewOptimizer::classify_officers() {
                              "defending a mining", "mining defense", "mining node"})) {
             off.node_defense = true;
         }
+
+        const auto& cm = off.cm_text;
+        const auto& oa = off.oa_text;
+        if (contains_phrase(cm, {"mining speed", "base mining speed", "increase mining speed", "increases mining speed"})) {
+            off.cm_mining_speed_pct = off.cm_pct;
+        }
+        if (contains_phrase(cm, {"gas mining", "mining speed (gas)", "gas mining speed"})) {
+            off.cm_mining_gas_pct = off.cm_pct;
+        }
+        if (contains_phrase(cm, {"ore mining", "mining speed (ore)", "ore mining speed"})) {
+            off.cm_mining_ore_pct = off.cm_pct;
+        }
+        if (contains_phrase(cm, {"crystal mining", "mining speed (crystal)", "crystal mining speed"})) {
+            off.cm_mining_crystal_pct = off.cm_pct;
+        }
+        if (contains_phrase(cm, {"protected cargo", "increase protected cargo", "increases protected cargo"})) {
+            off.cm_protected_cargo_pct = off.cm_pct;
+        }
+        if (contains_phrase(cm, {"max cargo", "cargo"})) {
+            off.cm_cargo_pct = off.cm_pct;
+        }
+
+        if (contains_phrase(oa, {"mining speed", "mining rate", "mining efficiency", "increase mining speed", "increases mining speed"})) {
+            off.oa_mining_speed_pct = off.oa_pct > 0.0 ? off.oa_pct : first_pct(oa);
+        }
+        if (contains_phrase(oa, {"gas mining", "gas mining speed"})) off.oa_mining_gas_pct = off.oa_pct > 0.0 ? off.oa_pct : first_pct(oa);
+        if (contains_phrase(oa, {"ore mining", "ore mining speed"})) off.oa_mining_ore_pct = off.oa_pct > 0.0 ? off.oa_pct : first_pct(oa);
+        if (contains_phrase(oa, {"crystal mining", "crystal mining speed"})) off.oa_mining_crystal_pct = off.oa_pct > 0.0 ? off.oa_pct : first_pct(oa);
+        if (contains_phrase(oa, {"protected cargo", "increase protected cargo", "increases protected cargo"})) off.oa_protected_cargo_pct = off.oa_pct > 0.0 ? off.oa_pct : first_pct(oa);
+        if (contains_phrase(oa, {"max cargo", "cargo"})) off.oa_cargo_pct = off.oa_pct > 0.0 ? off.oa_pct : first_pct(oa);
 
         // Armada
         if (contains(d, "armada")) off.armada = true;
@@ -580,12 +787,15 @@ double CrewOptimizer::score_scenario_individual(const ClassifiedOfficer& off,
         break;
 
     case Scenario::MiningSpeed:
-        if (off.mining_speed) score *= 4.0;
-        else if (off.mining) score *= 2.5;
-        if (off.cargo) score *= 1.5;
+        if (off.mining_speed) score *= 6.0;
+        else if (off.mining) score *= 3.0;
+        if (off.mining_gas || off.mining_ore || off.mining_crystal) score *= 1.8;
+        if (off.cargo) score *= 1.4;
+        if (off.protected_cargo) score *= 1.2;
         if (off.warp) score *= 1.2;
-        if (off.node_defense) score *= 1.3;
-        if (!off.mining && !off.mining_speed && !off.cargo) score *= 0.2;
+        if (off.node_defense) score *= 1.2;
+        if (off.is_pvp_specific && !off.mining && !off.cargo) score *= 0.15;
+        if (!off.mining && !off.mining_speed && !off.cargo) score *= 0.1;
         break;
 
     case Scenario::MiningProtected:
@@ -609,13 +819,14 @@ double CrewOptimizer::score_scenario_individual(const ClassifiedOfficer& off,
         break;
 
     case Scenario::MiningGas:
-        if (off.mining_gas) score *= 4.0;
-        else if (off.mining) score *= 2.0;
-        if (off.mining_speed) score *= 1.5;
-        if (off.cargo) score *= 1.3;
-        if (off.protected_cargo) score *= 1.3;
+        if (off.mining_gas) score *= 7.0;
+        else if (off.mining) score *= 2.5;
+        if (off.mining_speed) score *= 2.0;
+        if (off.cargo) score *= 1.5;
+        if (off.protected_cargo) score *= 1.6;
         if (off.node_defense) score *= 1.2;
-        if (!off.mining && !off.mining_gas && !off.cargo) score *= 0.2;
+        if (off.is_pvp_specific && !off.mining && !off.cargo) score *= 0.15;
+        if (!off.mining && !off.mining_gas && !off.cargo) score *= 0.08;
         break;
 
     case Scenario::MiningOre:
@@ -801,7 +1012,9 @@ void CrewOptimizer::apply_oa_ship_penalty(double& total, CrewBreakdown& bd,
 }
 
 // OA% bonus: all bridge officers' Officer Abilities fire passively.
-// Officers with higher OA% have stronger abilities. BDAs (cm_pct >= 10000)
+// Officers with higher OA% have stronger abilities. Dedicated BDAs are detected
+// from the roster's CM/BDA slot and excluded since they are designed as
+// below-deck officers.
 // are excluded since they're designed as below-deck.
 void CrewOptimizer::apply_oa_bonus(double& total, CrewBreakdown& bd,
                                     const ClassifiedOfficer* crew[3]) const {
@@ -1051,12 +1264,15 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
 
     const ClassifiedOfficer* crew[3] = {&captain, &b1, &b2};
     double total = 0.0;
+    CandidateScore score_parts;
 
     for (int i = 0; i < 3; ++i) {
         double s = score_scenario_individual(*crew[i], scenario);
         bd.individual_scores[crew[i]->name] = s;
         total += s;
     }
+    bd.raw_total = total;
+    score_parts.raw_individual = total;
 
     std::string ship_label = ship_type_str(ship_type_);
     ship_label[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(ship_label[0])));
@@ -1071,13 +1287,16 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
         total -= penalty;
         bd.penalties.push_back("'" + captain.name + "' CM locked to non-" + ship_label + " ship type");
     } else {
-        total += std::min(captain.cm_pct, 500.0) * 50.0;
+        double captain_slot_bonus = std::min(captain.cm_pct, 500.0) * 50.0;
+        total += captain_slot_bonus;
+        score_parts.captain_slot += captain_slot_bonus;
     }
 
     // Ability amplifier captain
     if (captain.ability_amplifier) {
         total += 50000;
         bd.amplifier_bonus = 50000;
+        score_parts.synergy += 50000;
         bd.synergy_notes.push_back(
             "Ability amplifier captain '" + captain.name + "' boosts all bridge abilities");
     }
@@ -1178,6 +1397,48 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
         double total_def = 0, total_hp = 0;
         for (int i = 0; i < 3; ++i) { total_def += crew[i]->defense; total_hp += crew[i]->health; }
         scenario_bonus += static_cast<int>(total_def * 0.1 + total_hp * 0.05);
+    } else if (scenario == Scenario::MiningSpeed ||
+               scenario == Scenario::MiningProtected ||
+               scenario == Scenario::MiningGas ||
+               scenario == Scenario::MiningOre ||
+               scenario == Scenario::MiningCrystal ||
+               scenario == Scenario::MiningGeneral ||
+               scenario == Scenario::Loot) {
+        double mining_value = captain_mining_value(captain, scenario) +
+                              bridge_mining_value(b1, scenario) +
+                              bridge_mining_value(b2, scenario);
+        scenario_bonus += mining_value * 400.0;
+        bd.synergy_notes.push_back(
+            "Seat-aware mining value: " + std::to_string(static_cast<int>(std::round(mining_value))) + "%");
+
+        double bridge_specialists = bridge_mining_value(b1, scenario) + bridge_mining_value(b2, scenario);
+        if (bridge_specialists > 0.0) {
+            scenario_bonus += bridge_specialists * 120.0;
+        }
+
+        if (captain_mining_value(captain, scenario) <= 0.0) {
+            double penalty = total * 0.18;
+            total -= penalty;
+            bd.penalty_total += penalty;
+            score_parts.penalties += penalty;
+            bd.penalties.push_back("Captain has no relevant mining captain-seat value");
+        }
+
+        if (scenario == Scenario::MiningGas &&
+            (captain.cm_mining_gas_pct > 0.0 || b1.oa_mining_gas_pct > 0.0 || b2.oa_mining_gas_pct > 0.0)) {
+            scenario_bonus += 20000;
+            bd.synergy_notes.push_back("Gas-specific mining effects detected");
+        }
+        if (scenario == Scenario::MiningSpeed &&
+            (captain.cm_mining_speed_pct > 0.0 || b1.oa_mining_speed_pct > 0.0 || b2.oa_mining_speed_pct > 0.0)) {
+            scenario_bonus += 15000;
+            bd.synergy_notes.push_back("Mining-speed effects detected");
+        }
+        if (scenario == Scenario::MiningProtected &&
+            (captain.cm_protected_cargo_pct > 0.0 || b1.oa_protected_cargo_pct > 0.0 || b2.oa_protected_cargo_pct > 0.0)) {
+            scenario_bonus += 15000;
+            bd.synergy_notes.push_back("Protected cargo effects detected");
+        }
     } else if (scenario == Scenario::Armada) {
         int armada_count = 0;
         for (int i = 0; i < 3; ++i) if (crew[i]->armada) ++armada_count;
@@ -1193,6 +1454,7 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
 
     total += scenario_bonus;
     bd.scenario_bonus = scenario_bonus;
+    score_parts.scenario += scenario_bonus;
 
     // Weakness counters (only for pvp/base_cracker in generic)
     if (scenario == Scenario::BaseCracker) {
@@ -1212,6 +1474,7 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
         }
         total += weakness_bonus;
         bd.weakness_counter_bonus = weakness_bonus;
+        score_parts.synergy += weakness_bonus;
     }
 
     // Scenario-specific penalties
@@ -1220,11 +1483,15 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
             if (crew[i]->mining || crew[i]->cargo) {
                 double penalty = total * 0.15;
                 total -= penalty;
+                bd.penalty_total += penalty;
+                score_parts.penalties += penalty;
                 bd.penalties.push_back("'" + crew[i]->name + "' is a mining/cargo officer -- useless in station combat");
             }
             if (crew[i]->base_defend && !crew[i]->base_attack) {
                 double penalty = total * 0.2;
                 total -= penalty;
+                bd.penalty_total += penalty;
+                score_parts.penalties += penalty;
                 bd.penalties.push_back("'" + crew[i]->name + "' is a station DEFENDER -- wrong role for attacking");
             }
         }
@@ -1233,11 +1500,15 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
             if (crew[i]->non_armada_only) {
                 double penalty = total * 0.3;
                 total -= penalty;
+                bd.penalty_total += penalty;
+                score_parts.penalties += penalty;
                 bd.penalties.push_back("'" + crew[i]->name + "' explicitly does NOT work in armadas");
             }
             if (crew[i]->mining || crew[i]->cargo) {
                 double penalty = total * 0.15;
                 total -= penalty;
+                bd.penalty_total += penalty;
+                score_parts.penalties += penalty;
                 bd.penalties.push_back("'" + crew[i]->name + "' is a mining/cargo officer -- useless in armada");
             }
         }
@@ -1246,16 +1517,37 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
             if (crew[i]->is_pvp_specific && !crew[i]->mining && !crew[i]->cargo && !crew[i]->loot) {
                 double penalty = total * 0.1;
                 total -= penalty;
+                bd.penalty_total += penalty;
+                score_parts.penalties += penalty;
                 bd.penalties.push_back("'" + crew[i]->name + "' is PvP-only -- limited value while mining");
+            }
+        }
+    } else if (scenario == Scenario::MiningSpeed || scenario == Scenario::MiningGas) {
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->is_pvp_specific && !crew[i]->mining && !crew[i]->cargo) {
+                double penalty = total * 0.2;
+                total -= penalty;
+                bd.penalty_total += penalty;
+                score_parts.penalties += penalty;
+                bd.penalties.push_back("'" + crew[i]->name + "' is combat-focused -- weak mining value");
             }
         }
     }
 
     // OA% bonus — bridge officers with strong abilities
+    double before_oa = total;
     apply_oa_bonus(total, bd, crew);
+    score_parts.bridge_slot += (total - before_oa);
 
     // OA ship-lock penalty
+    double before_ship_penalty = total;
     apply_oa_ship_penalty(total, bd, b1, b2);
+    if (before_ship_penalty > total) {
+        score_parts.penalties += (before_ship_penalty - total);
+        bd.penalty_total += (before_ship_penalty - total);
+    }
+
+    bd.synergy_bonus = score_parts.synergy;
 
     result.score = total;
     return result;
@@ -1395,6 +1687,7 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
     struct ScoredBda {
         const ClassifiedOfficer* off;
         double score;
+        bool dedicated_bda;
         std::vector<std::string> reasons;
     };
     std::vector<ScoredBda> candidates;
@@ -1405,13 +1698,22 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
 
         double score = 0.0;
         std::vector<std::string> reasons;
+        bool dedicated_bda = off.is_bda();
 
         // 1. Base OA value
-        if (off.oa_pct >= 10000.0) {
-            score += 5000.0;
+        if (dedicated_bda) {
+            score += 50000.0;
             reasons.push_back("Designed as BDA officer");
+        } else {
+            // Non-BDA officers are fallback options only.
+            score -= 25000.0;
         }
         score += std::min(off.oa_pct, 500.0) * 10.0;
+        double bda_effect = off.bda_effect_pct();
+        if (bda_effect > 0) {
+            score += std::min(bda_effect, 300.0) * 120.0;
+            reasons.push_back("Strong BDA effect: " + std::to_string((int)std::round(bda_effect)) + "%");
+        }
 
         // 2. State synergy: BDA applies states the crew benefits from
         std::set<std::string> chain_add;
@@ -1457,36 +1759,194 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
             reasons.push_back("Adds mitigation");
         }
 
-        // 5. Stat contribution (BDA gives partial stats)
+        // 5. Scenario fit: below-deck picks still need to match the dock's job.
+        switch (mode) {
+        case Scenario::PvP:
+            if (off.is_pvp_specific) {
+                score += 15000.0;
+                reasons.push_back("Fits PvP dock");
+            }
+            if (off.crit_related) score += 5000.0;
+            if (off.shots_related) score += 5000.0;
+            if (off.isolytic_related) score += 5000.0;
+            if (off.is_pve_specific && !off.is_pvp_specific) score -= 12000.0;
+            break;
+
+        case Scenario::Hybrid:
+            if (off.is_dual_use) {
+                score += 12000.0;
+                reasons.push_back("Fits hybrid dock");
+            }
+            if (off.is_pve_specific && !off.is_dual_use) score -= 4000.0;
+            if (off.is_pvp_specific && !off.is_dual_use) score -= 4000.0;
+            break;
+
+        case Scenario::BaseCracker:
+            if (off.base_attack) {
+                score += 20000.0;
+                reasons.push_back("Fits station attack");
+            }
+            if (off.weapon_delay) score += 8000.0;
+            if (off.base_defend) score -= 10000.0;
+            if (off.mining || off.cargo) score -= 12000.0;
+            break;
+
+        case Scenario::PvEHostile:
+            if (off.pve_hostile) {
+                score += 18000.0;
+                reasons.push_back("Fits hostile grinding");
+            }
+            if (off.repair) score += 6000.0;
+            if (off.loot) score += 4000.0;
+            if (off.is_pvp_specific && !off.pve_hostile) score -= 10000.0;
+            break;
+
+        case Scenario::MissionBoss:
+            if (off.mission_boss || off.pve_hostile) {
+                score += 16000.0;
+                reasons.push_back("Fits mission boss");
+            }
+            if (off.crit_related) score += 6000.0;
+            if (off.isolytic_related) score += 6000.0;
+            if (off.armada && !off.pve_hostile) score -= 5000.0;
+            break;
+
+        case Scenario::Loot:
+            if (off.loot) {
+                score += 18000.0;
+                reasons.push_back("Fits loot dock");
+            }
+            if (off.mining) score += 12000.0;
+            if (off.cargo) score += 10000.0;
+            if (off.warp) score += 4000.0;
+            if (contains(off.bda_text, "loot") || contains(off.bda_text, "reward")) score += 12000.0;
+            if (contains(off.bda_text, "cargo")) score += 8000.0;
+            if (!off.loot && !off.mining && !off.cargo && !off.warp) score -= 10000.0;
+            break;
+
+        case Scenario::Armada:
+            if (off.armada) {
+                score += 20000.0;
+                reasons.push_back("Fits armada dock");
+            }
+            if (off.armada_solo) score += 6000.0;
+            if (off.crit_related) score += 5000.0;
+            if (off.isolytic_related) score += 5000.0;
+            if (off.non_armada_only) score -= 15000.0;
+            break;
+
+        case Scenario::MiningSpeed:
+            if (off.mining_speed) {
+                score += 25000.0;
+                reasons.push_back("Fits mining speed dock");
+            }
+            if (off.mining) score += 12000.0;
+            if (off.cargo) score += 5000.0;
+            if (contains(off.bda_text, "mining speed") || contains(off.bda_text, "mining rate") || contains(off.bda_text, "mining efficiency")) {
+                score += 16000.0;
+            }
+            if (!off.mining_speed && !off.mining && !off.cargo) score -= 12000.0;
+            break;
+
+        case Scenario::MiningProtected:
+            if (off.protected_cargo) {
+                score += 25000.0;
+                reasons.push_back("Fits protected cargo dock");
+            }
+            if (off.cargo) score += 12000.0;
+            if (off.node_defense) score += 8000.0;
+            if (off.mining) score += 5000.0;
+            if (contains(off.bda_text, "protected cargo") || contains(off.bda_text, "protect cargo")) {
+                score += 16000.0;
+            }
+            if (!off.protected_cargo && !off.cargo && !off.node_defense) score -= 12000.0;
+            break;
+
+        case Scenario::MiningCrystal:
+            if (off.mining_crystal) {
+                score += 25000.0;
+                reasons.push_back("Fits crystal mining dock");
+            }
+            if (off.mining_speed) score += 10000.0;
+            if (off.mining) score += 8000.0;
+            if (off.cargo || off.protected_cargo) score += 4000.0;
+            if (contains(off.bda_text, "crystal")) score += 16000.0;
+            if (!off.mining_crystal && !off.mining && !off.cargo) score -= 12000.0;
+            break;
+
+        case Scenario::MiningGas:
+            if (off.mining_gas) {
+                score += 25000.0;
+                reasons.push_back("Fits gas mining dock");
+            }
+            if (off.mining_speed) score += 10000.0;
+            if (off.mining) score += 8000.0;
+            if (off.cargo || off.protected_cargo) score += 4000.0;
+            if (contains(off.bda_text, "gas")) score += 16000.0;
+            if (!off.mining_gas && !off.mining && !off.cargo) score -= 12000.0;
+            break;
+
+        case Scenario::MiningOre:
+            if (off.mining_ore) {
+                score += 25000.0;
+                reasons.push_back("Fits ore mining dock");
+            }
+            if (off.mining_speed) score += 10000.0;
+            if (off.mining) score += 8000.0;
+            if (off.cargo || off.protected_cargo) score += 4000.0;
+            if (contains(off.bda_text, "ore")) score += 16000.0;
+            if (!off.mining_ore && !off.mining && !off.cargo) score -= 12000.0;
+            break;
+
+        case Scenario::MiningGeneral:
+            if (off.mining) {
+                score += 18000.0;
+                reasons.push_back("Fits mining dock");
+            }
+            if (off.mining_speed) score += 12000.0;
+            if (off.cargo) score += 10000.0;
+            if (off.protected_cargo) score += 8000.0;
+            if (off.node_defense) score += 5000.0;
+            if (contains(off.bda_text, "mining") || contains(off.bda_text, "cargo")) score += 12000.0;
+            if (!off.mining && !off.cargo && !off.protected_cargo) score -= 12000.0;
+            break;
+        }
+
+        // 6. Stat contribution (BDA gives partial stats)
         double stat_score = off.attack * 0.2 + off.defense * 0.15 + off.health * 0.1;
         score += stat_score;
 
-        // 6. Ship-type match multiplier
+        // 7. Ship-type match multiplier
         if (off.is_ship_specific) {
             score *= 1.2;
         }
 
-        // 7. OA ship compatibility penalty
+        // 8. OA ship compatibility penalty
         if (!oa_works_on_ship(off)) {
             score *= 0.3;
         }
 
-        // 8. Hybrid dual-use bonus
+        // 9. Hybrid dual-use bonus
         if (mode == Scenario::Hybrid && off.is_dual_use) {
             score *= 1.15;
         }
 
-        // 9. Default reason
+        // 10. Default reason
         if (reasons.empty()) {
             reasons.push_back("General stat contribution");
         }
 
-        candidates.push_back({&off, score, std::move(reasons)});
+        candidates.push_back({&off, score, dedicated_bda, std::move(reasons)});
     }
 
-    // Sort by score descending
+    // Sort dedicated BDAs ahead of fallback bridge officers.
     std::sort(candidates.begin(), candidates.end(),
-              [](const ScoredBda& a, const ScoredBda& b) { return a.score > b.score; });
+              [](const ScoredBda& a, const ScoredBda& b) {
+                  if (a.dedicated_bda != b.dedicated_bda) {
+                      return a.dedicated_bda > b.dedicated_bda;
+                  }
+                  return a.score > b.score;
+              });
 
     // Build result
     std::vector<BdaSuggestion> result;
@@ -1517,128 +1977,156 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
 
 LoadoutResult CrewOptimizer::optimize_dock_loadout(
     const std::vector<DockConfig>& dock_configs,
+    const std::vector<OwnedShipCandidate>& owned_ships,
     int top_n)
 {
     LoadoutResult loadout;
-    loadout.docks.resize(dock_configs.size());
+    const size_t n_docks = std::min(dock_configs.size(), size_t(7));
+    loadout.docks.resize(n_docks);
     std::set<std::string> excluded;
+    std::set<std::string> used_ships;
     ShipType original_ship = ship_type_;
 
-    const size_t n_docks = std::min(dock_configs.size(), size_t(7));
+    auto score_owned_ship = [](const OwnedShipCandidate& ship, Scenario scenario) {
+        std::string lower_name = ship.name;
+        for (auto& c : lower_name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-    // -----------------------------------------------------------------------
-    // Phase 0: Handle locked docks first — they always claim their officers
-    // -----------------------------------------------------------------------
-    for (size_t i = 0; i < n_docks; ++i) {
-        const auto& cfg = dock_configs[i];
-        if (!cfg.locked || cfg.locked_captain.empty()) continue;
+        int score = ship.tier * 12 + ship.level + ship.rarity * 24;
 
-        auto& dr = loadout.docks[i];
-        dr.dock_num = static_cast<int>(i) + 1;
-        dr.scenario = cfg.scenario;
-        dr.scenario_label_str = scenario_label(cfg.scenario);
+        auto has_name = [&](const std::string& token) {
+            return lower_name.find(token) != std::string::npos;
+        };
 
-        const auto& rec = get_ship_recommendation(cfg.scenario);
-        dr.ship_recommended = ship_type_str(rec.best);
-        dr.ship_used = cfg.ship_override.empty()
-            ? dr.ship_recommended : cfg.ship_override;
-        dr.locked = true;
-        dr.captain = cfg.locked_captain;
-        dr.bridge = cfg.locked_bridge;
+        auto grade_band_bonus = [&](int target_grade) {
+            int diff = std::abs(ship.grade - target_grade);
+            if (diff == 0) return 140;
+            if (diff == 1) return 80;
+            if (diff == 2) return 30;
+            return -120 * diff;
+        };
 
-        // Score the locked crew for display
-        const ClassifiedOfficer* cap_off = nullptr;
-        const ClassifiedOfficer* b1_off = nullptr;
-        const ClassifiedOfficer* b2_off = nullptr;
-        for (const auto& off : officers_) {
-            if (off.name == cfg.locked_captain) cap_off = &off;
-            if (cfg.locked_bridge.size() > 0 && off.name == cfg.locked_bridge[0]) b1_off = &off;
-            if (cfg.locked_bridge.size() > 1 && off.name == cfg.locked_bridge[1]) b2_off = &off;
+        switch (scenario) {
+            case Scenario::PvP:
+            case Scenario::Hybrid:
+            case Scenario::BaseCracker:
+                score += grade_band_bonus(6);
+                if (ship.ship_type == ShipType::Interceptor) score += 90;
+                if (ship.ship_type == ShipType::Battleship) score += 70;
+                if (ship.ship_type == ShipType::Explorer) score += 50;
+                if (has_name("revenant") || has_name("cube")) score += 120;
+                break;
+            case Scenario::Armada:
+            case Scenario::MissionBoss:
+            case Scenario::PvEHostile:
+                score += grade_band_bonus(6);
+                if (ship.ship_type == ShipType::Explorer) score += 95;
+                if (ship.ship_type == ShipType::Battleship) score += 70;
+                if (ship.ship_type == ShipType::Interceptor) score += 50;
+                if (has_name("protector") || has_name("voyager") || has_name("cerritos")) score += 120;
+                break;
+            case Scenario::Loot:
+            case Scenario::MiningSpeed:
+            case Scenario::MiningProtected:
+            case Scenario::MiningCrystal:
+            case Scenario::MiningGas:
+            case Scenario::MiningOre:
+            case Scenario::MiningGeneral:
+                score += grade_band_bonus(6);
+                if (ship.ship_type == ShipType::Survey) score += 120;
+                if (ship.ship_type == ShipType::Explorer) score += 30;
+                if (has_name("selkie")) score += 240;
+                if (has_name("meridian")) score += 140;
+                if (has_name("feesha") || has_name("d'vor")) score -= 180;
+                if (has_name("north star")) score -= 220;
+                break;
         }
-        if (cap_off && b1_off && b2_off) {
-            CrewResult cr = score_scenario_crew(*cap_off, *b1_off, *b2_off, cfg.scenario);
-            dr.score = cr.score;
-            dr.breakdown = cr.breakdown;
-        }
-
-        excluded.insert(cfg.locked_captain);
-        for (const auto& b : cfg.locked_bridge) excluded.insert(b);
-    }
-
-    // -----------------------------------------------------------------------
-    // Phase 1: Assess constraint level of each unlocked dock
-    //
-    // "Most constrained" = fewest viable specialists. Mining and loot docks
-    // typically have very few officers with relevant tags, so they should
-    // pick first before combat scenarios eat all the good stat sticks.
-    // -----------------------------------------------------------------------
-    struct DockOrder {
-        size_t index;
-        int viable_count;  // # officers scoring above median threshold
+        return score;
     };
-    std::vector<DockOrder> unlocked_order;
+
+    auto choose_ship_for_dock = [&](const DockConfig& cfg, const std::string& recommended) {
+        if (!cfg.ship_override.empty()) return cfg.ship_override;
+
+        auto requires_survey = [&](Scenario scenario) {
+            switch (scenario) {
+                case Scenario::Loot:
+                case Scenario::MiningSpeed:
+                case Scenario::MiningProtected:
+                case Scenario::MiningCrystal:
+                case Scenario::MiningGas:
+                case Scenario::MiningOre:
+                case Scenario::MiningGeneral:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+
+        int best_score = -1;
+        std::string best_name;
+        for (const auto& ship : owned_ships) {
+            if (ship.name.empty() || used_ships.count(ship.name)) continue;
+            if (requires_survey(cfg.scenario) && ship.ship_type != ShipType::Survey) continue;
+            int score = score_owned_ship(ship, cfg.scenario);
+            if (score > best_score) {
+                best_score = score;
+                best_name = ship.name;
+            }
+        }
+        return best_name.empty() ? recommended : best_name;
+    };
+
+    auto choose_ship_type = [&](const std::string& ship_name, Scenario scenario) {
+        for (const auto& ship : owned_ships) {
+            if (ship.name == ship_name) return ship.ship_type;
+        }
+        return ship_type_from_str(ship_name.empty() ? ship_type_str(get_ship_recommendation(scenario).best) : ship_name);
+    };
 
     for (size_t i = 0; i < n_docks; ++i) {
-        if (dock_configs[i].locked && !dock_configs[i].locked_captain.empty()) continue;
-
-        const auto& cfg = dock_configs[i];
-
-        // Temporarily switch ship type for scoring
-        ShipType target_ship = ship_type_from_str(
-            cfg.ship_override.empty()
-                ? ship_type_str(get_ship_recommendation(cfg.scenario).best)
-                : cfg.ship_override);
-        if (target_ship != ship_type_) set_ship_type(target_ship);
-
-        // Score all non-excluded officers for this scenario
-        int viable = 0;
-        double total_score = 0.0;
-        int n_scored = 0;
-        for (const auto& off : officers_) {
-            if (excluded.count(off.name)) continue;
-            double s = score_scenario_individual(off, cfg.scenario);
-            total_score += s;
-            ++n_scored;
-        }
-        // Count officers above the mean score as "viable specialists"
-        double mean = (n_scored > 0) ? total_score / n_scored : 0.0;
-        for (const auto& off : officers_) {
-            if (excluded.count(off.name)) continue;
-            double s = score_scenario_individual(off, cfg.scenario);
-            if (s > mean * 1.5) ++viable;  // well above average = specialist
-        }
-
-        if (ship_type_ != original_ship) set_ship_type(original_ship);
-
-        unlocked_order.push_back({i, viable});
-    }
-
-    // Sort: fewest viable specialists first (most constrained)
-    std::sort(unlocked_order.begin(), unlocked_order.end(),
-              [](const DockOrder& a, const DockOrder& b) {
-                  return a.viable_count < b.viable_count;
-              });
-
-    // -----------------------------------------------------------------------
-    // Phase 2: Optimize docks in most-constrained-first order
-    // -----------------------------------------------------------------------
-    for (const auto& dord : unlocked_order) {
-        size_t i = dord.index;
         const auto& cfg = dock_configs[i];
         auto& dr = loadout.docks[i];
 
         dr.dock_num = static_cast<int>(i) + 1;
         dr.scenario = cfg.scenario;
         dr.scenario_label_str = scenario_label(cfg.scenario);
+        dr.priority = cfg.priority;
+        dr.purpose = cfg.purpose;
+        dr.mining_resource = cfg.mining_resource == MiningResource::None
+            ? scenario_mining_resource(cfg.scenario) : cfg.mining_resource;
+        dr.mining_objective = cfg.mining_objective == MiningObjective::None
+            ? scenario_mining_objective(cfg.scenario) : cfg.mining_objective;
 
         const auto& rec = get_ship_recommendation(cfg.scenario);
         dr.ship_recommended = ship_type_str(rec.best);
-        dr.ship_used = cfg.ship_override.empty()
-            ? dr.ship_recommended : cfg.ship_override;
-        dr.locked = false;
+        dr.ship_used = choose_ship_for_dock(cfg, dr.ship_recommended);
+        dr.locked = cfg.locked;
+        if (!dr.ship_used.empty()) used_ships.insert(dr.ship_used);
+
+        if (cfg.locked && !cfg.locked_captain.empty()) {
+            dr.captain = cfg.locked_captain;
+            dr.bridge = cfg.locked_bridge;
+
+            const ClassifiedOfficer* cap_off = nullptr;
+            const ClassifiedOfficer* b1_off = nullptr;
+            const ClassifiedOfficer* b2_off = nullptr;
+            for (const auto& off : officers_) {
+                if (off.name == cfg.locked_captain) cap_off = &off;
+                if (cfg.locked_bridge.size() > 0 && off.name == cfg.locked_bridge[0]) b1_off = &off;
+                if (cfg.locked_bridge.size() > 1 && off.name == cfg.locked_bridge[1]) b2_off = &off;
+            }
+            if (cap_off && b1_off && b2_off) {
+                CrewResult cr = score_scenario_crew(*cap_off, *b1_off, *b2_off, cfg.scenario);
+                dr.score = cr.score;
+                dr.breakdown = cr.breakdown;
+            }
+
+            excluded.insert(cfg.locked_captain);
+            for (const auto& b : cfg.locked_bridge) excluded.insert(b);
+            continue;
+        }
 
         // Switch ship type if needed
-        ShipType target_ship = ship_type_from_str(dr.ship_used);
+        ShipType target_ship = choose_ship_type(dr.ship_used, cfg.scenario);
         if (target_ship != ship_type_) set_ship_type(target_ship);
 
         auto crews = find_best_crews(cfg.scenario, top_n, excluded);
@@ -1757,7 +2245,11 @@ bool CrewOptimizer::save_loadout(const LoadoutResult& result,
     j["ship_display"] = ship_display.empty() ? ship_type_str(ship) : ship_display;
 
     namespace fs = std::filesystem;
-    fs::create_directories(fs::path(path).parent_path());
+    fs::path out_path(path);
+    const fs::path parent = out_path.parent_path();
+    if (!parent.empty()) {
+        fs::create_directories(parent);
+    }
     std::ofstream f(path);
     if (!f.is_open()) return false;
     f << j.dump(2);

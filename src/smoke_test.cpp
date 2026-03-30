@@ -1212,7 +1212,7 @@ void test_loadout_basic() {
         {Scenario::MiningGeneral,   "", false, "", {}},
     };
 
-    auto result = optimizer->optimize_dock_loadout(configs, 1);
+    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
 
     CHECK(result.docks.size() == 7, "expected 7 docks, got " + std::to_string(result.docks.size()));
     CHECK(result.total_officers_used == 21,
@@ -1248,7 +1248,7 @@ void test_loadout_no_duplicate_officers() {
         {Scenario::MiningGeneral,   "", false, "", {}},
     };
 
-    auto result = optimizer->optimize_dock_loadout(configs, 1);
+    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
 
     std::set<std::string> all_names;
     for (const auto& d : result.docks) {
@@ -1279,7 +1279,7 @@ void test_loadout_locked_dock() {
         {Scenario::PvEHostile,  "", false, "", {}},
     };
 
-    auto result = optimizer->optimize_dock_loadout(configs, 1);
+    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
 
     CHECK(result.docks.size() == 3, "expected 3 docks");
 
@@ -1314,7 +1314,7 @@ void test_loadout_bda_suggestions() {
         {Scenario::Hybrid,  "", false, "", {}},
     };
 
-    auto result = optimizer->optimize_dock_loadout(configs, 1);
+    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
 
     // Each non-locked dock should have BDA suggestions
     for (const auto& d : result.docks) {
@@ -1349,7 +1349,7 @@ void test_loadout_persistence() {
         {Scenario::Hybrid,  "", false, "", {}},
     };
 
-    auto result = optimizer->optimize_dock_loadout(configs, 1);
+    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
 
     std::string path = "data/player_data/test_loadout.json";
     namespace fs = std::filesystem;
@@ -1392,7 +1392,7 @@ void test_loadout_performance() {
     };
 
     auto start = std::chrono::steady_clock::now();
-    auto result = optimizer->optimize_dock_loadout(configs, 1);
+    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
 

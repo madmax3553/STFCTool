@@ -27,7 +27,8 @@ struct RosterOfficer {
     bool player_uses = false;    // whether player marked this officer as used
     std::string description;     // full CM/BDA/OA text
 
-    // Derived: BDA officers have cm_pct >= 10000 or description starts with "bda:"
+    // Derived: BDA officers have their BDA percentage in the CM/BDA slot or
+    // description starts with "bda:".
     bool is_bda() const {
         if (cm_pct >= 10000.0) return true;
         if (description.size() >= 4 &&

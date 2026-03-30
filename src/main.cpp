@@ -5,7 +5,9 @@
 #include <iomanip>
 #include <thread>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <atomic>
 #include <mutex>
@@ -28,6 +30,401 @@ using namespace ftxui;
 namespace fs = std::filesystem;
 
 namespace stfc {
+
+namespace {
+
+std::string mining_descriptor(const DockConfig& cfg) {
+    MiningResource resource = cfg.mining_resource == MiningResource::None
+        ? scenario_mining_resource(cfg.scenario) : cfg.mining_resource;
+    MiningObjective objective = cfg.mining_objective == MiningObjective::None
+        ? scenario_mining_objective(cfg.scenario) : cfg.mining_objective;
+    if (resource == MiningResource::None && objective == MiningObjective::None) return "";
+    return std::string(mining_resource_str(resource)) + " + " + mining_objective_str(objective);
+}
+
+std::string mining_descriptor(const DockResult& dr) {
+    if (dr.mining_resource == MiningResource::None && dr.mining_objective == MiningObjective::None) return "";
+    return std::string(mining_resource_str(dr.mining_resource)) + " + " + mining_objective_str(dr.mining_objective);
+}
+
+bool is_mining_scenario(Scenario s) {
+    switch (s) {
+        case Scenario::Loot:
+        case Scenario::MiningSpeed:
+        case Scenario::MiningProtected:
+        case Scenario::MiningCrystal:
+        case Scenario::MiningGas:
+        case Scenario::MiningOre:
+        case Scenario::MiningGeneral:
+            return true;
+        default:
+            return false;
+    }
+}
+
+enum class LoadoutPosture {
+    WarLowAttention,
+    WarActive,
+    GrowthLowAttention,
+    MiningPush,
+    ArmadaFocus,
+    GeneralDaily,
+};
+
+struct ShipRoleFit {
+    std::string ship_name;
+    std::string role;
+    int score = 0;
+    std::string reason;
+};
+
+struct AccountAnalysis {
+    std::string posture_label;
+    std::vector<std::string> summary_notes;
+    std::vector<ShipRoleFit> top_ship_roles;
+};
+
+std::string posture_label(LoadoutPosture posture) {
+    switch (posture) {
+        case LoadoutPosture::WarLowAttention: return "War / Low Attention";
+        case LoadoutPosture::WarActive: return "War / Active";
+        case LoadoutPosture::GrowthLowAttention: return "Growth / Low Attention";
+        case LoadoutPosture::MiningPush: return "Mining Push";
+        case LoadoutPosture::ArmadaFocus: return "Armada Focus";
+        case LoadoutPosture::GeneralDaily: return "General Daily";
+    }
+    return "General Daily";
+}
+
+std::vector<DockConfig> make_posture_docks(LoadoutPosture posture) {
+    auto mk = [](Scenario s, int priority, const std::string& purpose) {
+        DockConfig cfg;
+        cfg.scenario = s;
+        cfg.priority = priority;
+        cfg.purpose = purpose;
+        cfg.mining_resource = scenario_mining_resource(s);
+        cfg.mining_objective = scenario_mining_objective(s);
+        return cfg;
+    };
+
+    switch (posture) {
+        case LoadoutPosture::WarLowAttention:
+            return {
+                mk(Scenario::PvP, 100, "Instant war-response deck"),
+                mk(Scenario::Armada, 95, "Always-ready alliance armada deck"),
+                mk(Scenario::MiningSpeed, 90, "Fast wartime miner"),
+                mk(Scenario::MiningProtected, 88, "Safe unattended miner"),
+                mk(Scenario::PvEHostile, 84, "Low-touch hostile grinder"),
+                mk(Scenario::Hybrid, 78, "Flexible backup combat deck"),
+                mk(Scenario::MissionBoss, 70, "Flex boss / specialty slot"),
+            };
+        case LoadoutPosture::WarActive:
+            return {
+                mk(Scenario::PvP, 100, "Primary war-response deck"),
+                mk(Scenario::PvP, 96, "Secondary PvP deck"),
+                mk(Scenario::Armada, 92, "Armada standby"),
+                mk(Scenario::PvEHostile, 86, "Fast active grinder"),
+                mk(Scenario::MiningSpeed, 82, "Quick refill miner"),
+                mk(Scenario::Hybrid, 76, "Flexible combat swap deck"),
+                mk(Scenario::MissionBoss, 70, "Boss / event flex slot"),
+            };
+        case LoadoutPosture::GrowthLowAttention:
+            return {
+                mk(Scenario::MiningSpeed, 100, "Primary economy miner"),
+                mk(Scenario::MiningProtected, 95, "Safe long-run miner"),
+                mk(Scenario::MiningGeneral, 90, "Balanced miner"),
+                mk(Scenario::PvEHostile, 86, "Daily hostile grinder"),
+                mk(Scenario::Armada, 80, "Alliance contribution deck"),
+                mk(Scenario::PvP, 74, "Basic defense response"),
+                mk(Scenario::MissionBoss, 68, "Mission / event flex slot"),
+            };
+        case LoadoutPosture::MiningPush:
+            return {
+                mk(Scenario::MiningSpeed, 100, "Primary speed miner"),
+                mk(Scenario::MiningProtected, 96, "Protected miner"),
+                mk(Scenario::MiningGeneral, 92, "General mining deck"),
+                mk(Scenario::MiningGas, 88, "Gas specialist"),
+                mk(Scenario::MiningOre, 84, "Ore specialist"),
+                mk(Scenario::MiningCrystal, 80, "Crystal specialist"),
+                mk(Scenario::PvP, 72, "Emergency war-response deck"),
+            };
+        case LoadoutPosture::ArmadaFocus:
+            return {
+                mk(Scenario::Armada, 100, "Primary armada deck"),
+                mk(Scenario::Armada, 94, "Secondary armada deck"),
+                mk(Scenario::PvP, 88, "War-response deck"),
+                mk(Scenario::PvEHostile, 84, "Grinder between armadas"),
+                mk(Scenario::MiningProtected, 78, "Safe unattended miner"),
+                mk(Scenario::MiningSpeed, 74, "Quick refill miner"),
+                mk(Scenario::Hybrid, 70, "General flex deck"),
+            };
+        case LoadoutPosture::GeneralDaily:
+            return {
+                mk(Scenario::PvP, 100, "Always-ready combat deck"),
+                mk(Scenario::PvEHostile, 92, "Daily hostile grinder"),
+                mk(Scenario::Armada, 88, "Alliance armada deck"),
+                mk(Scenario::MiningSpeed, 84, "Fast miner"),
+                mk(Scenario::MiningProtected, 80, "Safe miner"),
+                mk(Scenario::Hybrid, 76, "Flexible backup deck"),
+                mk(Scenario::MissionBoss, 70, "Boss / event flex slot"),
+            };
+    }
+
+    return {};
+}
+
+int ship_role_score(const PlayerShip& ship, const GameData& game_data, Scenario scenario) {
+    auto it = game_data.ships.find(ship.hull_id);
+    if (it == game_data.ships.end()) return 0;
+
+    const Ship& gs = it->second;
+    std::string ship_name = ship.name.empty() ? gs.name : ship.name;
+    std::string lower_name = ship_name;
+    for (auto& c : lower_name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    int score = ship.tier * 12 + ship.level + gs.rarity * 24;
+
+    auto has_name = [&](const std::string& token) {
+        return lower_name.find(token) != std::string::npos;
+    };
+
+    auto grade_band_bonus = [&](int target_grade) {
+        int diff = std::abs(gs.grade - target_grade);
+        if (diff == 0) return 140;
+        if (diff == 1) return 80;
+        if (diff == 2) return 30;
+        return -120 * diff;
+    };
+
+    switch (scenario) {
+        case Scenario::PvP:
+        case Scenario::Hybrid:
+        case Scenario::BaseCracker:
+            score += grade_band_bonus(6);
+            if (gs.hull_type == 0) score += 90;
+            if (gs.hull_type == 3) score += 70;
+            if (gs.hull_type == 2) score += 50;
+            if (has_name("revenant") || has_name("cube")) score += 120;
+            break;
+        case Scenario::Armada:
+        case Scenario::MissionBoss:
+        case Scenario::PvEHostile:
+            score += grade_band_bonus(6);
+            if (gs.hull_type == 2) score += 95;
+            if (gs.hull_type == 3) score += 70;
+            if (gs.hull_type == 0) score += 50;
+            if (has_name("protector") || has_name("voyager") || has_name("cerritos")) score += 120;
+            break;
+        case Scenario::MiningSpeed:
+        case Scenario::MiningProtected:
+        case Scenario::MiningCrystal:
+        case Scenario::MiningGas:
+        case Scenario::MiningOre:
+        case Scenario::MiningGeneral:
+        case Scenario::Loot:
+            score += grade_band_bonus(6);
+            if (gs.hull_type == 1) score += 120;
+            if (gs.hull_type == 2) score += 30;
+            if (has_name("selkie")) score += 240;
+            if (has_name("meridian")) score += 140;
+            if (has_name("feesha") || has_name("d'vor")) score -= 180;
+            if (has_name("north star")) score -= 220;
+            break;
+    }
+
+    return score;
+}
+
+AccountAnalysis analyze_account_posture(const PlayerData& player_data,
+                                        const GameData& game_data,
+                                        LoadoutPosture posture,
+                                        const std::vector<DockConfig>& docks) {
+    AccountAnalysis out;
+    out.posture_label = posture_label(posture);
+
+    int miner_count = 0;
+    int survey_count = 0;
+    for (const auto& ship : player_data.ships) {
+        auto it = game_data.ships.find(ship.hull_id);
+        if (it == game_data.ships.end()) continue;
+        if (it->second.hull_type == 1) ++survey_count;
+        if (ship_role_score(ship, game_data, Scenario::MiningGeneral) > 0) ++miner_count;
+    }
+
+    out.summary_notes.push_back("Posture: " + out.posture_label);
+    if (player_data.ships.empty()) {
+        out.summary_notes.push_back("No synced ships available; ship assignment will fall back to generic recommendations.");
+        return out;
+    }
+
+    out.summary_notes.push_back("Owned ships: " + std::to_string(player_data.ships.size()) +
+                                ", survey hulls: " + std::to_string(survey_count));
+    if (survey_count < 2) {
+        out.summary_notes.push_back("Only a small survey bench is synced, so miner role conflicts may reduce efficiency.");
+    }
+
+    std::set<std::string> used;
+    for (const auto& dock : docks) {
+        int best_score = -1;
+        ShipRoleFit best;
+        for (const auto& ship : player_data.ships) {
+            std::string ship_name = ship.name.empty() ? ("Ship#" + std::to_string(ship.hull_id)) : ship.name;
+            if (used.count(ship_name)) continue;
+            int score = ship_role_score(ship, game_data, dock.scenario);
+            if (score > best_score) {
+                best_score = score;
+                best.ship_name = ship_name;
+                best.role = scenario_label(dock.scenario);
+                best.score = score;
+                best.reason = dock.purpose;
+            }
+        }
+        if (best_score >= 0) {
+            used.insert(best.ship_name);
+            out.top_ship_roles.push_back(best);
+        }
+    }
+
+    if (!out.top_ship_roles.empty()) {
+        out.summary_notes.push_back("Top ship-role assignments are based on owned hull tier, level, rarity, and class fit.");
+    }
+    return out;
+}
+
+char rarity_letter(int rarity) {
+    switch (rarity) {
+        case 1: return 'C';
+        case 2: return 'U';
+        case 3: return 'R';
+        case 4: return 'E';
+        default: return ' ';
+    }
+}
+
+double ability_pct(const OfficerAbility& ability, int rank) {
+    if (ability.values.empty()) return 0.0;
+    int idx = std::max(0, std::min(rank, static_cast<int>(ability.values.size()) - 1));
+    return ability.values[idx].value;
+}
+
+std::string fmt_pct(double value) {
+    std::ostringstream os;
+    double pct = value * 100.0;
+    if (std::abs(pct - std::round(pct)) < 0.0001) {
+        os << static_cast<int>(std::round(pct)) << "%";
+    } else {
+        os << std::fixed << std::setprecision(1) << pct << "%";
+    }
+    return os.str();
+}
+
+std::string replace_all(std::string text, const std::string& from, const std::string& to) {
+    size_t pos = 0;
+    while ((pos = text.find(from, pos)) != std::string::npos) {
+        text.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+    return text;
+}
+
+std::string resolve_officer_tooltip(const Officer& officer, int rank) {
+    std::string text = officer.description;
+    if (text.empty()) return text;
+
+    const auto cap = officer.captain_ability.values;
+    const auto abil = officer.ability.values;
+    auto rank_idx = std::max(0, rank);
+
+    auto cap_value = [&](int idx) {
+        idx = std::max(0, std::min(idx, static_cast<int>(cap.size()) - 1));
+        return cap.empty() ? 0.0 : cap[idx].value;
+    };
+    auto abil_value = [&](int idx) {
+        idx = std::max(0, std::min(idx, static_cast<int>(abil.size()) - 1));
+        return abil.empty() ? 0.0 : abil[idx].value;
+    };
+
+    text = replace_all(text, "{0:#,#%}", fmt_pct(cap_value(rank_idx)));
+    text = replace_all(text, "{1:#,#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
+    text = replace_all(text, "{2:#,#%}", fmt_pct(abil_value(rank_idx)));
+    text = replace_all(text, "{3:#,#%}", fmt_pct(abil_value(rank_idx)));
+    text = replace_all(text, "{0:#.#%}", fmt_pct(cap_value(rank_idx)));
+    text = replace_all(text, "{1:#.#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
+    text = replace_all(text, "{2:#.#%}", fmt_pct(abil_value(rank_idx)));
+    text = replace_all(text, "{3:#.#%}", fmt_pct(abil_value(rank_idx)));
+    return text;
+}
+
+std::vector<RosterOfficer> build_roster_from_sync(const PlayerData& player_data,
+                                                  const GameData& game_data) {
+    std::vector<RosterOfficer> result;
+    result.reserve(player_data.officers.size());
+
+    for (const auto& po : player_data.officers) {
+        if (po.level <= 0) continue;
+
+        auto it = game_data.officers.find(po.officer_id);
+        if (it == game_data.officers.end()) continue;
+
+        const auto& go = it->second;
+        RosterOfficer ro;
+        ro.name = po.name.empty() ? (go.name.empty() ? go.short_name : go.name) : po.name;
+        ro.rarity = rarity_letter(go.rarity);
+        ro.level = po.level;
+        ro.rank = po.rank;
+        ro.attack = po.attack;
+        ro.defense = po.defense;
+        ro.health = po.health;
+        ro.group = go.group_name;
+        ro.cm_pct = ability_pct(go.captain_ability, po.rank);
+        ro.oa_pct = ability_pct(go.ability, po.rank);
+        ro.description = resolve_officer_tooltip(go, po.rank);
+        result.push_back(std::move(ro));
+    }
+
+    return result;
+}
+
+std::vector<RosterOfficer> load_best_roster_source(const PlayerData& player_data,
+                                                   const GameData& game_data) {
+    if (!player_data.officers.empty() && !game_data.officers.empty()) {
+        return build_roster_from_sync(player_data, game_data);
+    }
+
+    if (fs::exists("roster.csv")) {
+        return load_roster_csv("roster.csv");
+    }
+
+    return {};
+}
+
+std::vector<OwnedShipCandidate> build_owned_ship_candidates(const PlayerData& player_data,
+                                                            const GameData& game_data) {
+    std::vector<OwnedShipCandidate> ships;
+    ships.reserve(player_data.ships.size());
+    for (const auto& ps : player_data.ships) {
+        auto it = game_data.ships.find(ps.hull_id);
+        if (it == game_data.ships.end()) continue;
+
+        OwnedShipCandidate ship;
+        ship.name = ps.name.empty() ? it->second.name : ps.name;
+        switch (it->second.hull_type) {
+            case 0: ship.ship_type = ShipType::Interceptor; break;
+            case 1: ship.ship_type = ShipType::Survey; break;
+            case 2: ship.ship_type = ShipType::Explorer; break;
+            case 3: ship.ship_type = ShipType::Battleship; break;
+            default: ship.ship_type = ShipType::Explorer; break;
+        }
+        ship.tier = ps.tier;
+        ship.level = ps.level;
+        ship.grade = it->second.grade;
+        ship.rarity = it->second.rarity;
+        ships.push_back(std::move(ship));
+    }
+    return ships;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Dashboard state
@@ -91,19 +488,62 @@ struct AppState {
     LoadoutResult loadout_result;
     int selected_dock = 0;         // 0-6 dock selection
     int selected_dock_bda = 0;     // BDA selection within a dock
+    LoadoutPosture loadout_posture = LoadoutPosture::WarLowAttention;
+    AccountAnalysis account_analysis;
+    bool show_dock_modal = false;
+    int dock_modal_field = 0;
     bool loadout_computed = false;
     std::atomic<bool> loadout_running{false};
 
     void init_dock_configs() {
-        // Default 7-dock setup — common late-game configuration
-        dock_configs.resize(7);
-        dock_configs[0].scenario = Scenario::PvP;
-        dock_configs[1].scenario = Scenario::Hybrid;
-        dock_configs[2].scenario = Scenario::PvEHostile;
-        dock_configs[3].scenario = Scenario::Armada;
-        dock_configs[4].scenario = Scenario::MiningProtected;
-        dock_configs[5].scenario = Scenario::MiningSpeed;
-        dock_configs[6].scenario = Scenario::Loot;
+        dock_configs = make_posture_docks(loadout_posture);
+        if (dock_configs.size() < 7) dock_configs.resize(7);
+        for (auto& cfg : dock_configs) {
+            cfg.ship_override.clear();
+            cfg.locked = false;
+        }
+        refresh_account_analysis();
+    }
+
+    void refresh_account_analysis() {
+        account_analysis = analyze_account_posture(player_data, game_data, loadout_posture, dock_configs);
+    }
+
+    bool loadout_matches_current_roster(const LoadoutResult& result) const {
+        std::set<std::string> roster_names;
+        for (const auto& officer : roster) roster_names.insert(officer.name);
+        if (roster_names.empty()) return false;
+
+        for (const auto& dock : result.docks) {
+            if (!dock.captain.empty() && dock.captain != "N/A" && !roster_names.count(dock.captain)) {
+                return false;
+            }
+            for (const auto& bridge : dock.bridge) {
+                if (!bridge.empty() && bridge != "N/A" && !roster_names.count(bridge)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    void rebuild_optimizer_from_current_data() {
+        roster = load_best_roster_source(player_data, game_data);
+        if (!roster.empty()) {
+            optimizer = std::make_unique<CrewOptimizer>(roster);
+            crew_loaded = true;
+            std::ofstream debug(".stfc_mining_debug.log");
+            if (debug.is_open()) {
+                optimizer->dump_mining_debug(debug);
+            }
+        } else {
+            optimizer.reset();
+            crew_loaded = false;
+        }
+        crew_results.clear();
+        crew_bda_results.clear();
+        loadout_computed = false;
+        refresh_account_analysis();
     }
 
     AppState() : api_client("data/game_data"), ingress_server("data/player_data", 8270) {
@@ -138,20 +578,17 @@ struct AppState {
             planner.enrich_plan_with_player_data(daily_plan, player_data, game_data);
         }
 
-        // Load roster if available
-        if (fs::exists("roster.csv")) {
-            roster = load_roster_csv("roster.csv");
-            if (!roster.empty()) {
-                optimizer = std::make_unique<CrewOptimizer>(roster);
-                crew_loaded = true;
-            }
-        }
+        rebuild_optimizer_from_current_data();
 
         // Initialize dock configs and try loading saved loadout
         init_dock_configs();
         if (fs::exists(".stfc_loadout.json")) {
             if (CrewOptimizer::load_loadout(loadout_result, ".stfc_loadout.json")) {
-                loadout_computed = true;
+                loadout_computed = loadout_matches_current_roster(loadout_result);
+                if (!loadout_computed) {
+                    loadout_result = LoadoutResult{};
+                    status_message = "Saved loadout is stale for the current synced roster. Press Enter to recompute.";
+                }
             }
         }
     }
@@ -207,7 +644,12 @@ struct AppState {
             if (crew_ship_type == 2) st = ShipType::Interceptor;
             optimizer->set_ship_type(st);
 
-            loadout_result = optimizer->optimize_dock_loadout(dock_configs, 1);
+            refresh_account_analysis();
+            loadout_result = optimizer->optimize_dock_loadout(
+                dock_configs,
+                build_owned_ship_candidates(player_data, game_data),
+                1);
+            loadout_result.analysis_notes = account_analysis.summary_notes;
             loadout_computed = true;
 
             // Save loadout
@@ -1080,10 +1522,17 @@ static Element render_loadout(AppState& state) {
         text("  Ship: "),
         text(ship_name) | bold | color(Color::Yellow),
         text("  [T] cycle") | dim,
+        text("   Posture: ") | dim,
+        text(state.account_analysis.posture_label.empty() ? posture_label(state.loadout_posture) : state.account_analysis.posture_label)
+            | bold | color(Color::Cyan),
+        text("  [P] cycle") | dim,
         filler(),
         text("  [Enter] Optimize All Docks") | dim,
         text("  [L] Load Saved") | dim,
     }));
+    for (size_t i = 0; i < state.account_analysis.summary_notes.size() && i < 3; ++i) {
+        header_lines.push_back(text("  " + state.account_analysis.summary_notes[i]) | dim);
+    }
     if (!state.loadout_error.empty()) {
         header_lines.push_back(separator());
         header_lines.push_back(
@@ -1109,6 +1558,13 @@ static Element render_loadout(AppState& state) {
         Elements row_parts;
         row_parts.push_back(text(label) | bold);
         row_parts.push_back(text(scen) | color(Color::Cyan));
+        std::string mining_desc = mining_descriptor(cfg);
+        if (!mining_desc.empty()) {
+            row_parts.push_back(text(" {" + mining_desc + "}") | color(Color::Green));
+        }
+        if (!cfg.purpose.empty()) {
+            row_parts.push_back(text(" [" + cfg.purpose + "]") | dim);
+        }
 
         if (cfg.locked) {
             row_parts.push_back(text(" [LOCKED]") | color(Color::Yellow) | dim);
@@ -1176,6 +1632,16 @@ static Element render_loadout(AppState& state) {
         if (!dr.ship_recommended.empty() && dr.ship_recommended != dr.ship_used) {
             lines.push_back(hbox({text("Recommended: "), text(dr.ship_recommended) | dim}));
         }
+        if (!dr.purpose.empty()) {
+            lines.push_back(hbox({text("Purpose: "), text(dr.purpose) | color(Color::Blue)}));
+        }
+        std::string mining_desc = mining_descriptor(dr);
+        if (!mining_desc.empty()) {
+            lines.push_back(hbox({text("Mining:  "), text(mining_desc) | color(Color::Green)}));
+        }
+        if (dr.priority > 0) {
+            lines.push_back(hbox({text("Priority: "), text(std::to_string(dr.priority)) | dim}));
+        }
         lines.push_back(separator());
 
         lines.push_back(hbox({
@@ -1212,6 +1678,8 @@ static Element render_loadout(AppState& state) {
 
         lines.push_back(separator());
         lines.push_back(text("Bonuses:") | bold);
+        if (bd.raw_total > 0)
+            lines.push_back(hbox({text("  Raw Total:   "), text(std::to_string((int)bd.raw_total)) | color(Color::Cyan)}));
         if (bd.synergy_bonus > 0)
             lines.push_back(hbox({text("  Synergy:     +"), text(std::to_string((int)bd.synergy_bonus)) | color(Color::Green)}));
         if (bd.state_chain_bonus > 0)
@@ -1222,6 +1690,22 @@ static Element render_loadout(AppState& state) {
             lines.push_back(hbox({text("  Ship Spec:   +"), text(std::to_string((int)bd.ship_type_bonus)) | color(Color::Green)}));
         if (bd.scenario_bonus > 0)
             lines.push_back(hbox({text("  Scenario:    +"), text(std::to_string((int)bd.scenario_bonus)) | color(Color::Green)}));
+        if (bd.weakness_counter_bonus > 0)
+            lines.push_back(hbox({text("  Weakness:    +"), text(std::to_string((int)bd.weakness_counter_bonus)) | color(Color::Green)}));
+        if (bd.dual_use_bonus > 0)
+            lines.push_back(hbox({text("  Dual-Use:    +"), text(std::to_string((int)bd.dual_use_bonus)) | color(Color::Green)}));
+        if (bd.amplifier_bonus > 0)
+            lines.push_back(hbox({text("  Amplifier:   +"), text(std::to_string((int)bd.amplifier_bonus)) | color(Color::Green)}));
+        if (bd.penalty_total > 0)
+            lines.push_back(hbox({text("  Penalties:   -"), text(std::to_string((int)bd.penalty_total)) | color(Color::Red)}));
+
+        if (!bd.synergy_notes.empty()) {
+            lines.push_back(separator());
+            lines.push_back(text("Why This Won:") | bold | color(Color::Green));
+            for (const auto& note : bd.synergy_notes) {
+                lines.push_back(text("  " + note) | color(Color::Green) | dim);
+            }
+        }
 
         if (!bd.penalties.empty()) {
             lines.push_back(separator());
@@ -1280,6 +1764,14 @@ static Element render_loadout(AppState& state) {
             }
         }
 
+        if (!state.loadout_result.analysis_notes.empty()) {
+            lines.push_back(separator());
+            lines.push_back(text("Account Analysis:") | bold | color(Color::Green));
+            for (const auto& note : state.loadout_result.analysis_notes) {
+                lines.push_back(text("  " + note) | dim | color(Color::Green));
+            }
+        }
+
         detail = vbox(lines);
     } else if (!state.loadout_computed) {
         detail = vbox({
@@ -1295,9 +1787,11 @@ static Element render_loadout(AppState& state) {
     std::string dock_scenario_str;
     if (state.selected_dock >= 0 && state.selected_dock < (int)state.dock_configs.size()) {
         dock_scenario_str = scenario_label(state.dock_configs[state.selected_dock].scenario);
+        std::string mining_desc = mining_descriptor(state.dock_configs[state.selected_dock]);
+        if (!mining_desc.empty()) dock_scenario_str += " {" + mining_desc + "}";
     }
 
-    return vbox({
+    Element body = vbox({
         header,
         separator(),
         hbox({
@@ -1312,10 +1806,44 @@ static Element render_loadout(AppState& state) {
             filler(),
             text(" [Up/Dn] Dock  ") | dim,
             text("[</>] Scenario  ") | dim,
+            text("[R/F] Resource  ") | dim,
+            text("[O] Objective  ") | dim,
             text("[B] BDA nav  ") | dim,
             text("[K] Lock/Unlock") | dim,
         }),
     });
+
+    if (!state.show_dock_modal || state.selected_dock < 0 || state.selected_dock >= (int)state.dock_configs.size()) {
+        return body;
+    }
+
+    const auto& cfg = state.dock_configs[state.selected_dock];
+    std::string mining_desc = mining_descriptor(cfg);
+    Elements modal_lines;
+    modal_lines.push_back(text("Dock Configuration") | bold | center);
+    modal_lines.push_back(separator());
+    modal_lines.push_back(text("Dock " + std::to_string(state.selected_dock + 1)) | bold);
+    modal_lines.push_back(text("Scenario: " + std::string(scenario_label(cfg.scenario))) |
+                          (state.dock_modal_field == 0 ? inverted : nothing));
+    modal_lines.push_back(text("Mining Resource: " + std::string(mining_resource_str(cfg.mining_resource == MiningResource::None
+                          ? scenario_mining_resource(cfg.scenario) : cfg.mining_resource))) |
+                          (state.dock_modal_field == 1 ? inverted : nothing));
+    modal_lines.push_back(text("Mining Objective: " + std::string(mining_objective_str(cfg.mining_objective == MiningObjective::None
+                          ? scenario_mining_objective(cfg.scenario) : cfg.mining_objective))) |
+                          (state.dock_modal_field == 2 ? inverted : nothing));
+    modal_lines.push_back(text("Ship Override: " + (cfg.ship_override.empty() ? std::string("auto") : cfg.ship_override)) |
+                          (state.dock_modal_field == 3 ? inverted : nothing));
+    modal_lines.push_back(text("Locked: " + std::string(cfg.locked ? "yes" : "no")) |
+                          (state.dock_modal_field == 4 ? inverted : nothing));
+    if (!mining_desc.empty()) {
+        modal_lines.push_back(separatorLight());
+        modal_lines.push_back(text("Current mining intent: " + mining_desc) | color(Color::Green));
+    }
+    modal_lines.push_back(separator());
+    modal_lines.push_back(text("[Up/Dn] field  [</>] change  [Enter/Esc] close") | dim | center);
+
+    auto modal = window(text(" Edit Dock "), vbox(modal_lines)) | size(WIDTH, EQUAL, 52);
+    return dbox({body, vbox({filler(), hbox({filler(), modal, filler()}), filler()})});
 }
 
 // ---------------------------------------------------------------------------
@@ -2295,6 +2823,7 @@ int main() {
                         state->data_loaded = true;
                         // Re-resolve player names with fresh game data
                         resolve_player_names(state->player_data, state->game_data);
+                        state->rebuild_optimizer_from_current_data();
                         // Re-enrich planner with updated context
                         state->planner.enrich_plan_with_player_data(
                             state->daily_plan, state->player_data, state->game_data);
@@ -2320,6 +2849,7 @@ int main() {
                         // Resolve names against game data
                         if (state->data_loaded) {
                             resolve_player_names(state->player_data, state->game_data);
+                            state->rebuild_optimizer_from_current_data();
                             // Re-enrich planner with updated player data
                             state->planner.enrich_plan_with_player_data(
                                 state->daily_plan, state->player_data, state->game_data);
@@ -2491,6 +3021,60 @@ int main() {
 
         // === Loadout tab events ===
         if (selected_tab == 4) {
+            if (state->show_dock_modal) {
+                auto& cfg = state->dock_configs[state->selected_dock];
+                if (event == Event::Escape || event == Event::Return) {
+                    state->show_dock_modal = false;
+                    state->status_message = "Closed dock editor.";
+                    return true;
+                }
+                if (event == Event::ArrowDown) {
+                    state->dock_modal_field = std::min(4, state->dock_modal_field + 1);
+                    return true;
+                }
+                if (event == Event::ArrowUp) {
+                    state->dock_modal_field = std::max(0, state->dock_modal_field - 1);
+                    return true;
+                }
+                if (event == Event::Character('<') || event == Event::Character(',') ||
+                    event == Event::Character('>') || event == Event::Character('.')) {
+                    int dir = (event == Event::Character('>') || event == Event::Character('.')) ? 1 : -1;
+                    if (state->dock_modal_field == 0) {
+                        const auto& all = all_dock_scenarios();
+                        auto it = std::find(all.begin(), all.end(), cfg.scenario);
+                        if (it != all.end()) {
+                            int idx = static_cast<int>(std::distance(all.begin(), it));
+                            idx = std::clamp(idx + dir, 0, (int)all.size() - 1);
+                            cfg.scenario = all[idx];
+                            cfg.mining_resource = scenario_mining_resource(cfg.scenario);
+                            cfg.mining_objective = scenario_mining_objective(cfg.scenario);
+                        }
+                    } else if (state->dock_modal_field == 1 && is_mining_scenario(cfg.scenario)) {
+                        int resource = static_cast<int>(cfg.mining_resource == MiningResource::None
+                            ? scenario_mining_resource(cfg.scenario) : cfg.mining_resource);
+                        resource += dir;
+                        if (resource < 1) resource = 7;
+                        if (resource > 7) resource = 1;
+                        cfg.mining_resource = static_cast<MiningResource>(resource);
+                    } else if (state->dock_modal_field == 2 && is_mining_scenario(cfg.scenario)) {
+                        int objective = static_cast<int>(cfg.mining_objective == MiningObjective::None
+                            ? scenario_mining_objective(cfg.scenario) : cfg.mining_objective);
+                        objective += dir;
+                        if (objective < 1) objective = 3;
+                        if (objective > 3) objective = 1;
+                        cfg.mining_objective = static_cast<MiningObjective>(objective);
+                    } else if (state->dock_modal_field == 4) {
+                        cfg.locked = !cfg.locked;
+                        if (!cfg.locked) {
+                            cfg.locked_captain.clear();
+                            cfg.locked_bridge.clear();
+                        }
+                    }
+                    state->loadout_computed = false;
+                    return true;
+                }
+                return true;
+            }
             if (event == Event::ArrowDown) {
                 if (state->selected_dock < 6) {
                     state->selected_dock++;
@@ -2505,35 +3089,25 @@ int main() {
                 }
                 return true;
             }
-            // Change dock scenario
-            if (event == Event::Character('<') || event == Event::Character(',')) {
-                auto& cfg = state->dock_configs[state->selected_dock];
-                const auto& all = all_dock_scenarios();
-                auto it = std::find(all.begin(), all.end(), cfg.scenario);
-                if (it != all.begin()) {
-                    cfg.scenario = *std::prev(it);
-                    state->loadout_computed = false;
-                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) +
-                        " -> " + scenario_label(cfg.scenario);
-                }
-                return true;
-            }
-            if (event == Event::Character('>') || event == Event::Character('.')) {
-                auto& cfg = state->dock_configs[state->selected_dock];
-                const auto& all = all_dock_scenarios();
-                auto it = std::find(all.begin(), all.end(), cfg.scenario);
-                if (it != all.end() && std::next(it) != all.end()) {
-                    cfg.scenario = *std::next(it);
-                    state->loadout_computed = false;
-                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) +
-                        " -> " + scenario_label(cfg.scenario);
-                }
+            if (event == Event::Return) {
+                state->show_dock_modal = true;
+                state->dock_modal_field = 0;
+                state->status_message = "Editing dock configuration.";
                 return true;
             }
             // Cycle ship type
             if (event == Event::Character('t') || event == Event::Character('T')) {
                 state->crew_ship_type = (state->crew_ship_type + 1) % 3;
                 state->loadout_computed = false;
+                return true;
+            }
+            if (event == Event::Character('p') || event == Event::Character('P')) {
+                int posture = static_cast<int>(state->loadout_posture);
+                posture = (posture + 1) % 6;
+                state->loadout_posture = static_cast<LoadoutPosture>(posture);
+                state->init_dock_configs();
+                state->loadout_computed = false;
+                state->status_message = "Loadout posture -> " + posture_label(state->loadout_posture);
                 return true;
             }
             // Lock/unlock dock
@@ -2568,7 +3142,7 @@ int main() {
                 return true;
             }
             // Run loadout optimizer (background thread)
-            if (event == Event::Return) {
+            if (event == Event::Character('g') || event == Event::Character('G')) {
                 if (state->optimizer && !state->loadout_running) {
                     state->set_status("Optimizing 7-dock loadout (background)...");
                     state->loadout_running = true;
@@ -2592,8 +3166,13 @@ int main() {
             // Load saved loadout
             if (event == Event::Character('l') || event == Event::Character('L')) {
                 if (CrewOptimizer::load_loadout(state->loadout_result, ".stfc_loadout.json")) {
-                    state->loadout_computed = true;
-                    state->status_message = "Loaded saved loadout from .stfc_loadout.json";
+                    state->loadout_computed = state->loadout_matches_current_roster(state->loadout_result);
+                    if (!state->loadout_computed) {
+                        state->loadout_result = LoadoutResult{};
+                    }
+                    state->status_message = state->loadout_computed
+                        ? "Loaded saved loadout from .stfc_loadout.json"
+                        : "Saved loadout is stale for the current synced roster. Press Enter to recompute.";
                 } else {
                     state->status_message = "No saved loadout found.";
                 }

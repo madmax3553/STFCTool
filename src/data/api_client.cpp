@@ -467,6 +467,8 @@ bool ApiClient::fetch_translations(GameData& data, const std::string& lang) {
                         for (auto& [k, v] : t) {
                             if (k.find("officer_name_short_") == 0) officer.short_name = v;
                             else if (k.find("officer_name_") == 0 && k.find("short") == std::string::npos) officer.name = v;
+                            else if (k.find("officer_tooltip_description_short_") == 0) officer.description = v;
+                            else if (k.find("officer_tooltip_description_") == 0 && officer.description.empty()) officer.description = v;
                             else if (k.find("officer_flavor_text_") == 0) officer.flavor_text = v;
                         }
                     }
