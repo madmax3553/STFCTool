@@ -1,0 +1,21 @@
+=== Mining Debug Dump ===
+T'Pring | lvl=30 rank=5 | cm=40 oa=300
+  cm_text: cm: gas miner +0% to gas mining rate
+  oa_text: oa: hidden stash +300% to protected cargo
+  parsed cm_speed=0 cm_gas=40 cm_ore=0 cm_crystal=0 cm_pcargo=0 cm_cargo=0
+  parsed oa_speed=0 oa_gas=0 oa_ore=0 oa_crystal=0 oa_pcargo=300 oa_cargo=300
+Three Of Eleven | lvl=20 rank=4 | cm=60 oa=500
+  cm_text: cm: efficient gas acquisition +{0:0.#%} to gas mining speed.
+  oa_text: oa: resource protection protocols +{2:0.#%} to protected cargo.
+  parsed cm_speed=60 cm_gas=60 cm_ore=0 cm_crystal=0 cm_pcargo=0 cm_cargo=0
+  parsed oa_speed=0 oa_gas=0 oa_ore=0 oa_crystal=0 oa_pcargo=500 oa_cargo=500
+Fess | lvl=30 rank=5 | cm=55 oa=10
+  cm_text: cm: pursue profit where you find it +{0:0.#%} to base mining speed.
+  oa_text: oa: cut corners if you need to protected cargo is reduced by 10%.
+  parsed cm_speed=55 cm_gas=0 cm_ore=0 cm_crystal=0 cm_pcargo=0 cm_cargo=0
+  parsed oa_speed=0 oa_gas=0 oa_ore=0 oa_crystal=0 oa_pcargo=10 oa_cargo=10
+Mavery | lvl=30 rank=5 | cm=40 oa=200
+  cm_text: cm: secret compartments increase max cargo by {0:0.#%}.
+  oa_text: oa: hasty extraction increase crystal, gas and ore mining speed by 200%
+  parsed cm_speed=0 cm_gas=0 cm_ore=0 cm_crystal=0 cm_pcargo=0 cm_cargo=40
+  parsed oa_speed=200 oa_gas=0 oa_ore=200 oa_crystal=0 oa_pcargo=0 oa_cargo=0
