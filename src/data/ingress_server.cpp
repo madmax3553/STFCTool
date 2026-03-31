@@ -64,6 +64,10 @@ void IngressServer::add_sync_event(const std::string& data_type, int count, bool
 void IngressServer::run_server() {
     httplib::Server svr;
 
+    // Allow stop() to terminate the server from another thread
+    stop_requested_ = false;
+    server_ptr_ = &svr;
+
     // Health check
     svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(R"({"status":"ok","service":"stfctool-ingress"})", "application/json");
@@ -401,11 +405,13 @@ void IngressServer::run_server() {
 
     running_ = true;
     svr.listen("0.0.0.0", port_);
+    server_ptr_ = nullptr;
     running_ = false;
 }
 
 bool IngressServer::start() {
     if (running_) return true;
+    stop_requested_ = false;
     server_thread_ = std::thread([this]() { run_server(); });
     // Wait briefly for server to start
     for (int i = 0; i < 50 && !running_; i++) {
@@ -415,9 +421,15 @@ bool IngressServer::start() {
 }
 
 void IngressServer::stop() {
-    running_ = false;
+    if (!running_) return;
+    stop_requested_ = true;
+    // Tell httplib::Server to stop accepting connections
+    if (server_ptr_) {
+        static_cast<httplib::Server*>(server_ptr_)->stop();
+    }
+    // Wait for the server thread to finish cleanly
     if (server_thread_.joinable()) {
-        server_thread_.detach();  // Server thread will exit when svr stops
+        server_thread_.join();
     }
 }
 
@@ -428,6 +440,12 @@ void IngressServer::save_player_data() {
         json j;
         j["ops_level"] = player_data_.ops_level;
         j["player_name"] = player_data_.player_name;
+
+        // Persist last_sync as a unix timestamp (seconds since epoch)
+        if (player_data_.last_sync != std::chrono::system_clock::time_point{}) {
+            j["last_sync"] = std::chrono::duration_cast<std::chrono::seconds>(
+                player_data_.last_sync.time_since_epoch()).count();
+        }
 
         json officers = json::array();
         for (auto& o : player_data_.officers) {
@@ -529,6 +547,13 @@ void IngressServer::load_player_data() {
         std::lock_guard<std::mutex> lock(data_mutex_);
         player_data_.ops_level = j.value("ops_level", 0);
         player_data_.player_name = j.value("player_name", "");
+
+        // Restore last_sync timestamp
+        if (j.contains("last_sync") && j["last_sync"].is_number()) {
+            auto epoch_secs = j["last_sync"].get<int64_t>();
+            player_data_.last_sync = std::chrono::system_clock::time_point(
+                std::chrono::seconds(epoch_secs));
+        }
 
         if (j.contains("officers") && j["officers"].is_array()) {
             player_data_.officers.clear();

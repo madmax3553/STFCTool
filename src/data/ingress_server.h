@@ -58,6 +58,8 @@ private:
     int port_;
     std::string token_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> stop_requested_{false};  // signals run_server to shut down
+    void* server_ptr_{nullptr};  // pointer to httplib::Server (avoids including httplib.h here)
     std::thread server_thread_;
     std::mutex data_mutex_;
     PlayerData player_data_;

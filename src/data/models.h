@@ -42,12 +42,14 @@ struct Officer {
     int art_id = 0;
     int loca_id = 0;
     int64_t faction = 0;
-    int officer_class = 0;    // 1=command, 2=engineering, 3=science
+    int officer_class = 0;    // 1=command, 2=science, 3=engineering
     int rarity = 0;           // 1=common, 2=uncommon, 3=rare, 4=epic
     int64_t synergy_id = 0;
     int max_rank = 0;
     OfficerAbility ability;
     OfficerAbility captain_ability;
+    OfficerAbility below_decks_ability;   // BDA — only present on below-deck officers
+    bool has_bda = false;                 // true when below_decks_ability is populated
     std::vector<OfficerStats> stats;
     std::vector<int> level_xp;       // XP per level
     std::vector<OfficerRank> ranks;
@@ -336,8 +338,8 @@ inline const char* rarity_str(int rarity) {
 inline const char* officer_class_str(int cls) {
     switch (cls) {
         case 1: return "Command";
-        case 2: return "Engineering";
-        case 3: return "Science";
+        case 2: return "Science";
+        case 3: return "Engineering";
         default: return "Unknown";
     }
 }

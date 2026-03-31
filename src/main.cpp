@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <unordered_map>
 #include <atomic>
 #include <mutex>
 
@@ -355,6 +356,280 @@ std::string resolve_officer_tooltip(const Officer& officer, int rank) {
     return text;
 }
 
+// ---------------------------------------------------------------------------
+// Helpers for transforming API description text into optimizer-compatible format
+// ---------------------------------------------------------------------------
+
+// Strip <color=#XXXXXX> and </color> tags from text.
+std::string strip_color_tags(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == '<') {
+            // Check for <color=...> or </color>
+            if (text.compare(i, 7, "<color=") == 0) {
+                auto end = text.find('>', i);
+                if (end != std::string::npos) { i = end + 1; continue; }
+            } else if (text.compare(i, 8, "</color>") == 0) {
+                i += 8; continue;
+            }
+        }
+        out += text[i++];
+    }
+    return out;
+}
+
+// Lowercase a string in-place and return it.
+std::string to_lower_str(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+// Collapse runs of whitespace (including \n within a section) to single spaces,
+// trim leading/trailing whitespace.
+std::string collapse_whitespace(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    bool prev_space = true;  // treat start as space to trim leading
+    for (char c : text) {
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!prev_space) { out += ' '; prev_space = true; }
+        } else {
+            out += c;
+            prev_space = false;
+        }
+    }
+    // Trim trailing space
+    if (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
+// Strip {N:...} format placeholders from text (for ship abilities where values are unavailable).
+// Replaces patterns like {0:#.#%}, {0:#####%}, {0:#,##0}, {0:0.00#%}, {0:#}, {0:0#%}, {0:0.#}, {0}
+// with a simple "?" placeholder so the text remains readable.
+std::string strip_format_placeholders(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == '{') {
+            // Look for closing brace
+            auto end = text.find('}', i);
+            if (end != std::string::npos && end - i < 30) {
+                // Check it looks like a format placeholder: {digit...}
+                bool is_placeholder = (i + 1 < end) &&
+                    std::isdigit(static_cast<unsigned char>(text[i + 1]));
+                if (is_placeholder) {
+                    out += '?';
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        out += text[i++];
+    }
+    return out;
+}
+
+// Classify a ship's ability based on its ability_name and ability_description text.
+// Returns a tag string like "mining_parsteel", "mining_crystal", "combat_hostile", etc.
+// Both inputs should be the raw translated strings (color tags OK, we strip them here).
+std::string classify_ship_ability(const std::string& ability_name,
+                                  const std::string& ability_description) {
+    std::string name = to_lower_str(strip_color_tags(ability_name));
+    std::string desc = to_lower_str(strip_color_tags(ability_description));
+
+    // Mining classifications — check ability name and description
+    if (name.find("mining") != std::string::npos ||
+        desc.find("mining rate") != std::string::npos ||
+        desc.find("mining speed") != std::string::npos ||
+        desc.find("mining bonus") != std::string::npos) {
+        // Specific resource?
+        if (desc.find("parsteel") != std::string::npos) return "mining_parsteel";
+        if (desc.find("tritanium") != std::string::npos) return "mining_tritanium";
+        if (desc.find("dilithium") != std::string::npos) return "mining_dilithium";
+        if (desc.find("crystal") != std::string::npos && desc.find("gas") != std::string::npos)
+            return "mining_universal";  // mines multiple resources
+        if (desc.find("crystal") != std::string::npos) return "mining_crystal";
+        if (desc.find("gas") != std::string::npos) return "mining_gas";
+        if (desc.find("ore") != std::string::npos) return "mining_ore";
+        if (desc.find("latinum") != std::string::npos) return "mining_latinum";
+        if (desc.find("isogen") != std::string::npos) return "mining_isogen";
+        if (desc.find("transogen") != std::string::npos) return "mining_transogen";
+        if (desc.find("corrupted") != std::string::npos) return "mining_data";
+        return "mining_general";
+    }
+
+    // Loot/reward bonuses
+    if (desc.find("more resources from hostiles") != std::string::npos ||
+        desc.find("reward") != std::string::npos ||
+        desc.find("loot") != std::string::npos) {
+        return "loot";
+    }
+
+    // Hostile-specific combat
+    if (desc.find("fighting hostiles") != std::string::npos ||
+        desc.find("against hostiles") != std::string::npos ||
+        desc.find("hostile") != std::string::npos) {
+        if (desc.find("swarm") != std::string::npos) return "combat_swarm";
+        if (desc.find("borg") != std::string::npos) return "combat_borg";
+        if (desc.find("gorn") != std::string::npos) return "combat_gorn";
+        if (desc.find("xindi") != std::string::npos) return "combat_xindi";
+        if (desc.find("eclipse") != std::string::npos) return "combat_eclipse";
+        return "combat_hostile";
+    }
+
+    // PvP-style combat (ship type advantages, station defense)
+    if (desc.find("opponent") != std::string::npos ||
+        desc.find("defending") != std::string::npos ||
+        desc.find("weapon damage") != std::string::npos ||
+        desc.find("shield piercing") != std::string::npos ||
+        desc.find("armor piercing") != std::string::npos) {
+        return "combat_pvp";
+    }
+
+    // Captain maneuver boost
+    if (desc.find("captain maneuver") != std::string::npos) return "captain_boost";
+
+    return "general";
+}
+
+// Build the optimizer-compatible description string from the API tooltip.
+// The API tooltip has two ability blocks separated by "\n\n":
+//   Block 0: CM ability name + effect text (or "Unfit To Lead" for BDA officers)
+//   Block 1: OA ability name + effect text
+// For BDA officers we also resolve the below_decks_ability description.
+//
+// Output format (lowercased, color-stripped):
+//   Regular officers: "cm: <cm-text> oa: <oa-text>"
+//   BDA officers:     "bda: <bda-text> oa: <oa-text>"
+std::string build_optimizer_description(const Officer& officer, int rank) {
+    // Resolve placeholders in the main tooltip
+    std::string tooltip = resolve_officer_tooltip(officer, rank);
+
+    // Strip color tags first
+    tooltip = strip_color_tags(tooltip);
+
+    // Split on double-newline to separate ability blocks
+    std::string block0, block1;
+    auto sep = tooltip.find("\n\n");
+    if (sep != std::string::npos) {
+        block0 = tooltip.substr(0, sep);
+        block1 = tooltip.substr(sep + 2);
+        // There might be more double-newlines (e.g., three blocks); take only up to next
+        auto sep2 = block1.find("\n\n");
+        if (sep2 != std::string::npos) block1 = block1.substr(0, sep2);
+    } else {
+        block0 = tooltip;
+    }
+
+    // Collapse whitespace within each block
+    block0 = collapse_whitespace(block0);
+    block1 = collapse_whitespace(block1);
+
+    // For BDA officers, build the BDA text from the below_decks_ability description.
+    // The BDA description might be a separate translation entry, but the tooltip
+    // description for BDA officers typically has:
+    //   Block 0: "Unfit To Lead — This Officer does not have a Captain's Maneuver."
+    //   Block 1: The OA text
+    // We need to get the BDA text. Since the main tooltip only has CM+OA and the
+    // BDA text isn't there, we construct it from block0 (which is the BDA's resolved text
+    // for officers that DO have BDA in the tooltip) or from the raw values.
+    //
+    // Actually: looking at the data more carefully, for BDA officers, the tooltip_description
+    // field typically contains:
+    //   Block 0: BDA ability name + effect text (NOT "Unfit To Lead")
+    //   Block 1: OA ability name + effect text
+    // The "Unfit To Lead" is in the captain_ability's separate loca_id description,
+    // not in the officer's main tooltip.
+    // So block0 IS the BDA text for BDA officers.
+
+    std::string desc;
+    if (officer.has_bda) {
+        desc = "bda: " + block0 + " oa: " + block1;
+    } else {
+        desc = "cm: " + block0 + " oa: " + block1;
+    }
+
+    return to_lower_str(desc);
+}
+
+// Detect status effects from description text and set effect/causes_effect fields.
+void parse_status_effects(const std::string& desc, std::string& effect,
+                          bool& causes_effect) {
+    effect.clear();
+    causes_effect = false;
+
+    // State patterns: look for keywords that indicate applying or benefiting from states.
+    // The CSV uses a single "effect" column with the state name, and causes_effect=true
+    // if the officer applies the state (vs. benefits from it).
+    struct StateKeyword {
+        const char* state;
+        const char* apply_keyword;   // appears when officer APPLIES the state
+        const char* benefit_keyword; // appears when officer BENEFITS from the state
+    };
+
+    // Apply keywords — officer causes the state
+    static const char* morale_apply[] = {
+        "inspire morale", "morale for", "apply morale", "cause morale", nullptr
+    };
+    static const char* breach_apply[] = {
+        "hull breach for", "apply hull breach", "cause hull breach",
+        "inflict hull breach", nullptr
+    };
+    static const char* burning_apply[] = {
+        "burning for", "apply burning", "cause burning",
+        "inflict burning", "burning to opponent", "burning to the opponent", nullptr
+    };
+    static const char* assimilate_apply[] = {
+        "assimilate for", "apply assimilate", nullptr
+    };
+
+    // Benefit keywords — officer benefits from the state
+    static const char* morale_benefit[] = {
+        "ship has morale", "with morale", "has morale",
+        "when morale", "while morale", nullptr
+    };
+    static const char* breach_benefit[] = {
+        "has hull breach", "with hull breach", "opponent hull breach",
+        "when hull breach", nullptr
+    };
+    static const char* burning_benefit[] = {
+        "is burning", "has burning", "opponent burning",
+        "afflicted by burning", "when burning", "whilst burning", nullptr
+    };
+    static const char* assimilate_benefit[] = {
+        "with assimilate", "has assimilate", "when assimilate",
+        "is assimilated", nullptr
+    };
+
+    auto check_keywords = [&](const char* state, const char* const* apply_kw,
+                              const char* const* benefit_kw) {
+        for (const char* const* p = apply_kw; *p; ++p) {
+            if (desc.find(*p) != std::string::npos) {
+                effect = state;
+                causes_effect = true;
+                return true;
+            }
+        }
+        for (const char* const* p = benefit_kw; *p; ++p) {
+            if (desc.find(*p) != std::string::npos) {
+                effect = state;
+                causes_effect = false;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Check each state (order matters — first match wins)
+    if (check_keywords("morale", morale_apply, morale_benefit)) return;
+    if (check_keywords("breach", breach_apply, breach_benefit)) return;
+    if (check_keywords("burning", burning_apply, burning_benefit)) return;
+    if (check_keywords("assimilate", assimilate_apply, assimilate_benefit)) return;
+}
+
 std::vector<RosterOfficer> build_roster_from_sync(const PlayerData& player_data,
                                                   const GameData& game_data) {
     std::vector<RosterOfficer> result;
@@ -372,13 +647,60 @@ std::vector<RosterOfficer> build_roster_from_sync(const PlayerData& player_data,
         ro.rarity = rarity_letter(go.rarity);
         ro.level = po.level;
         ro.rank = po.rank;
-        ro.attack = po.attack;
-        ro.defense = po.defense;
-        ro.health = po.health;
+
+        // Resolve stats from game data at the player's level.
+        // po.attack/defense/health from the mod are typically zero, so
+        // always prefer the static stats table when available.
+        if (!go.stats.empty() && po.level > 0) {
+            int idx = std::min(po.level - 1, static_cast<int>(go.stats.size()) - 1);
+            idx = std::max(0, idx);
+            ro.attack = go.stats[idx].attack;
+            ro.defense = go.stats[idx].defense;
+            ro.health = go.stats[idx].health;
+        } else {
+            ro.attack = po.attack;
+            ro.defense = po.defense;
+            ro.health = po.health;
+        }
         ro.group = go.group_name;
-        ro.cm_pct = ability_pct(go.captain_ability, po.rank);
-        ro.oa_pct = ability_pct(go.ability, po.rank);
-        ro.description = resolve_officer_tooltip(go, po.rank);
+        ro.officer_class = go.officer_class;
+
+        // --- Fix #2: Convert raw decimals to percentage values ---
+        // The API returns values like 0.40 for 40%, but the optimizer expects 40.0.
+        //
+        // IMPORTANT: captain_ability.values and below_decks_ability.values are
+        // placeholder-indexed (for tooltip template {0}, {1}, {2}...), NOT rank-indexed.
+        // The primary CM/BDA value is always at index 0.
+        // Only ability.values (OA) is rank-indexed.
+        //
+        // For BDA officers, cm_pct holds the BDA percentage from below_decks_ability.
+        if (go.has_bda) {
+            double bda_raw = ability_pct(go.below_decks_ability, 0);  // always index 0
+            // BDA values: some are percentages (value_is_percentage=true, e.g., 0.40 → 40%),
+            // some are absolute numbers (value_is_percentage=false, e.g., Apex Barrier points).
+            // For percentage BDA values, multiply by 100 to match CSV format.
+            // For absolute values, they can be very large (e.g., 100000 for "100,000%"
+            // display), so keep them as-is to trigger is_bda() threshold.
+            if (go.below_decks_ability.value_is_percentage) {
+                ro.cm_pct = bda_raw * 100.0;
+            } else {
+                // Absolute BDA values — store raw to trigger is_bda() check
+                ro.cm_pct = bda_raw;
+            }
+        } else {
+            double cm_raw = ability_pct(go.captain_ability, 0);  // always index 0
+            ro.cm_pct = go.captain_ability.value_is_percentage ? cm_raw * 100.0 : cm_raw;
+        }
+
+        double oa_raw = ability_pct(go.ability, po.rank);
+        ro.oa_pct = go.ability.value_is_percentage ? oa_raw * 100.0 : oa_raw;
+
+        // --- Fix #1: Build optimizer-compatible description with cm:/oa:/bda: markers ---
+        ro.description = build_optimizer_description(go, po.rank);
+
+        // --- Fix #4: Parse status effects from description text ---
+        parse_status_effects(ro.description, ro.effect, ro.causes_effect);
+
         result.push_back(std::move(ro));
     }
 
@@ -392,7 +714,21 @@ std::vector<RosterOfficer> load_best_roster_source(const PlayerData& player_data
     }
 
     if (fs::exists("roster.csv")) {
-        return load_roster_csv("roster.csv");
+        auto csv_roster = load_roster_csv("roster.csv");
+        // Enrich CSV roster with officer_class from game data (CSV doesn't carry class)
+        if (!game_data.officers.empty()) {
+            std::unordered_map<std::string, int> name_to_class;
+            for (const auto& [id, go] : game_data.officers) {
+                if (go.officer_class >= 1 && go.officer_class <= 3)
+                    name_to_class[go.name] = go.officer_class;
+            }
+            for (auto& ro : csv_roster) {
+                auto it = name_to_class.find(ro.name);
+                if (it != name_to_class.end() && ro.officer_class == 0)
+                    ro.officer_class = it->second;
+            }
+        }
+        return csv_roster;
     }
 
     return {};
@@ -419,6 +755,8 @@ std::vector<OwnedShipCandidate> build_owned_ship_candidates(const PlayerData& pl
         ship.level = ps.level;
         ship.grade = it->second.grade;
         ship.rarity = it->second.rarity;
+        ship.ability_tag = classify_ship_ability(it->second.ability_name,
+                                                  it->second.ability_description);
         ships.push_back(std::move(ship));
     }
     return ships;
@@ -455,10 +793,12 @@ struct AppState {
     // Officer browser state
     int selected_officer = 0;
     std::string officer_filter;
+    bool officer_filter_active = false;  // true = typing a filter
 
     // Ship browser state
     int selected_ship = 0;
     std::string ship_filter;
+    bool ship_filter_active = false;     // true = typing a filter
 
     // Sync tab browser state
     int sync_view_mode = 0;   // 0=officers, 1=ships, 2=resources, 3=buildings, 4=research, 5=jobs, 6=buffs
@@ -669,21 +1009,7 @@ struct AppState {
 // Helpers
 // ---------------------------------------------------------------------------
 
-[[maybe_unused]]
-static std::string strip_color_tags(const std::string& text) {
-    std::string result;
-    size_t i = 0;
-    while (i < text.size()) {
-        if (text[i] == '<' && text.substr(i).find("color") != std::string::npos) {
-            auto end = text.find('>', i);
-            if (end != std::string::npos) { i = end + 1; continue; }
-        }
-        if (text[i] == '<' && text.substr(i, 8) == "</color>") { i += 8; continue; }
-        result += text[i];
-        i++;
-    }
-    return result;
-}
+// strip_color_tags() is defined in the anonymous namespace above (line ~363)
 
 static std::string format_number(int64_t n) {
     if (n >= 1000000000) return std::to_string(n / 1000000000) + "." + std::to_string((n % 1000000000) / 100000000) + "B";
@@ -1417,6 +1743,12 @@ static Element render_crew_optimizer(AppState& state) {
         lines.push_back(text("Bonuses:") | bold);
         if (bd.synergy_bonus > 0)
             lines.push_back(hbox({text("  Synergy:       +"), text(std::to_string((int)bd.synergy_bonus)) | color(Color::Green)}));
+        if (bd.bridge_synergy_bonus > 0) {
+            std::string bars_l = (bd.bridge_synergy_bars_left == 2) ? "##" : (bd.bridge_synergy_bars_left == 1 ? "#" : "-");
+            std::string bars_r = (bd.bridge_synergy_bars_right == 2) ? "##" : (bd.bridge_synergy_bars_right == 1 ? "#" : "-");
+            lines.push_back(hbox({text("  Group Synergy: +"), text(std::to_string((int)bd.bridge_synergy_bonus)) | color(Color::Green),
+                                  text(" [" + bars_l + "|" + bars_r + "] +" + std::to_string((int)bd.bridge_synergy_pct) + "% CM") | color(Color::Yellow)}));
+        }
         if (bd.state_chain_bonus > 0)
             lines.push_back(hbox({text("  State Chain:   +"), text(std::to_string((int)bd.state_chain_bonus)) | color(Color::Green)}));
         if (bd.crit_bonus > 0)
@@ -1527,7 +1859,7 @@ static Element render_loadout(AppState& state) {
             | bold | color(Color::Cyan),
         text("  [P] cycle") | dim,
         filler(),
-        text("  [Enter] Optimize All Docks") | dim,
+        text("  [G] Optimize All Docks") | dim,
         text("  [L] Load Saved") | dim,
     }));
     for (size_t i = 0; i < state.account_analysis.summary_notes.size() && i < 3; ++i) {
@@ -1682,6 +2014,12 @@ static Element render_loadout(AppState& state) {
             lines.push_back(hbox({text("  Raw Total:   "), text(std::to_string((int)bd.raw_total)) | color(Color::Cyan)}));
         if (bd.synergy_bonus > 0)
             lines.push_back(hbox({text("  Synergy:     +"), text(std::to_string((int)bd.synergy_bonus)) | color(Color::Green)}));
+        if (bd.bridge_synergy_bonus > 0) {
+            std::string bars_l = (bd.bridge_synergy_bars_left == 2) ? "##" : (bd.bridge_synergy_bars_left == 1 ? "#" : "-");
+            std::string bars_r = (bd.bridge_synergy_bars_right == 2) ? "##" : (bd.bridge_synergy_bars_right == 1 ? "#" : "-");
+            lines.push_back(hbox({text("  Group Syn:   +"), text(std::to_string((int)bd.bridge_synergy_bonus)) | color(Color::Green),
+                                  text(" [" + bars_l + "|" + bars_r + "] +" + std::to_string((int)bd.bridge_synergy_pct) + "%") | color(Color::Yellow)}));
+        }
         if (bd.state_chain_bonus > 0)
             lines.push_back(hbox({text("  State Chain: +"), text(std::to_string((int)bd.state_chain_bonus)) | color(Color::Green)}));
         if (bd.crit_bonus > 0)
@@ -1775,7 +2113,7 @@ static Element render_loadout(AppState& state) {
         detail = vbox(lines);
     } else if (!state.loadout_computed) {
         detail = vbox({
-            text("Press [Enter] to optimize all 7 docks.") | center | dim,
+            text("Press [G] to optimize all 7 docks.") | center | dim,
             separatorEmpty(),
             text("Use [</>] to change dock scenario.") | center | dim,
             text("Each dock gets best available crew") | center | dim,
@@ -2039,15 +2377,113 @@ static Element render_officers(AppState& state) {
             }
         }
 
-        if (!o->description.empty()) {
+        // ---- Resolved Abilities ----
+        {
+            int rank = owned ? pit->second->rank : 0;
+
+            // Resolve tooltip: substitute {N:#,#%} placeholders with actual values
+            std::string tooltip = resolve_officer_tooltip(*o, rank);
+            tooltip = strip_color_tags(tooltip);
+
+            // Split into blocks on double-newline
+            std::string block0, block1;
+            auto sep_pos = tooltip.find("\n\n");
+            if (sep_pos != std::string::npos) {
+                block0 = tooltip.substr(0, sep_pos);
+                block1 = tooltip.substr(sep_pos + 2);
+                auto sep2 = block1.find("\n\n");
+                if (sep2 != std::string::npos) block1 = block1.substr(0, sep2);
+            } else {
+                block0 = tooltip;
+            }
+
+            // Extract ability name (first line of each block)
+            auto first_line = [](const std::string& blk) -> std::string {
+                auto nl = blk.find('\n');
+                return nl != std::string::npos ? blk.substr(0, nl) : blk;
+            };
+            auto rest_lines = [](const std::string& blk) -> std::string {
+                auto nl = blk.find('\n');
+                if (nl == std::string::npos || nl + 1 >= blk.size()) return "";
+                return blk.substr(nl + 1);
+            };
+
+            // Word-wrap helper for the detail panel width
+            auto wrap_text = [](const std::string& txt, int width) -> Elements {
+                Elements result;
+                std::string remaining = txt;
+                while (!remaining.empty()) {
+                    if ((int)remaining.size() <= width) {
+                        result.push_back(text(remaining) | dim);
+                        break;
+                    }
+                    size_t cut = remaining.rfind(' ', width);
+                    if (cut == std::string::npos || cut == 0) cut = width;
+                    result.push_back(text(remaining.substr(0, cut)) | dim);
+                    remaining = remaining.substr(cut + (remaining[cut] == ' ' ? 1 : 0));
+                }
+                return result;
+            };
+
+            // Captain Maneuver / Below Decks Ability
             lines.push_back(separator());
-            std::string desc = o->description;
-            while (!desc.empty()) {
-                if (desc.size() <= 38) { lines.push_back(text(desc) | dim); break; }
-                size_t cut = desc.rfind(' ', 38);
-                if (cut == std::string::npos || cut == 0) cut = 38;
-                lines.push_back(text(desc.substr(0, cut)) | dim);
-                desc = desc.substr(cut + (desc[cut] == ' ' ? 1 : 0));
+            if (o->has_bda) {
+                // BDA officer: block0 = BDA text, no CM
+                std::string bda_name = first_line(block0);
+                std::string bda_desc = rest_lines(block0);
+                double bda_raw = ability_pct(o->below_decks_ability, 0);
+                std::string bda_val = o->below_decks_ability.value_is_percentage
+                    ? fmt_pct(bda_raw) : std::to_string((int)bda_raw);
+
+                lines.push_back(text("Below Decks Ability:") | bold | color(Color::Magenta));
+                lines.push_back(hbox({text("  "), text(bda_name) | bold}));
+                lines.push_back(hbox({text("  Value: "), text(bda_val) | bold | color(Color::Yellow)}));
+                if (!bda_desc.empty()) {
+                    auto wrapped = wrap_text("  " + bda_desc, 38);
+                    for (auto& w : wrapped) lines.push_back(w);
+                }
+
+                // Also note "Unfit To Lead" for CM
+                lines.push_back(text(""));
+                lines.push_back(text("Captain Maneuver:") | bold | color(Color::Blue));
+                lines.push_back(hbox({text("  "), text("Unfit To Lead") | dim}));
+            } else {
+                // Regular officer: block0 = CM text
+                std::string cm_name = first_line(block0);
+                std::string cm_desc = rest_lines(block0);
+                double cm_raw = ability_pct(o->captain_ability, 0);
+                std::string cm_val = o->captain_ability.value_is_percentage
+                    ? fmt_pct(cm_raw) : std::to_string((int)cm_raw);
+
+                lines.push_back(text("Captain Maneuver:") | bold | color(Color::Blue));
+                lines.push_back(hbox({text("  "), text(cm_name) | bold}));
+                lines.push_back(hbox({text("  Value: "), text(cm_val) | bold | color(Color::Yellow)}));
+                if (!cm_desc.empty()) {
+                    auto wrapped = wrap_text("  " + cm_desc, 38);
+                    for (auto& w : wrapped) lines.push_back(w);
+                }
+            }
+
+            // Officer Ability (block1)
+            if (!block1.empty()) {
+                std::string oa_name = first_line(block1);
+                std::string oa_desc = rest_lines(block1);
+                double oa_raw = ability_pct(o->ability, rank);
+                std::string oa_val = o->ability.value_is_percentage
+                    ? fmt_pct(oa_raw) : std::to_string((int)oa_raw);
+
+                lines.push_back(text(""));
+                lines.push_back(text("Officer Ability:") | bold | color(Color::Green));
+                lines.push_back(hbox({text("  "), text(oa_name) | bold}));
+                lines.push_back(hbox({text("  Value: "), text(oa_val) | bold | color(Color::Yellow)}));
+                if (owned) {
+                    lines.push_back(hbox({text("  (at rank "), text(std::to_string(rank)) | bold,
+                                          text(")")}));
+                }
+                if (!oa_desc.empty()) {
+                    auto wrapped = wrap_text("  " + oa_desc, 38);
+                    for (auto& w : wrapped) lines.push_back(w);
+                }
             }
         }
         detail = vbox(lines) | border;
@@ -2057,12 +2493,20 @@ static Element render_officers(AppState& state) {
         ? "Officers (" + std::to_string(owned_count) + " owned / " + std::to_string(officers.size()) + " total)"
         : "Officers (" + std::to_string(officers.size()) + " total)";
 
+    Elements header_elems;
+    header_elems.push_back(text(title) | bold);
+    if (state.officer_filter_active) {
+        header_elems.push_back(text("  Filter: ") | dim);
+        header_elems.push_back(text(state.officer_filter + "_") | bold | color(Color::Yellow));
+    } else if (!state.officer_filter.empty()) {
+        header_elems.push_back(text("  Filter: ") | dim);
+        header_elems.push_back(text(state.officer_filter) | color(Color::Yellow));
+    }
+    header_elems.push_back(filler());
+    header_elems.push_back(text("[Up/Down] Navigate  [F] Filter") | dim);
+
     return vbox({
-        hbox({
-            text(title) | bold,
-            filler(),
-            text("[Up/Down] Navigate  [F] Filter") | dim,
-        }),
+        hbox(header_elems),
         separator(),
         hbox({
             vbox(rows) | vscroll_indicator | yframe | flex,
@@ -2261,6 +2705,63 @@ static Element render_ships(AppState& state) {
         if (!s->crew_slots.empty()) {
             lines.push_back(hbox({text("Crew:   "), text(std::to_string(s->crew_slots.size()) + " slots")}));
         }
+
+        // ---- Ship Ability ----
+        if (!s->ability_name.empty()) {
+            lines.push_back(separator());
+
+            // Clean up ability name (strip color tags)
+            std::string aname = strip_color_tags(s->ability_name);
+
+            // Classify the ability
+            std::string tag = classify_ship_ability(s->ability_name, s->ability_description);
+
+            // Color based on classification
+            Color acolor = Color::White;
+            if (tag.find("mining") != std::string::npos) acolor = Color::Yellow;
+            else if (tag.find("combat") != std::string::npos) acolor = Color::Red;
+            else if (tag.find("loot") != std::string::npos) acolor = Color::Green;
+            else if (tag == "captain_boost") acolor = Color::Cyan;
+
+            lines.push_back(text("Ship Ability:") | bold | color(acolor));
+            lines.push_back(hbox({text("  "), text(aname) | bold}));
+
+            // Show classification tag
+            std::string tag_display = tag;
+            for (auto& c : tag_display) if (c == '_') c = ' ';
+            lines.push_back(hbox({text("  ["), text(tag_display) | color(acolor), text("]")}));
+
+            // Show cleaned description text
+            if (!s->ability_description.empty()) {
+                std::string desc = strip_color_tags(s->ability_description);
+                desc = strip_format_placeholders(desc);
+
+                // Split on double-newline — first block is the ability, rest is flavor
+                auto sep_pos = desc.find("\n\n");
+                std::string ability_text = (sep_pos != std::string::npos)
+                    ? desc.substr(0, sep_pos) : desc;
+
+                // Extract just the effect text (skip ability name header line)
+                auto nl = ability_text.find('\n');
+                std::string effect_text = (nl != std::string::npos && nl + 1 < ability_text.size())
+                    ? ability_text.substr(nl + 1) : ability_text;
+
+                // Collapse whitespace and word-wrap
+                effect_text = collapse_whitespace(effect_text);
+                std::string remaining = effect_text;
+                while (!remaining.empty()) {
+                    if ((int)remaining.size() <= 36) {
+                        lines.push_back(hbox({text("  "), text(remaining) | dim}));
+                        break;
+                    }
+                    size_t cut = remaining.rfind(' ', 36);
+                    if (cut == std::string::npos || cut == 0) cut = 36;
+                    lines.push_back(hbox({text("  "), text(remaining.substr(0, cut)) | dim}));
+                    remaining = remaining.substr(cut + (remaining[cut] == ' ' ? 1 : 0));
+                }
+            }
+        }
+
         detail = vbox(lines) | border;
     }
 
@@ -2268,12 +2769,20 @@ static Element render_ships(AppState& state) {
         ? "Ships (" + std::to_string(owned_count) + " owned / " + std::to_string(ships.size()) + " total)"
         : "Ships (" + std::to_string(ships.size()) + " total)";
 
+    Elements ship_header_elems;
+    ship_header_elems.push_back(text(title) | bold);
+    if (state.ship_filter_active) {
+        ship_header_elems.push_back(text("  Filter: ") | dim);
+        ship_header_elems.push_back(text(state.ship_filter + "_") | bold | color(Color::Yellow));
+    } else if (!state.ship_filter.empty()) {
+        ship_header_elems.push_back(text("  Filter: ") | dim);
+        ship_header_elems.push_back(text(state.ship_filter) | color(Color::Yellow));
+    }
+    ship_header_elems.push_back(filler());
+    ship_header_elems.push_back(text("[Up/Down] Navigate  [F] Filter") | dim);
+
     return vbox({
-        hbox({
-            text(title) | bold,
-            filler(),
-            text("[Up/Down] Navigate  [F] Filter") | dim,
-        }),
+        hbox(ship_header_elems),
         separator(),
         hbox({
             vbox(rows) | vscroll_indicator | yframe | flex,
@@ -2661,14 +3170,15 @@ static Element render_help() {
                 text("  [Up/Down]  Navigate docks"),
                 text("  [</>]      Change dock scenario"),
                 text("  [T]        Cycle ship type"),
-                text("  [Enter]    Optimize all docks"),
+                text("  [Enter]    Edit dock configuration"),
+                text("  [G]        Optimize all docks"),
                 text("  [K]        Lock/unlock dock"),
                 text("  [B]        Cycle BDA selection"),
                 text("  [L]        Load saved loadout"),
                 separatorEmpty(),
                 text("Officers / Ships:") | bold | color(Color::Cyan),
                 text("  [Up/Down]  Navigate list"),
-                text("  [F]        Clear filter"),
+                text("  [F]        Filter (type to search, Esc clears)"),
                 separatorEmpty(),
                 text("Data:") | bold | color(Color::Cyan),
                 text("  Cached in data/game_data/"),
@@ -2770,8 +3280,13 @@ int main() {
 
     // Handle keyboard events
     auto main_component = CatchEvent(main_renderer, [&](Event event) {
+        // If a filter input is active, route events to the filter handler
+        // before any global key handlers (so typing 'h', 'q', etc. goes to filter)
+        bool filter_active = (selected_tab == 5 && state->officer_filter_active) ||
+                             (selected_tab == 6 && state->ship_filter_active);
+
         // Global: Help toggle (must come first so H works from anywhere)
-        if (event == Event::Character('h') || event == Event::Character('H')) {
+        if (!filter_active && (event == Event::Character('h') || event == Event::Character('H'))) {
             state->show_help = !state->show_help;
             return true;
         }
@@ -2785,18 +3300,22 @@ int main() {
             return true;
         }
 
-        // Global: Tab / Shift+Tab to switch tabs
+        // Global: Tab / Shift+Tab to switch tabs (also exits filter mode)
         if (event == Event::Tab) {
+            state->officer_filter_active = false;
+            state->ship_filter_active = false;
             selected_tab = (selected_tab + 1) % tab_count;
             return true;
         }
         if (event == Event::TabReverse) {
+            state->officer_filter_active = false;
+            state->ship_filter_active = false;
             selected_tab = (selected_tab - 1 + tab_count) % tab_count;
             return true;
         }
 
         // Global: Quit
-        if (event == Event::Character('q') || event == Event::Character('Q')) {
+        if (!filter_active && (event == Event::Character('q') || event == Event::Character('Q'))) {
             state->save_plans();
             auto screen = ScreenInteractive::Active();
             if (screen) screen->Exit();
@@ -2804,7 +3323,7 @@ int main() {
         }
 
         // Global: Refresh game data
-        if (event == Event::Character('r') || event == Event::Character('R')) {
+        if (!filter_active && (event == Event::Character('r') || event == Event::Character('R'))) {
             if (!state->loading) {
                 state->loading = true;
                 state->set_status("Fetching game data from api.spocks.club...");
@@ -2837,7 +3356,7 @@ int main() {
         }
 
         // Global: Toggle ingress server
-        if (event == Event::Character('s') || event == Event::Character('S')) {
+        if (!filter_active && (event == Event::Character('s') || event == Event::Character('S'))) {
             if (selected_tab != 1) {  // 's' on Daily tab means skip
                 if (state->ingress_server.is_running()) {
                     state->ingress_server.stop();
@@ -3182,6 +3701,46 @@ int main() {
 
         // === Officers tab events ===
         if (selected_tab == 5) {
+            // Filter input mode: capture keystrokes as filter text
+            if (state->officer_filter_active) {
+                if (event == Event::Escape) {
+                    state->officer_filter_active = false;
+                    state->officer_filter.clear();
+                    state->selected_officer = 0;
+                    state->status_message = "Filter cleared.";
+                    return true;
+                }
+                if (event == Event::Return) {
+                    state->officer_filter_active = false;
+                    state->status_message = "Filter applied: " + state->officer_filter;
+                    return true;
+                }
+                if (event == Event::Backspace) {
+                    if (!state->officer_filter.empty()) {
+                        state->officer_filter.pop_back();
+                        state->selected_officer = 0;
+                    }
+                    state->status_message = "Filter: " + state->officer_filter + "_";
+                    return true;
+                }
+                if (event.is_character()) {
+                    state->officer_filter += event.character();
+                    state->selected_officer = 0;
+                    state->status_message = "Filter: " + state->officer_filter + "_";
+                    return true;
+                }
+                // Allow arrow keys to still navigate while filtering
+                if (event == Event::ArrowDown) {
+                    int max_off = (int)state->game_data.officers.size() - 1;
+                    if (state->selected_officer < max_off) state->selected_officer++;
+                    return true;
+                }
+                if (event == Event::ArrowUp) {
+                    if (state->selected_officer > 0) state->selected_officer--;
+                    return true;
+                }
+                return true;  // Consume all other events in filter mode
+            }
             if (event == Event::ArrowDown) {
                 int max_off = (int)state->game_data.officers.size() - 1;
                 if (state->selected_officer < max_off) state->selected_officer++;
@@ -3192,16 +3751,56 @@ int main() {
                 return true;
             }
             if (event == Event::Character('f') || event == Event::Character('F')) {
-                // TODO: open filter input — for now just clear filter
+                state->officer_filter_active = true;
                 state->officer_filter.clear();
                 state->selected_officer = 0;
-                state->status_message = "Filter cleared.";
+                state->status_message = "Filter: _ (type to search, Enter to apply, Esc to clear)";
                 return true;
             }
         }
 
         // === Ships tab events ===
         if (selected_tab == 6) {
+            // Filter input mode: capture keystrokes as filter text
+            if (state->ship_filter_active) {
+                if (event == Event::Escape) {
+                    state->ship_filter_active = false;
+                    state->ship_filter.clear();
+                    state->selected_ship = 0;
+                    state->status_message = "Filter cleared.";
+                    return true;
+                }
+                if (event == Event::Return) {
+                    state->ship_filter_active = false;
+                    state->status_message = "Filter applied: " + state->ship_filter;
+                    return true;
+                }
+                if (event == Event::Backspace) {
+                    if (!state->ship_filter.empty()) {
+                        state->ship_filter.pop_back();
+                        state->selected_ship = 0;
+                    }
+                    state->status_message = "Filter: " + state->ship_filter + "_";
+                    return true;
+                }
+                if (event.is_character()) {
+                    state->ship_filter += event.character();
+                    state->selected_ship = 0;
+                    state->status_message = "Filter: " + state->ship_filter + "_";
+                    return true;
+                }
+                // Allow arrow keys to still navigate while filtering
+                if (event == Event::ArrowDown) {
+                    int max_ship = (int)state->game_data.ships.size() - 1;
+                    if (state->selected_ship < max_ship) state->selected_ship++;
+                    return true;
+                }
+                if (event == Event::ArrowUp) {
+                    if (state->selected_ship > 0) state->selected_ship--;
+                    return true;
+                }
+                return true;  // Consume all other events in filter mode
+            }
             if (event == Event::ArrowDown) {
                 int max_ship = (int)state->game_data.ships.size() - 1;
                 if (state->selected_ship < max_ship) state->selected_ship++;
@@ -3212,9 +3811,10 @@ int main() {
                 return true;
             }
             if (event == Event::Character('f') || event == Event::Character('F')) {
+                state->ship_filter_active = true;
                 state->ship_filter.clear();
                 state->selected_ship = 0;
-                state->status_message = "Filter cleared.";
+                state->status_message = "Filter: _ (type to search, Enter to apply, Esc to clear)";
                 return true;
             }
         }

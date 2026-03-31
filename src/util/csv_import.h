@@ -14,6 +14,7 @@ namespace stfc {
 struct RosterOfficer {
     std::string name;
     char rarity = ' ';           // C, U, R, E
+    int officer_class = 0;       // 1=Command, 2=Science, 3=Engineering
     int level = 0;
     int rank = 0;
     double attack = 0.0;

@@ -134,6 +134,10 @@ bool ApiClient::fetch_officers(GameData& data) {
 
             if (j.contains("ability")) o.ability = parse_officer_ability(j["ability"]);
             if (j.contains("captain_ability")) o.captain_ability = parse_officer_ability(j["captain_ability"]);
+            if (j.contains("below_decks_ability")) {
+                o.below_decks_ability = parse_officer_ability(j["below_decks_ability"]);
+                o.has_bda = true;
+            }
 
             if (j.contains("stats") && j["stats"].is_array()) {
                 for (auto& s : j["stats"]) {

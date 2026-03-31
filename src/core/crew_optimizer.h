@@ -78,6 +78,45 @@ struct ShipRecommendation {
 const ShipRecommendation& get_ship_recommendation(Scenario s);
 
 // ---------------------------------------------------------------------------
+// CM (Captain's Maneuver) scope classification — determines how powerful
+// the ability is based on what it affects, not just its percentage.
+// ---------------------------------------------------------------------------
+
+enum class CmScope {
+    Unknown,         // Unrecognized CM text
+    AllStats,        // "increases ALL officer stats by X%" — strongest (Kirk, etc.)
+    AbilityAmp,      // "effectiveness of all officer abilities" — force multiplier
+    WeaponDamage,    // "weapon damage by X%" — moderate single-dimension
+    CritDamage,      // "critical hit damage by X%" — conditional burst
+    SingleStat,      // "attack/defense/health by X%" — narrow boost
+    ShieldHp,        // "shield HP/SHP by X%" — defensive
+    Mitigation,      // "armor/dodge/mitigation by X%" — defensive
+    MiningEffect,    // "mining speed/cargo by X%" — non-combat
+    Conditional,     // "when below X%..." — unreliable trigger
+    Utility,         // warp, repair, loot — non-damage utility
+    NonCombat,       // "cost efficiency/disco spend" — never useful in combat
+};
+
+// Weight multiplier per CM scope: applied as cm_pct * weight to get CM score
+inline double cm_scope_weight(CmScope scope) {
+    switch (scope) {
+        case CmScope::AllStats:      return 120.0;  // 70% * 120 = 8400
+        case CmScope::AbilityAmp:    return 100.0;  // 50% * 100 = 5000
+        case CmScope::WeaponDamage:  return  40.0;  // 80% * 40  = 3200
+        case CmScope::CritDamage:    return  35.0;  // 70% * 35  = 2450
+        case CmScope::SingleStat:    return  25.0;  // 100% * 25 = 2500
+        case CmScope::ShieldHp:      return  20.0;
+        case CmScope::Mitigation:    return  20.0;
+        case CmScope::MiningEffect:  return  15.0;  // Non-combat, valued in mining scenarios
+        case CmScope::Conditional:   return  15.0;  // Unreliable
+        case CmScope::Utility:       return  10.0;
+        case CmScope::NonCombat:     return   2.0;  // Nearly worthless in combat
+        case CmScope::Unknown:       return  15.0;
+    }
+    return 15.0;
+}
+
+// ---------------------------------------------------------------------------
 // Classified officer — RosterOfficer + all computed tags
 // ---------------------------------------------------------------------------
 
@@ -85,6 +124,7 @@ struct ClassifiedOfficer {
     // Base data (from CSV)
     std::string name;
     char rarity = ' ';
+    int officer_class = 0;       // 1=Command, 2=Science, 3=Engineering
     int level = 0;
     int rank = 0;
     double attack = 0.0;
@@ -93,6 +133,7 @@ struct ClassifiedOfficer {
     std::string group;
     double cm_pct = 0.0;
     double oa_pct = 0.0;
+    CmScope cm_scope = CmScope::Unknown;  // Classified CM type
     std::string effect;
     bool causes_effect = false;
     bool player_uses = false;
@@ -114,10 +155,24 @@ struct ClassifiedOfficer {
     bool shield_related = false;
     bool shots_related = false;
     bool mitigation_related = false;
-    bool isolytic_related = false;
+    bool isolytic_related = false;   // DEPRECATED: use isolytic_cascade/isolytic_defense
     bool weapon_delay = false;
     bool ability_amplifier = false;
     bool stat_booster = false;
+
+    // PvP 2025 META fields (Step 1-4 framework)
+    // Step 1: Mitigation Delta
+    bool armor_piercing = false;     // Provides armor piercing
+    bool shield_piercing = false;    // Provides shield piercing
+    bool accuracy_boost = false;     // Provides accuracy
+    // Step 3: Proc Factor
+    bool proc_guaranteed = false;    // State application is guaranteed (round start) vs chance-based
+    // Step 4: Rock-Paper-Scissors META
+    bool apex_barrier = false;       // Defensive: absorbs damage via apex barrier
+    bool apex_shred = false;         // Offensive: strips/pierces apex barrier
+    bool isolytic_cascade = false;   // Offensive: bypasses standard defense
+    bool isolytic_defense = false;   // Defensive: reduces isolytic damage
+    bool cumulative_stacking = false;// Effect stacks each round (Cumulative)
 
     // Scenario tags
     bool base_attack = false;
@@ -206,7 +261,11 @@ struct CrewBreakdown {
     std::vector<std::string> bridge;
     std::map<std::string, double> individual_scores;
     double raw_total = 0.0;
-    double synergy_bonus = 0.0;
+    double synergy_bonus = 0.0;           // state coherence bonus (morale/breach/etc.)
+    double bridge_synergy_bonus = 0.0;    // game synergy group CM multiplier bonus (points)
+    double bridge_synergy_pct = 0.0;      // total synergy percentage (0-40%)
+    int bridge_synergy_bars_left = 0;     // 0, 1, or 2 bars for left side officer
+    int bridge_synergy_bars_right = 0;    // 0, 1, or 2 bars for right side officer
     double state_chain_bonus = 0.0;
     double crit_bonus = 0.0;
     double ship_type_bonus = 0.0;
@@ -308,6 +367,7 @@ struct OwnedShipCandidate {
     int level = 0;
     int grade = 0;
     int rarity = 0;
+    std::string ability_tag;  // e.g. "mining_crystal", "combat_hostile", "loot"
 };
 
 // ---------------------------------------------------------------------------
@@ -393,11 +453,19 @@ private:
                                const ClassifiedOfficer& b1,
                                const ClassifiedOfficer& b2) const;
     void apply_oa_bonus(double& total, CrewBreakdown& bd,
-                        const ClassifiedOfficer* crew[3]) const;
+                        const ClassifiedOfficer* crew[3],
+                        Scenario scenario = Scenario::PvP) const;
+    void apply_bridge_synergy(double& total, CrewBreakdown& bd,
+                              const ClassifiedOfficer* crew[3]) const;
 
     std::vector<ClassifiedOfficer> officers_;
     ShipType ship_type_ = ShipType::Explorer;
     WeaknessProfile weakness_;
+
+    // Roster stat maxima for normalization (computed in classify_officers)
+    double roster_max_attack_ = 1.0;
+    double roster_max_defense_ = 1.0;
+    double roster_max_health_ = 1.0;
 
     // Ship type other-types for penalty detection
     std::vector<std::string> other_ship_types() const;
