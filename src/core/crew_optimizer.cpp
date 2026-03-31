@@ -3300,10 +3300,14 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
                 score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits mining speed dock");
             }
-            if (off.mining) score += 12000.0;
-            if (off.cargo) score += 5000.0;
-            if (contains(off.bda_text, "mining speed") || contains(off.bda_text, "mining rate") || contains(off.bda_text, "mining efficiency")) {
-                score += std::max(off.bda_value * 20000.0, 12000.0);
+            if (off.mining) score += std::max(oa_val * 15000.0, 8000.0);
+            if (off.cargo) score += std::max(oa_val * 6000.0, 3000.0);
+            {
+                double bda_mv = bda_mining_value(off, Scenario::MiningSpeed);
+                if (bda_mv > 0.0) {
+                    score += bda_mv * 600.0;  // e.g., 30% speed → 30*0.6*600 = 10800
+                    reasons.push_back("BDA mining speed +" + std::to_string(static_cast<int>(off.bda_mining_speed_pct)) + "%");
+                }
             }
             if (!off.mining_speed && !off.mining && !off.cargo) score -= 12000.0;
             break;
@@ -3313,11 +3317,15 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
                 score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits protected cargo dock");
             }
-            if (off.cargo) score += 12000.0;
-            if (off.node_defense) score += 8000.0;
-            if (off.mining) score += 5000.0;
-            if (contains(off.bda_text, "protected cargo") || contains(off.bda_text, "protect cargo")) {
-                score += std::max(off.bda_value * 20000.0, 12000.0);
+            if (off.cargo) score += std::max(oa_val * 15000.0, 8000.0);
+            if (off.node_defense) score += std::max(oa_val * 10000.0, 6000.0);
+            if (off.mining) score += std::max(oa_val * 6000.0, 3000.0);
+            {
+                double bda_mv = bda_mining_value(off, Scenario::MiningProtected);
+                if (bda_mv > 0.0) {
+                    score += bda_mv * 600.0;
+                    reasons.push_back("BDA protected cargo +" + std::to_string(static_cast<int>(off.bda_protected_cargo_pct)) + "%");
+                }
             }
             if (!off.protected_cargo && !off.cargo && !off.node_defense) score -= 12000.0;
             break;
@@ -3327,11 +3335,15 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
                 score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits crystal mining dock");
             }
-            if (off.mining_speed) score += 10000.0;
-            if (off.mining) score += 8000.0;
-            if (off.cargo || off.protected_cargo) score += 4000.0;
-            if (contains(off.bda_text, "crystal")) {
-                score += std::max(off.bda_value * 20000.0, 12000.0);
+            if (off.mining_speed) score += std::max(oa_val * 12000.0, 7000.0);
+            if (off.mining) score += std::max(oa_val * 10000.0, 5000.0);
+            if (off.cargo || off.protected_cargo) score += std::max(oa_val * 5000.0, 2500.0);
+            {
+                double bda_mv = bda_mining_value(off, Scenario::MiningCrystal);
+                if (bda_mv > 0.0) {
+                    score += bda_mv * 600.0;
+                    reasons.push_back("BDA crystal mining +" + std::to_string(static_cast<int>(off.bda_mining_crystal_pct)) + "%");
+                }
             }
             if (!off.mining_crystal && !off.mining && !off.cargo) score -= 12000.0;
             break;
@@ -3341,11 +3353,15 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
                 score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits gas mining dock");
             }
-            if (off.mining_speed) score += 10000.0;
-            if (off.mining) score += 8000.0;
-            if (off.cargo || off.protected_cargo) score += 4000.0;
-            if (contains_word(off.bda_text, "gas") || contains(off.bda_text, "gas mining")) {
-                score += std::max(off.bda_value * 20000.0, 12000.0);
+            if (off.mining_speed) score += std::max(oa_val * 12000.0, 7000.0);
+            if (off.mining) score += std::max(oa_val * 10000.0, 5000.0);
+            if (off.cargo || off.protected_cargo) score += std::max(oa_val * 5000.0, 2500.0);
+            {
+                double bda_mv = bda_mining_value(off, Scenario::MiningGas);
+                if (bda_mv > 0.0) {
+                    score += bda_mv * 600.0;
+                    reasons.push_back("BDA gas mining +" + std::to_string(static_cast<int>(off.bda_mining_gas_pct)) + "%");
+                }
             }
             if (!off.mining_gas && !off.mining && !off.cargo) score -= 12000.0;
             break;
@@ -3355,11 +3371,15 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
                 score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits ore mining dock");
             }
-            if (off.mining_speed) score += 10000.0;
-            if (off.mining) score += 8000.0;
-            if (off.cargo || off.protected_cargo) score += 4000.0;
-            if (contains_word(off.bda_text, "ore") || contains(off.bda_text, "ore mining")) {
-                score += std::max(off.bda_value * 20000.0, 12000.0);
+            if (off.mining_speed) score += std::max(oa_val * 12000.0, 7000.0);
+            if (off.mining) score += std::max(oa_val * 10000.0, 5000.0);
+            if (off.cargo || off.protected_cargo) score += std::max(oa_val * 5000.0, 2500.0);
+            {
+                double bda_mv = bda_mining_value(off, Scenario::MiningOre);
+                if (bda_mv > 0.0) {
+                    score += bda_mv * 600.0;
+                    reasons.push_back("BDA ore mining +" + std::to_string(static_cast<int>(off.bda_mining_ore_pct)) + "%");
+                }
             }
             if (!off.mining_ore && !off.mining && !off.cargo) score -= 12000.0;
             break;
@@ -3369,12 +3389,16 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
                 score += std::max(oa_val * 22000.0, 14000.0);
                 reasons.push_back("Fits mining dock");
             }
-            if (off.mining_speed) score += 12000.0;
-            if (off.cargo) score += 10000.0;
-            if (off.protected_cargo) score += 8000.0;
-            if (off.node_defense) score += 5000.0;
-            if (contains(off.bda_text, "mining") || contains(off.bda_text, "cargo")) {
-                score += std::max(off.bda_value * 15000.0, 10000.0);
+            if (off.mining_speed) score += std::max(oa_val * 15000.0, 8000.0);
+            if (off.cargo) score += std::max(oa_val * 12000.0, 7000.0);
+            if (off.protected_cargo) score += std::max(oa_val * 10000.0, 5000.0);
+            if (off.node_defense) score += std::max(oa_val * 6000.0, 3000.0);
+            {
+                double bda_mv = bda_mining_value(off, Scenario::MiningGeneral);
+                if (bda_mv > 0.0) {
+                    score += bda_mv * 500.0;
+                    reasons.push_back("BDA mining ability");
+                }
             }
             if (!off.mining && !off.cargo && !off.protected_cargo) score -= 12000.0;
             break;
