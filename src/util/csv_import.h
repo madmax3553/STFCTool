@@ -28,6 +28,20 @@ struct RosterOfficer {
     bool player_uses = false;    // whether player marked this officer as used
     std::string description;     // full CM/BDA/OA text
 
+    // -----------------------------------------------------------------------
+    // Structured ability data (populated from API sync when available).
+    // These carry the raw numeric values through to ClassifiedOfficer.
+    // -----------------------------------------------------------------------
+    std::vector<double> api_oa_values;     // OA value per rank [rank1..rank5]
+    std::vector<double> api_oa_chances;    // OA proc chance per rank [rank1..rank5]
+    bool api_oa_is_pct = false;            // true if OA values are percentages
+    std::vector<double> api_cm_values;     // CM placeholder values [v0..v4]
+    std::vector<double> api_cm_chances;    // CM proc chances [c0..c4]
+    bool api_cm_is_pct = false;            // true if CM values are percentages
+    std::vector<double> api_bda_values;    // BDA value per rank [rank1..rank5]
+    std::vector<double> api_bda_chances;   // BDA proc chances [rank1..rank5]
+    bool api_bda_is_pct = false;           // true if BDA values are percentages
+
     // Derived: BDA officers have their BDA percentage in the CM/BDA slot or
     // description starts with "bda:".
     bool is_bda() const {

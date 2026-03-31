@@ -701,6 +701,30 @@ std::vector<RosterOfficer> build_roster_from_sync(const PlayerData& player_data,
         // --- Fix #4: Parse status effects from description text ---
         parse_status_effects(ro.description, ro.effect, ro.causes_effect);
 
+        // --- Structured ability data for numeric scoring ---
+        // OA: rank-indexed values and chances
+        ro.api_oa_is_pct = go.ability.value_is_percentage;
+        for (const auto& av : go.ability.values) {
+            ro.api_oa_values.push_back(av.value);
+            ro.api_oa_chances.push_back(av.chance);
+        }
+
+        // CM: placeholder-indexed values (primary at index 0)
+        ro.api_cm_is_pct = go.captain_ability.value_is_percentage;
+        for (const auto& av : go.captain_ability.values) {
+            ro.api_cm_values.push_back(av.value);
+            ro.api_cm_chances.push_back(av.chance);
+        }
+
+        // BDA: placeholder-indexed values (primary at index 0)
+        if (go.has_bda) {
+            ro.api_bda_is_pct = go.below_decks_ability.value_is_percentage;
+            for (const auto& av : go.below_decks_ability.values) {
+                ro.api_bda_values.push_back(av.value);
+                ro.api_bda_chances.push_back(av.chance);
+            }
+        }
+
         result.push_back(std::move(ro));
     }
 
@@ -821,6 +845,7 @@ struct AppState {
     std::vector<CrewResult> crew_results;
     std::vector<BdaSuggestion> crew_bda_results;  // BDA for selected crew
     int selected_crew = 0;
+    int selected_crew_bda = 0;     // BDA selection within crew tab
     bool crew_loaded = false;
 
     // Loadout state
@@ -947,10 +972,12 @@ struct AppState {
         ShipType st = ShipType::Explorer;
         if (crew_ship_type == 1) st = ShipType::Battleship;
         if (crew_ship_type == 2) st = ShipType::Interceptor;
+        if (crew_ship_type == 3) st = ShipType::Survey;
 
         optimizer->set_ship_type(st);
         crew_results = optimizer->find_best_crews(scenarios[crew_scenario], 5);
         crew_bda_results.clear();
+        selected_crew_bda = 0;
 
         // Auto-compute BDA for the top result
         if (!crew_results.empty()) {
@@ -968,6 +995,7 @@ struct AppState {
         const auto& bd = crew_results[selected_crew].breakdown;
         crew_bda_results = optimizer->find_best_bda(
             bd.captain, bd.bridge, scenarios[crew_scenario], 3);
+        selected_crew_bda = 0;
     }
 
     std::string loadout_error;  // non-empty if last optimization failed
@@ -982,6 +1010,7 @@ struct AppState {
             ShipType st = ShipType::Explorer;
             if (crew_ship_type == 1) st = ShipType::Battleship;
             if (crew_ship_type == 2) st = ShipType::Interceptor;
+            if (crew_ship_type == 3) st = ShipType::Survey;
             optimizer->set_ship_type(st);
 
             refresh_account_analysis();
@@ -1653,8 +1682,8 @@ static Element render_crew_optimizer(AppState& state) {
     int safe_scenario = std::clamp(state.crew_scenario, 0, (int)scenarios.size() - 1);
     std::string scenario_name = scenario_label(scenarios[safe_scenario]);
 
-    static const char* ship_names[] = {"Explorer", "Battleship", "Interceptor"};
-    int safe_ship = std::clamp(state.crew_ship_type, 0, 2);
+    static const char* ship_names[] = {"Explorer", "Battleship", "Interceptor", "Survey"};
+    int safe_ship = std::clamp(state.crew_ship_type, 0, 3);
     std::string ship_name = ship_names[safe_ship];
 
     auto header = vbox({
@@ -1798,18 +1827,106 @@ static Element render_crew_optimizer(AppState& state) {
         // BDA suggestions for this crew
         if (!state.crew_bda_results.empty()) {
             lines.push_back(separator());
-            lines.push_back(text("BDA Suggestions:") | bold | color(Color::Magenta));
+            lines.push_back(text("BDA Suggestions:  [B] cycle") | bold | color(Color::Magenta));
             for (size_t bi = 0; bi < state.crew_bda_results.size(); ++bi) {
                 const auto& bda = state.crew_bda_results[bi];
-                lines.push_back(hbox({
-                    text("  #" + std::to_string(bi + 1) + " "),
+                bool bda_sel = ((int)bi == state.selected_crew_bda);
+                auto bda_row = hbox({
+                    text(bda_sel ? " >> " : "    "),
+                    text("#" + std::to_string(bi + 1) + " "),
                     text(bda.name) | bold | color(Color::Cyan),
                     filler(),
                     text("OA:" + std::to_string((int)bda.oa_pct) + "%") | dim,
                     text("  Score:" + std::to_string((int)bda.score)) | dim,
+                });
+                if (bda_sel) bda_row = bda_row | bgcolor(Color::GrayDark);
+                lines.push_back(bda_row);
+            }
+
+            // Detail panel for selected BDA
+            int sbi = state.selected_crew_bda;
+            if (sbi >= 0 && sbi < (int)state.crew_bda_results.size()) {
+                const auto& bda = state.crew_bda_results[sbi];
+                lines.push_back(separator());
+                lines.push_back(text("BDA Details:") | bold | color(Color::Magenta));
+
+                // Name, level, rank, type
+                auto name_row_parts = Elements{
+                    text("  "),
+                    text(bda.name) | bold | color(Color::Cyan),
+                    text("  Lv" + std::to_string(bda.level) + " Rk" + std::to_string(bda.rank)),
+                };
+                if (!bda.officer_type.empty()) {
+                    name_row_parts.push_back(text("  [" + bda.officer_type + "]") | dim);
+                }
+                if (bda.is_dedicated_bda) {
+                    name_row_parts.push_back(text("  [BDA]") | color(Color::Yellow));
+                }
+                lines.push_back(hbox(name_row_parts));
+
+                // Stats
+                lines.push_back(hbox({
+                    text("  Atk:"),
+                    text(std::to_string((int)bda.attack)) | dim,
+                    text("  Def:"),
+                    text(std::to_string((int)bda.defense)) | dim,
+                    text("  HP:"),
+                    text(std::to_string((int)bda.health)) | dim,
                 }));
+
+                // Tag labels
+                Elements tag_parts;
+                if (bda.cargo)              tag_parts.push_back(text(" [Cargo]") | color(Color::Green));
+                if (bda.protected_cargo)    tag_parts.push_back(text(" [Protected]") | color(Color::GreenLight));
+                if (bda.loot)               tag_parts.push_back(text(" [Loot]") | color(Color::Yellow));
+                if (bda.mining)             tag_parts.push_back(text(" [Mining]") | color(Color::Blue));
+                if (bda.crit_related)       tag_parts.push_back(text(" [Crit]") | color(Color::Red));
+                if (bda.shield_related)     tag_parts.push_back(text(" [Shield]") | color(Color::Cyan));
+                if (bda.mitigation_related) tag_parts.push_back(text(" [Mitigation]") | color(Color::CyanLight));
+                if (bda.repair)             tag_parts.push_back(text(" [Repair]") | color(Color::MagentaLight));
+                if (bda.armada)             tag_parts.push_back(text(" [Armada]") | color(Color::YellowLight));
+                if (!tag_parts.empty()) {
+                    tag_parts.insert(tag_parts.begin(), text(" "));
+                    lines.push_back(hbox(tag_parts));
+                }
+
+                // Percentage values when non-zero
+                Elements pct_parts;
+                if (bda.oa_cargo_pct > 0.0)
+                    pct_parts.push_back(text("  Cargo+" + std::to_string((int)(bda.oa_cargo_pct * 100)) + "%") | color(Color::Green));
+                if (bda.oa_protected_cargo_pct > 0.0)
+                    pct_parts.push_back(text("  ProtCargo+" + std::to_string((int)(bda.oa_protected_cargo_pct * 100)) + "%") | color(Color::GreenLight));
+                if (bda.oa_mining_speed_pct > 0.0)
+                    pct_parts.push_back(text("  Mining+" + std::to_string((int)(bda.oa_mining_speed_pct * 100)) + "%") | color(Color::Blue));
+                if (!pct_parts.empty()) {
+                    lines.push_back(hbox(pct_parts));
+                }
+
+                // BDA ability text
+                if (!bda.bda_text.empty()) {
+                    lines.push_back(hbox({
+                        text("  BDA: ") | dim,
+                        text(bda.bda_text) | color(Color::Magenta),
+                    }));
+                    if (bda.bda_value > 0.0) {
+                        lines.push_back(text("       Value: " + std::to_string((int)(bda.bda_value * 100)) + "%") | dim);
+                    }
+                }
+
+                // OA ability text
+                if (!bda.oa_text.empty()) {
+                    lines.push_back(hbox({
+                        text("  OA: ") | dim,
+                        text(bda.oa_text) | color(Color::CyanLight),
+                    }));
+                    if (bda.oa_value > 0.0) {
+                        lines.push_back(text("       Value: " + std::to_string((int)(bda.oa_value * 100)) + "%") | dim);
+                    }
+                }
+
+                // Scoring reasons
                 for (const auto& reason : bda.reasons) {
-                    lines.push_back(text("     " + reason) | dim | color(Color::Magenta));
+                    lines.push_back(text("  " + reason) | dim | color(Color::Magenta));
                 }
             }
         }
@@ -1843,8 +1960,8 @@ static Element render_loadout(AppState& state) {
     }
 
     // Header
-    static const char* ship_names[] = {"Explorer", "Battleship", "Interceptor"};
-    int safe_ship = std::clamp(state.crew_ship_type, 0, 2);
+    static const char* ship_names[] = {"Explorer", "Battleship", "Interceptor", "Survey"};
+    int safe_ship = std::clamp(state.crew_ship_type, 0, 3);
     std::string ship_name = ship_names[safe_ship];
 
     Elements header_lines;
@@ -2060,11 +2177,22 @@ static Element render_loadout(AppState& state) {
             int bi = state.selected_dock_bda;
             if (bi >= 0 && bi < (int)dr.bda_suggestions.size()) {
                 const auto& bda = dr.bda_suggestions[bi];
-                lines.push_back(hbox({
+
+                // Name, level, rank, type
+                auto name_row_parts = Elements{
                     text("  "),
                     text(bda.name) | bold | color(Color::Cyan),
                     text("  Lv" + std::to_string(bda.level) + " Rk" + std::to_string(bda.rank)),
-                }));
+                };
+                if (!bda.officer_type.empty()) {
+                    name_row_parts.push_back(text("  [" + bda.officer_type + "]") | dim);
+                }
+                if (bda.is_dedicated_bda) {
+                    name_row_parts.push_back(text("  [BDA]") | color(Color::Yellow));
+                }
+                lines.push_back(hbox(name_row_parts));
+
+                // Stats
                 lines.push_back(hbox({
                     text("  Atk:"),
                     text(std::to_string((int)bda.attack)) | dim,
@@ -2073,6 +2201,58 @@ static Element render_loadout(AppState& state) {
                     text("  HP:"),
                     text(std::to_string((int)bda.health)) | dim,
                 }));
+
+                // Tag labels
+                Elements tag_parts;
+                if (bda.cargo)              tag_parts.push_back(text(" [Cargo]") | color(Color::Green));
+                if (bda.protected_cargo)    tag_parts.push_back(text(" [Protected]") | color(Color::GreenLight));
+                if (bda.loot)               tag_parts.push_back(text(" [Loot]") | color(Color::Yellow));
+                if (bda.mining)             tag_parts.push_back(text(" [Mining]") | color(Color::Blue));
+                if (bda.crit_related)       tag_parts.push_back(text(" [Crit]") | color(Color::Red));
+                if (bda.shield_related)     tag_parts.push_back(text(" [Shield]") | color(Color::Cyan));
+                if (bda.mitigation_related) tag_parts.push_back(text(" [Mitigation]") | color(Color::CyanLight));
+                if (bda.repair)             tag_parts.push_back(text(" [Repair]") | color(Color::MagentaLight));
+                if (bda.armada)             tag_parts.push_back(text(" [Armada]") | color(Color::YellowLight));
+                if (!tag_parts.empty()) {
+                    tag_parts.insert(tag_parts.begin(), text(" "));
+                    lines.push_back(hbox(tag_parts));
+                }
+
+                // Percentage values when non-zero
+                Elements pct_parts;
+                if (bda.oa_cargo_pct > 0.0)
+                    pct_parts.push_back(text("  Cargo+" + std::to_string((int)(bda.oa_cargo_pct * 100)) + "%") | color(Color::Green));
+                if (bda.oa_protected_cargo_pct > 0.0)
+                    pct_parts.push_back(text("  ProtCargo+" + std::to_string((int)(bda.oa_protected_cargo_pct * 100)) + "%") | color(Color::GreenLight));
+                if (bda.oa_mining_speed_pct > 0.0)
+                    pct_parts.push_back(text("  Mining+" + std::to_string((int)(bda.oa_mining_speed_pct * 100)) + "%") | color(Color::Blue));
+                if (!pct_parts.empty()) {
+                    lines.push_back(hbox(pct_parts));
+                }
+
+                // BDA ability text
+                if (!bda.bda_text.empty()) {
+                    lines.push_back(hbox({
+                        text("  BDA: ") | dim,
+                        text(bda.bda_text) | color(Color::Magenta),
+                    }));
+                    if (bda.bda_value > 0.0) {
+                        lines.push_back(text("       Value: " + std::to_string((int)(bda.bda_value * 100)) + "%") | dim);
+                    }
+                }
+
+                // OA ability text
+                if (!bda.oa_text.empty()) {
+                    lines.push_back(hbox({
+                        text("  OA: ") | dim,
+                        text(bda.oa_text) | color(Color::CyanLight),
+                    }));
+                    if (bda.oa_value > 0.0) {
+                        lines.push_back(text("       Value: " + std::to_string((int)(bda.oa_value * 100)) + "%") | dim);
+                    }
+                }
+
+                // Scoring reasons
                 for (const auto& reason : bda.reasons) {
                     lines.push_back(text("  " + reason) | dim | color(Color::Magenta));
                 }
@@ -3165,6 +3345,7 @@ static Element render_help() {
                 text("  [T]           Cycle ship type"),
                 text("  [Enter]       Run optimizer"),
                 text("  [Up/Down]     Navigate results"),
+                text("  [B]           Cycle BDA selection"),
                 separatorEmpty(),
                 text("Loadout:") | bold | color(Color::Cyan),
                 text("  [Up/Down]  Navigate docks"),
@@ -3488,26 +3669,51 @@ int main() {
             if (event == Event::Character('<') || event == Event::Character(',')) {
                 if (state->crew_scenario > 0) {
                     state->crew_scenario--;
-                    state->crew_results.clear();
-                    state->crew_bda_results.clear();
                     state->selected_crew = 0;
+                    if (!state->crew_results.empty()) {
+                        // Auto-recompute since user already had results showing
+                        state->status_message = "Running crew optimizer...";
+                        state->run_crew_optimizer();
+                        if (!state->crew_results.empty()) {
+                            state->status_message = "Found " + std::to_string(state->crew_results.size()) +
+                                " crews for " + scenario_label(all_dock_scenarios()[state->crew_scenario]);
+                        } else {
+                            state->status_message = "No crews found.";
+                        }
+                    }
                 }
                 return true;
             }
             if (event == Event::Character('>') || event == Event::Character('.')) {
                 if (state->crew_scenario < (int)all_dock_scenarios().size() - 1) {
                     state->crew_scenario++;
-                    state->crew_results.clear();
-                    state->crew_bda_results.clear();
                     state->selected_crew = 0;
+                    if (!state->crew_results.empty()) {
+                        state->status_message = "Running crew optimizer...";
+                        state->run_crew_optimizer();
+                        if (!state->crew_results.empty()) {
+                            state->status_message = "Found " + std::to_string(state->crew_results.size()) +
+                                " crews for " + scenario_label(all_dock_scenarios()[state->crew_scenario]);
+                        } else {
+                            state->status_message = "No crews found.";
+                        }
+                    }
                 }
                 return true;
             }
             if (event == Event::Character('t') || event == Event::Character('T')) {
-                state->crew_ship_type = (state->crew_ship_type + 1) % 3;
-                state->crew_results.clear();
-                state->crew_bda_results.clear();
+                state->crew_ship_type = (state->crew_ship_type + 1) % 4;
                 state->selected_crew = 0;
+                if (!state->crew_results.empty()) {
+                    state->status_message = "Running crew optimizer...";
+                    state->run_crew_optimizer();
+                    if (!state->crew_results.empty()) {
+                        state->status_message = "Found " + std::to_string(state->crew_results.size()) +
+                            " crews for " + scenario_label(all_dock_scenarios()[state->crew_scenario]);
+                    } else {
+                        state->status_message = "No crews found.";
+                    }
+                }
                 return true;
             }
             if (event == Event::Return) {
@@ -3533,6 +3739,14 @@ int main() {
                 if (state->selected_crew > 0) {
                     state->selected_crew--;
                     state->update_crew_bda();
+                }
+                return true;
+            }
+            // Navigate BDA suggestions
+            if (event == Event::Character('b') || event == Event::Character('B')) {
+                int max_bda = (int)state->crew_bda_results.size();
+                if (max_bda > 0) {
+                    state->selected_crew_bda = (state->selected_crew_bda + 1) % max_bda;
                 }
                 return true;
             }
@@ -3616,7 +3830,7 @@ int main() {
             }
             // Cycle ship type
             if (event == Event::Character('t') || event == Event::Character('T')) {
-                state->crew_ship_type = (state->crew_ship_type + 1) % 3;
+                state->crew_ship_type = (state->crew_ship_type + 1) % 4;
                 state->loadout_computed = false;
                 return true;
             }

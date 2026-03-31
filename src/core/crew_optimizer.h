@@ -211,6 +211,41 @@ struct ClassifiedOfficer {
     double oa_protected_cargo_pct = 0.0;
     double oa_cargo_pct = 0.0;
 
+    // Parsed BDA mining effect strengths (from bda_text)
+    double bda_mining_speed_pct = 0.0;
+    double bda_mining_gas_pct = 0.0;
+    double bda_mining_ore_pct = 0.0;
+    double bda_mining_crystal_pct = 0.0;
+    double bda_protected_cargo_pct = 0.0;
+    double bda_cargo_pct = 0.0;
+
+    // -----------------------------------------------------------------------
+    // Numeric ability data (from API / bootstrap officer_skills.json)
+    // These replace magic-number bonuses with actual calculated scores.
+    // -----------------------------------------------------------------------
+
+    // Officer Ability (OA) — rank-indexed numeric values
+    double oa_value = 0.0;           // OA effect magnitude at player's rank (e.g. 0.80)
+    double oa_chance = 0.0;          // OA proc probability at player's rank (0.0-1.0)
+    std::vector<double> oa_values;   // All 5 rank values [rank1..rank5]
+    bool oa_is_pct = false;          // Whether OA values are percentages
+
+    // Captain's Maneuver (CM) — primary value
+    double cm_value = 0.0;           // CM primary effect magnitude (e.g. 0.40 for Kirk)
+    std::string cm_description;      // CM description text from structured data
+
+    // Below Decks Ability (BDA) — for BDA officers
+    double bda_value = 0.0;          // BDA effect magnitude at player's rank
+    std::vector<double> bda_values;  // All 5 rank values [rank1..rank5]
+    std::string bda_description;     // BDA description text from structured data
+
+    // Synergy values (game-defined, not heuristic)
+    double synergy_full = 0.0;       // Full synergy multiplier (e.g. 0.20 = 20%)
+    double synergy_half = 0.0;       // Half synergy multiplier (e.g. 0.10 = 10%)
+
+    // Officer type from structured data
+    std::string officer_type_str;    // "Command", "Science", "Engineering"
+
     // Helpers
     bool is_bda() const {
         if (cm_pct >= 10000.0) return true;
@@ -274,6 +309,7 @@ struct CrewBreakdown {
     double weakness_counter_bonus = 0.0;
     double dual_use_bonus = 0.0;
     double amplifier_bonus = 0.0;
+    double oa_bonus = 0.0;                // OA% magnitude bonus from apply_oa_bonus()
     std::vector<std::string> penalties;
     std::vector<std::string> synergy_notes;
 };
@@ -313,6 +349,30 @@ struct BdaSuggestion {
     std::string display;      // full ability description
     double score = 0.0;
     std::vector<std::string> reasons;
+
+    // Detail fields for richer display
+    bool is_dedicated_bda = false;   // true = designed as BDA officer
+    std::string officer_type;        // "Command", "Science", "Engineering"
+    std::string bda_text;            // BDA ability description
+    std::string oa_text;             // OA ability description
+    double bda_value = 0.0;          // BDA effect magnitude at rank
+    double oa_value = 0.0;           // OA effect magnitude at rank
+
+    // Scenario-relevant tags shown as icons/labels
+    bool cargo = false;
+    bool loot = false;
+    bool mining = false;
+    bool protected_cargo = false;
+    bool crit_related = false;
+    bool shield_related = false;
+    bool mitigation_related = false;
+    bool repair = false;
+    bool armada = false;
+
+    // Mining/cargo/loot effect strengths (if applicable)
+    double oa_cargo_pct = 0.0;
+    double oa_protected_cargo_pct = 0.0;
+    double oa_mining_speed_pct = 0.0;
 };
 
 // ---------------------------------------------------------------------------

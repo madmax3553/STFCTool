@@ -227,6 +227,44 @@ static double bridge_mining_value(const ClassifiedOfficer& off, Scenario scenari
     }
 }
 
+// BDA mining value — scores below-deck officers' mining ability by their
+// parsed bda_text percentages, analogous to captain/bridge mining helpers.
+// BDA effects are weaker than bridge OA (partial contribution), so scale
+// is ~60% of bridge_mining_value weights.
+static double bda_mining_value(const ClassifiedOfficer& off, Scenario scenario) {
+    switch (scenario) {
+        case Scenario::MiningSpeed:
+            return off.bda_mining_speed_pct * 0.6 + off.bda_cargo_pct * 0.1 + off.bda_protected_cargo_pct * 0.06;
+        case Scenario::MiningProtected:
+            return off.bda_protected_cargo_pct * 0.6 + off.bda_cargo_pct * 0.35;
+        case Scenario::MiningGas:
+            return off.bda_mining_gas_pct * 0.65 + off.bda_mining_speed_pct * 0.3 + off.bda_protected_cargo_pct * 0.15;
+        case Scenario::MiningOre:
+            return off.bda_mining_ore_pct * 0.65 + off.bda_mining_speed_pct * 0.3 + off.bda_protected_cargo_pct * 0.15;
+        case Scenario::MiningCrystal:
+            return off.bda_mining_crystal_pct * 0.65 + off.bda_mining_speed_pct * 0.3 + off.bda_protected_cargo_pct * 0.15;
+        case Scenario::MiningGeneral:
+        case Scenario::Loot:
+            return off.bda_mining_speed_pct * 0.6 + off.bda_cargo_pct * 0.4 + off.bda_protected_cargo_pct * 0.4;
+        default:
+            return 0.0;
+    }
+}
+
+// Word-boundary-aware contains: ensures needle is not part of a larger word.
+// E.g. contains_word("more damage", "ore") returns false, contains_word("ore mining", "ore") returns true.
+static bool contains_word(const std::string& haystack, const std::string& needle) {
+    size_t pos = 0;
+    while ((pos = haystack.find(needle, pos)) != std::string::npos) {
+        bool left_ok = (pos == 0 || !std::isalpha(static_cast<unsigned char>(haystack[pos - 1])));
+        size_t end = pos + needle.size();
+        bool right_ok = (end >= haystack.size() || !std::isalpha(static_cast<unsigned char>(haystack[end])));
+        if (left_ok && right_ok) return true;
+        ++pos;
+    }
+    return false;
+}
+
 static std::string extract_section(const std::string& text, const std::string& marker) {
     auto start = text.find(marker);
     if (start == std::string::npos) return "";
@@ -257,6 +295,93 @@ static bool contains_any(const std::string& haystack,
 }
 
 // ---------------------------------------------------------------------------
+// Officer skills bootstrap data (from data/officer_skills.json)
+// ---------------------------------------------------------------------------
+
+using json_t = nlohmann::json;
+
+// Normalize officer name for lookup: lowercase, strip non-breaking spaces,
+// collapse whitespace.
+static std::string normalize_name(const std::string& name) {
+    std::string out;
+    out.reserve(name.size());
+    bool last_space = false;
+    for (size_t i = 0; i < name.size(); ++i) {
+        unsigned char c = name[i];
+        // Skip UTF-8 non-breaking space (0xC2 0xA0)
+        if (c == 0xC2 && i + 1 < name.size() &&
+            static_cast<unsigned char>(name[i + 1]) == 0xA0) {
+            if (!last_space) { out += ' '; last_space = true; }
+            ++i;
+            continue;
+        }
+        if (c == ' ' || c == '\t') {
+            if (!last_space) { out += ' '; last_space = true; }
+            continue;
+        }
+        last_space = false;
+        out += static_cast<char>(std::tolower(c));
+    }
+    // Trim trailing space
+    if (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
+// Load and cache the officer skills JSON as a map: normalized_name -> json object.
+// Also stores alternate_name -> same json object for fallback matching.
+// Returns empty map if file not found (non-fatal).
+static const std::map<std::string, const json_t*>& get_officer_skills_map() {
+    static std::map<std::string, const json_t*> name_map;
+    static json_t root;
+    static bool loaded = false;
+
+    if (!loaded) {
+        loaded = true;
+        // Try multiple paths: relative to CWD and relative to executable
+        for (const char* path : {
+            "data/officer_skills.json",
+            "../data/officer_skills.json",
+        }) {
+            std::ifstream f(path);
+            if (f.is_open()) {
+                try {
+                    root = json_t::parse(f);
+                    if (root.contains("officers") && root["officers"].is_array()) {
+                        for (const auto& entry : root["officers"]) {
+                            if (entry.contains("name") && entry["name"].is_string()) {
+                                std::string norm = normalize_name(entry["name"].get<std::string>());
+                                name_map[norm] = &entry;
+                            }
+                            if (entry.contains("alternate_name") && entry["alternate_name"].is_string()) {
+                                std::string alt_norm = normalize_name(entry["alternate_name"].get<std::string>());
+                                if (name_map.find(alt_norm) == name_map.end()) {
+                                    name_map[alt_norm] = &entry;
+                                }
+                            }
+                        }
+                    }
+                } catch (...) {
+                    // Parse failure — leave map empty
+                    name_map.clear();
+                }
+                break;
+            }
+        }
+    }
+    return name_map;
+}
+
+// Look up an officer in the bootstrap JSON by name.
+// Returns nullptr if not found.
+static const json_t* find_officer_skills(const std::string& officer_name) {
+    const auto& skills_map = get_officer_skills_map();
+    std::string norm = normalize_name(officer_name);
+    auto it = skills_map.find(norm);
+    if (it != skills_map.end()) return it->second;
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
 
@@ -284,6 +409,16 @@ CrewOptimizer::CrewOptimizer(std::vector<RosterOfficer> roster,
         o.cm_text = extract_section(o.description, "cm:");
         o.bda_text = extract_section(o.description, "bda:");
         o.oa_text = extract_section(o.description, "oa:");
+
+        // Transfer structured API ability data (populated by build_roster_from_sync
+        // or Phase 0.4; empty vectors are fine — bootstrap JSON fills gaps)
+        o.oa_values = std::move(r.api_oa_values);
+        o.oa_is_pct = r.api_oa_is_pct;
+        if (!r.api_cm_values.empty()) o.cm_value = r.api_cm_values[0];
+        if (!r.api_bda_values.empty()) {
+            o.bda_values = std::move(r.api_bda_values);
+        }
+
         officers_.push_back(std::move(o));
     }
     classify_officers();
@@ -391,6 +526,12 @@ void CrewOptimizer::classify_officers() {
         off.oa_mining_crystal_pct = 0.0;
         off.oa_protected_cargo_pct = 0.0;
         off.oa_cargo_pct = 0.0;
+        off.bda_mining_speed_pct = 0.0;
+        off.bda_mining_gas_pct = 0.0;
+        off.bda_mining_ore_pct = 0.0;
+        off.bda_mining_crystal_pct = 0.0;
+        off.bda_protected_cargo_pct = 0.0;
+        off.bda_cargo_pct = 0.0;
 
         // Base cracker / station combat
         if (contains_any(d, {"attacking a station", "defence platform",
@@ -428,10 +569,11 @@ void CrewOptimizer::classify_officers() {
         if (contains(d, "loot") || contains(d, "reward")) off.loot = true;
         if (contains_any(d, {"warp range", "warp speed", "warp distance"})) off.warp = true;
 
-        // Mining subcategories
+        // Mining subcategories — use contains_word for short words to avoid
+        // false positives ("ore" in "more"/"explore", "gas" in "gasp")
         if (contains_any(d, {"crystal", "raw crystal"})) off.mining_crystal = true;
-        if (contains_any(d, {"gas", "raw gas"})) off.mining_gas = true;
-        if (contains_any(d, {"ore", "raw ore"})) off.mining_ore = true;
+        if (contains_word(d, "gas") || contains(d, "raw gas")) off.mining_gas = true;
+        if (contains_word(d, "ore") || contains(d, "raw ore")) off.mining_ore = true;
         if (contains_any(d, {"mining speed", "mining rate", "mining efficiency"})) off.mining_speed = true;
         if (contains_any(d, {"protected cargo", "protect cargo"})) off.protected_cargo = true;
         if (contains_any(d, {"while mining", "on a mining node",
@@ -468,6 +610,43 @@ void CrewOptimizer::classify_officers() {
         if (contains_phrase(oa, {"crystal mining", "crystal mining speed"})) off.oa_mining_crystal_pct = off.oa_pct > 0.0 ? off.oa_pct : first_pct(oa);
         if (contains_phrase(oa, {"protected cargo", "increase protected cargo", "increases protected cargo"})) off.oa_protected_cargo_pct = off.oa_pct > 0.0 ? off.oa_pct : first_pct(oa);
         if (contains_phrase(oa, {"max cargo", "cargo"})) off.oa_cargo_pct = off.oa_pct > 0.0 ? off.oa_pct : first_pct(oa);
+
+        // BDA text scanning — pick up mining tags for officers whose mining
+        // ability is only in their below-deck ability (not in description/OA).
+        // Also parse BDA mining percentages for proportional scoring.
+        const auto& bda = off.bda_text;
+        if (!bda.empty()) {
+            // Boolean tags from BDA text (only set if not already set by description)
+            if (!off.mining && contains(bda, "mining")) off.mining = true;
+            if (!off.cargo && contains(bda, "cargo")) off.cargo = true;
+            if (!off.mining_speed && contains_phrase(bda, {"mining speed", "mining rate", "mining efficiency"})) off.mining_speed = true;
+            if (!off.mining_crystal && contains(bda, "crystal")) off.mining_crystal = true;
+            if (!off.mining_gas && contains_word(bda, "gas")) off.mining_gas = true;
+            if (!off.mining_ore && contains_word(bda, "ore")) off.mining_ore = true;
+            if (!off.protected_cargo && contains_any(bda, {"protected cargo", "protect cargo"})) off.protected_cargo = true;
+            if (!off.node_defense && contains_any(bda, {"while mining", "on a mining node", "mining defense", "mining node"})) off.node_defense = true;
+
+            // Parse BDA mining percentages
+            double bda_pct = first_pct(bda);
+            if (contains_phrase(bda, {"mining speed", "mining rate", "mining efficiency"})) {
+                off.bda_mining_speed_pct = bda_pct;
+            }
+            if (contains_phrase(bda, {"gas mining", "gas mining speed"}) || (contains_word(bda, "gas") && contains(bda, "mining"))) {
+                off.bda_mining_gas_pct = bda_pct;
+            }
+            if (contains_phrase(bda, {"ore mining", "ore mining speed"}) || (contains_word(bda, "ore") && contains(bda, "mining"))) {
+                off.bda_mining_ore_pct = bda_pct;
+            }
+            if (contains_phrase(bda, {"crystal mining", "crystal mining speed"}) || (contains(bda, "crystal") && contains(bda, "mining"))) {
+                off.bda_mining_crystal_pct = bda_pct;
+            }
+            if (contains_any(bda, {"protected cargo", "protect cargo"})) {
+                off.bda_protected_cargo_pct = bda_pct;
+            }
+            if (contains(bda, "cargo") && !contains(bda, "protected cargo")) {
+                off.bda_cargo_pct = bda_pct;
+            }
+        }
 
         // Armada
         if (contains(d, "armada")) off.armada = true;
@@ -739,6 +918,98 @@ void CrewOptimizer::classify_officers() {
                 off.cm_scope = CmScope::Utility;
             }
         }
+
+        // -------------------------------------------------------------------
+        // Populate numeric ability data from bootstrap JSON (officer_skills.json).
+        // API-sourced values (passed via RosterOfficer) take priority when present;
+        // the bootstrap JSON fills gaps for CSV-only rosters.
+        // -------------------------------------------------------------------
+        const json_t* skills = find_officer_skills(off.name);
+        if (skills) {
+            const auto& sj = *skills;
+
+            // OA values — use API data if present, else bootstrap
+            if (off.oa_values.empty() && sj.contains("oa_values") && sj["oa_values"].is_array()) {
+                for (const auto& v : sj["oa_values"]) {
+                    off.oa_values.push_back(v.get<double>());
+                }
+            }
+            // OA value at player's rank (rank is 1-based, vector is 0-based)
+            if (!off.oa_values.empty()) {
+                int idx = std::max(0, std::min(off.rank - 1, static_cast<int>(off.oa_values.size()) - 1));
+                off.oa_value = off.oa_values[idx];
+            }
+
+            // CM value — use API-sourced value if already set, else bootstrap
+            if (off.cm_value == 0.0 && sj.contains("cm_value") && sj["cm_value"].is_number()) {
+                off.cm_value = sj["cm_value"].get<double>();
+            }
+
+            // BDA values — use API data if present, else bootstrap
+            if (off.bda_values.empty() && sj.contains("bda_values") && sj["bda_values"].is_array()) {
+                for (const auto& v : sj["bda_values"]) {
+                    off.bda_values.push_back(v.get<double>());
+                }
+            }
+            if (!off.bda_values.empty()) {
+                int idx = std::max(0, std::min(off.rank - 1, static_cast<int>(off.bda_values.size()) - 1));
+                off.bda_value = off.bda_values[idx];
+            }
+
+            // BDA description from bootstrap
+            if (sj.contains("bda_ability") && sj["bda_ability"].is_string()) {
+                off.bda_description = sj["bda_ability"].get<std::string>();
+            }
+
+            // Synergy values
+            if (sj.contains("synergy_full") && sj["synergy_full"].is_number()) {
+                off.synergy_full = sj["synergy_full"].get<double>();
+            }
+            if (sj.contains("synergy_half") && sj["synergy_half"].is_number()) {
+                off.synergy_half = sj["synergy_half"].get<double>();
+            }
+
+            // Officer type string
+            if (sj.contains("officer_type") && sj["officer_type"].is_string()) {
+                off.officer_type_str = sj["officer_type"].get<std::string>();
+            }
+
+            // CM description from bootstrap
+            if (sj.contains("captain_maneuver") && sj["captain_maneuver"].is_string()) {
+                off.cm_description = sj["captain_maneuver"].get<std::string>();
+            }
+
+            // State data from bootstrap — enrich the tag-based classification
+            // with structured data when the text-matching missed something
+            if (sj.contains("states") && sj["states"].is_object()) {
+                const auto& st = sj["states"];
+                auto check_state = [&](const char* cause_key, const char* use_key,
+                                       const char* state_name) {
+                    if (st.contains(cause_key) && st[cause_key].get<bool>()) {
+                        off.states_applied.insert(state_name);
+                        off.pvp_tags.insert(state_name);
+                    }
+                    if (st.contains(use_key) && st[use_key].get<bool>()) {
+                        off.states_benefit.insert(state_name);
+                        off.pvp_tags.insert(state_name);
+                    }
+                };
+                check_state("cause_burning", "use_burning", "burning");
+                check_state("cause_breach", "use_breach", "breach");
+                check_state("cause_morale", "use_morale", "morale");
+                check_state("cause_assimilate", "use_assimilate", "assimilate");
+            }
+
+            // Stat boost enrichment from bootstrap
+            if (sj.contains("stat_boosts") && sj["stat_boosts"].is_object()) {
+                const auto& sb = sj["stat_boosts"];
+                bool has_any = false;
+                for (auto& [key, val] : sb.items()) {
+                    if (val.get<bool>()) { has_any = true; break; }
+                }
+                if (has_any) off.stat_booster = true;
+            }
+        }
     }
 
     // Compute roster stat max for normalization (used in scoring)
@@ -806,25 +1077,75 @@ bool CrewOptimizer::oa_works_on_ship(const ClassifiedOfficer& off) const {
 // ---------------------------------------------------------------------------
 // Individual scoring
 // ---------------------------------------------------------------------------
-// NEW SCORING PHILOSOPHY: Ability quality drives the score, raw stats are a
-// tiebreaker.  Each officer gets:
-//   1. Normalized stat tiebreaker: 0-5000 (based on roster-relative stats)
-//   2. Additive tag bonuses: fixed point values per relevant tag
-//   3. No multiplicative compounding — prevents exponential inflation
+// VALUE-BASED SCORING HELPERS
+// ---------------------------------------------------------------------------
+// These replace magic-number bonuses with scores derived from actual ability
+// magnitudes.  The general pattern:
+//
+//   score = ability_value * scale_factor [* proc_chance] [* relevance]
+//
+// Scale factors are tuned so that a "typical strong" officer (e.g., rank 5
+// rare with 0.80 OA value) lands in the same ballpark as the old magic
+// numbers, but now rank/level progression matters.
+//
+// When oa_value is 0 (no bootstrap data or API data available), fall back to
+// the tag-only minimum so officers without numeric data still get reasonable
+// placement.
+// ---------------------------------------------------------------------------
+
+// Compute an ability-based score with a fallback minimum for officers
+// where numeric data isn't available (CSV-only rosters without API sync).
+static inline double value_or_fallback(double oa_val, double scale, double fallback) {
+    if (oa_val > 0.0) return oa_val * scale;
+    return fallback;
+}
+
+// For proc-based abilities: value * chance * scale, with fallback
+// OA chance of 0.0 means "not parsed" → treat as reasonable default (0.5)
+// CM value-based score: uses the actual CM magnitude * scope weight.
+// If cm_value (from API/bootstrap) is available, use it; else fall back to
+// cm_pct/100 which is the legacy CSV percentage.
+static inline double cm_quality_score(const ClassifiedOfficer& off) {
+    if (off.is_bda()) return 0.0;
+    double cm_val = off.cm_value;
+    if (cm_val <= 0.0 && off.cm_pct > 0.0) {
+        cm_val = off.cm_pct / 100.0;  // Legacy: convert percentage to decimal
+    }
+    if (cm_val <= 0.0) return 0.0;
+    // Cap at 5.0 (500%) to prevent extreme outliers
+    cm_val = std::min(cm_val, 5.0);
+    return cm_val * cm_scope_weight(off.cm_scope);
+}
+
+// OA quality score for individual ranking.
+// Uses oa_value (actual ability magnitude) when available, else oa_pct.
+static inline double oa_quality_score(const ClassifiedOfficer& off, double scale) {
+    if (off.is_bda()) return 0.0;
+    if (off.oa_value > 0.0) {
+        // oa_value is the decimal value (e.g., 0.80 = 80%).
+        // Scale so that a typical strong OA (0.80) gives ~4000 at scale=5000.
+        return std::min(off.oa_value, 5.0) * scale;
+    }
+    // Fallback to legacy oa_pct
+    if (off.oa_pct > 0.0) {
+        return std::min(off.oa_pct / 100.0, 5.0) * scale;
+    }
+    return 0.0;
+}
+
 // ---------------------------------------------------------------------------
 
 double CrewOptimizer::score_pvp_individual(const ClassifiedOfficer& off) const {
     // ---------------------------------------------------------------------------
-    // 2025 PvP META Individual Scoring — 4-Step Framework
+    // 2025 PvP META Individual Scoring — Value-Based Framework
     // ---------------------------------------------------------------------------
-    // Priority hierarchy (from user's PvP comparison framework):
-    //   Step 1: Mitigation Delta — piercing bypasses the 71.2% mitigation cap
-    //   Step 2: Synergy-Adjusted CM — handled at crew level, but CM quality matters
-    //   Step 3: Proc Factor — guaranteed self-proc >> chance-based
-    //   Step 4: RPS META — apex shred, apex barrier, isolytic cascade, generalist
+    // Same 4-step priority hierarchy, but scores now reflect actual ability
+    // magnitudes instead of flat magic numbers.
     //
-    // Individual scoring ranks officers by intrinsic PvP value.  Crew-level
-    // scoring (score_pvp_crew) handles synergy, state chains, and RPS matchups.
+    // Scale factors are calibrated so that:
+    //   - A strong rank-5 officer ≈ old magic number value
+    //   - Rank progression creates meaningful differentiation
+    //   - Officers without numeric data fall back to reasonable minimums
     // ---------------------------------------------------------------------------
 
     // 1. Normalized stat tiebreaker (max ~5000)
@@ -836,79 +1157,95 @@ double CrewOptimizer::score_pvp_individual(const ClassifiedOfficer& off) const {
     double ability_score = 0.0;
 
     // -----------------------------------------------------------------------
-    // STEP 1: Mitigation Delta — piercing is THE top-tier PvP mechanic
+    // STEP 1: Mitigation Delta — piercing bypasses the 71.2% mitigation cap
     // -----------------------------------------------------------------------
-    // Armor piercing / shield piercing / accuracy prevent opponents from
-    // reaching the 71.2% mitigation cap.  This is the single most important
-    // individual trait in 2025 META.
-    if (off.armor_piercing)  ability_score += 12000;
-    if (off.shield_piercing) ability_score += 12000;
-    if (off.accuracy_boost)  ability_score += 10000;
-    // Officers with multiple piercing types are exceptionally valuable
+    // Scale: 15000 per 1.0 (100%) of piercing value.
+    // E.g., Charvanek rank 5 (oa_value=0.16 for 16%) → 0.16 * 15000 = 2400.
+    //       But her values can be much higher at full effect (16.0 = 1600%).
+    // Fallback: 8000 (old ~12000 for "any piercing" was too generous).
+    if (off.armor_piercing)  ability_score += value_or_fallback(off.oa_value, 15000.0, 8000);
+    if (off.shield_piercing) ability_score += value_or_fallback(off.oa_value, 15000.0, 8000);
+    if (off.accuracy_boost)  ability_score += value_or_fallback(off.oa_value, 12000.0, 6000);
+    // Multi-piercing synergy — still flat because it's a combinatorial bonus
     {
         int pierce_count = (off.armor_piercing ? 1 : 0) +
                            (off.shield_piercing ? 1 : 0) +
                            (off.accuracy_boost ? 1 : 0);
-        if (pierce_count >= 2) ability_score += 6000;  // Multi-piercing synergy
+        if (pierce_count >= 2) ability_score += 6000;
     }
 
     // -----------------------------------------------------------------------
     // STEP 3: Proc Factor — guaranteed procs are META-defining
     // -----------------------------------------------------------------------
-    // Self-proccing state crews (guaranteed round-start application) are why
-    // Strike Team crews are META — damage is guaranteed, not conditional.
+    // State application value: scales with OA magnitude and proc chance.
+    // Scale: 10000 per 1.0 of effect value.
+    // Guaranteed procs get a 1.8x multiplier (was flat +8000 extra).
     if (!off.states_applied.empty()) {
-        ability_score += 8000;  // Base value for any state application
-        if (off.proc_guaranteed) {
-            ability_score += 8000;  // Guaranteed procs are worth double
+        double state_val = value_or_fallback(off.oa_value, 10000.0, 6000);
+        if (off.oa_chance > 0.0 && off.oa_chance < 1.0) {
+            // Chance-based: scale by proc probability
+            state_val *= off.oa_chance;
         }
+        if (off.proc_guaranteed) {
+            state_val *= 1.8;  // Guaranteed self-proc near-doubles value
+        }
+        ability_score += state_val;
     }
-    if (!off.states_benefit.empty()) ability_score += 4000;
+    if (!off.states_benefit.empty()) {
+        ability_score += value_or_fallback(off.oa_value, 5000.0, 3000);
+    }
 
-    // Cumulative stacking — effects that grow each round are very strong
-    // in extended PvP fights (grind-through META)
-    if (off.cumulative_stacking) ability_score += 6000;
+    // Cumulative stacking — grows each round, scales with base value
+    if (off.cumulative_stacking) {
+        ability_score += value_or_fallback(off.oa_value, 8000.0, 5000);
+    }
 
     // -----------------------------------------------------------------------
     // STEP 4: Rock-Paper-Scissors META archetypes
     // -----------------------------------------------------------------------
-    // 2025 RPS triangle:
-    //   Generalist (massive shots/raw damage) → beats most, loses to Apex Barrier
-    //   Apex Barrier (absorbs generalist hits) → beats Generalists
-    //   Strike Team (sustained piercing) → grinds through Apex Barrier
-    //
-    // Apex Shred is the offensive answer to Apex Barrier — extremely valuable
-    // Isolytic Cascade bypasses standard defenses — 2025 tie-breaker mechanic
+    // Apex/isolytic values can be quite large (e.g., barrier points in thousands).
+    // Use a log-scaled approach for absolute values, linear for percentages.
+    if (off.apex_shred) {
+        ability_score += value_or_fallback(off.oa_value, 18000.0, 10000);
+    }
+    if (off.apex_barrier) {
+        ability_score += value_or_fallback(off.oa_value, 15000.0, 8000);
+    }
+    if (off.isolytic_cascade) {
+        ability_score += value_or_fallback(off.oa_value, 12000.0, 7000);
+    }
+    if (off.isolytic_defense) {
+        ability_score += value_or_fallback(off.oa_value, 5000.0, 3000);
+    }
 
-    if (off.apex_shred)        ability_score += 14000;  // Counter to dominant Apex Barrier META
-    if (off.apex_barrier)      ability_score += 12000;  // Strong defensive archetype
-    if (off.isolytic_cascade)  ability_score += 10000;  // Tie-breaker: bypasses standard defense
-    if (off.isolytic_defense)  ability_score += 4000;   // Niche: only matters vs isolytic opponents
-
-    // Generalist archetype indicators: shots + raw damage
-    if (off.shots_related) ability_score += 8000;  // Core generalist trait (Carol Freeman, Hierarch)
+    // Generalist archetype: shots + raw damage
+    if (off.shots_related) {
+        ability_score += value_or_fallback(off.oa_value, 10000.0, 6000);
+    }
 
     // -----------------------------------------------------------------------
     // Combat mechanics (secondary tier)
     // -----------------------------------------------------------------------
     if (off.crit_related) {
-        ability_score += 5000;
-        if (weakness_.crit_damage_gap > 5) ability_score += 3000;
+        ability_score += value_or_fallback(off.oa_value, 6000.0, 4000);
+        if (weakness_.crit_damage_gap > 5) {
+            ability_score += 3000;  // Weakness counter stays flat
+        }
     }
-    if (off.weapon_delay) ability_score += 5000;   // Delays opponent weapons = effective damage
-    if (off.mitigation_related) ability_score += 4000;  // Defensive mitigation (not piercing)
-    if (off.shield_related) ability_score += 3000;
+    if (off.weapon_delay) ability_score += value_or_fallback(off.oa_value, 6000.0, 4000);
+    if (off.mitigation_related) ability_score += value_or_fallback(off.oa_value, 5000.0, 3000);
+    if (off.shield_related) ability_score += value_or_fallback(off.oa_value, 4000.0, 2000);
 
     // -----------------------------------------------------------------------
-    // CM quality — relevant for captain candidacy
+    // CM quality — value-based captain candidacy score
     // -----------------------------------------------------------------------
-    if (!off.is_bda()) {
-        double cm_quality = std::min(off.cm_pct, 500.0) * cm_scope_weight(off.cm_scope) / 50.0;
-        ability_score += cm_quality;
-    }
+    ability_score += cm_quality_score(off);
 
-    // Ability type bonuses
-    if (off.ability_amplifier) ability_score += 10000;  // Force multiplier for whole crew
+    // Ability type bonuses — scale with synergy_full (how much they amplify)
+    if (off.ability_amplifier) {
+        double amp_val = (off.synergy_full > 0.0) ? off.synergy_full * 50000.0 : 10000.0;
+        ability_score += amp_val;
+    }
     if (off.stat_booster) ability_score += 4000;
 
     // PvP relevance tags
@@ -916,10 +1253,8 @@ double CrewOptimizer::score_pvp_individual(const ClassifiedOfficer& off) const {
     if (off.is_ship_specific) ability_score += 4000;
     if (off.is_dual_use) ability_score += 2000;
 
-    // OA quality
-    if (off.oa_pct > 0 && !off.is_bda()) {
-        ability_score += std::min(off.oa_pct, 500.0) * 5.0;
-    }
+    // OA quality — value-based
+    ability_score += oa_quality_score(off, 5000.0);
 
     // Player uses (popular = generally effective)
     if (off.player_uses) ability_score += 2000;
@@ -935,7 +1270,7 @@ double CrewOptimizer::score_pvp_individual(const ClassifiedOfficer& off) const {
 
 double CrewOptimizer::score_hybrid_individual(const ClassifiedOfficer& off) const {
     // Hybrid: values officers that work in BOTH PvP and PvE.
-    // Uses reduced PvP META weights + PvE survivability bonuses.
+    // Uses value-based scoring at reduced PvP weights + PvE survivability.
     double norm_atk = off.attack / roster_max_attack_;
     double norm_def = off.defense / roster_max_defense_;
     double norm_hp  = off.health / roster_max_health_;
@@ -943,52 +1278,60 @@ double CrewOptimizer::score_hybrid_individual(const ClassifiedOfficer& off) cons
 
     double ability_score = 0.0;
 
-    // CM quality
-    if (!off.is_bda()) {
-        double cm_quality = std::min(off.cm_pct, 500.0) * cm_scope_weight(off.cm_scope) / 50.0;
-        ability_score += cm_quality;
-    }
+    // CM quality — value-based
+    ability_score += cm_quality_score(off);
 
     // Dual-use is king in hybrid — officers that work in both modes
     if (off.is_dual_use) ability_score += 10000;
-    if (off.ability_amplifier) ability_score += 10000;  // Amplifies all abilities in any scenario
+    if (off.ability_amplifier) {
+        double amp_val = (off.synergy_full > 0.0) ? off.synergy_full * 50000.0 : 10000.0;
+        ability_score += amp_val;
+    }
     if (off.stat_booster) ability_score += 5000;
 
-    // PvP META fields at reduced weight (50-70% of PvP values)
-    // Piercing still matters but less critical than in pure PvP
-    if (off.armor_piercing)  ability_score += 7000;
-    if (off.shield_piercing) ability_score += 7000;
-    if (off.accuracy_boost)  ability_score += 6000;
+    // PvP META at reduced weight (50-70% of PvP values), value-based
+    if (off.armor_piercing)  ability_score += value_or_fallback(off.oa_value, 9000.0, 5000);
+    if (off.shield_piercing) ability_score += value_or_fallback(off.oa_value, 9000.0, 5000);
+    if (off.accuracy_boost)  ability_score += value_or_fallback(off.oa_value, 7500.0, 4000);
 
     // Apex/isolytic at reduced weight
-    if (off.apex_shred)       ability_score += 8000;
-    if (off.apex_barrier)     ability_score += 7000;
-    if (off.isolytic_cascade) ability_score += 6000;
+    if (off.apex_shred)       ability_score += value_or_fallback(off.oa_value, 10000.0, 6000);
+    if (off.apex_barrier)     ability_score += value_or_fallback(off.oa_value, 9000.0, 5000);
+    if (off.isolytic_cascade) ability_score += value_or_fallback(off.oa_value, 7500.0, 4000);
+    if (off.isolytic_defense) ability_score += value_or_fallback(off.oa_value, 3000.0, 1500);
 
     // State application with proc reliability
     if (!off.states_applied.empty()) {
-        ability_score += 6000;
-        if (off.proc_guaranteed) ability_score += 4000;
+        double state_val = value_or_fallback(off.oa_value, 7500.0, 4500);
+        if (off.oa_chance > 0.0 && off.oa_chance < 1.0) {
+            state_val *= off.oa_chance;
+        }
+        if (off.proc_guaranteed) {
+            state_val *= 1.6;
+        }
+        ability_score += state_val;
     }
-    if (!off.states_benefit.empty()) ability_score += 3000;
-    if (off.cumulative_stacking) ability_score += 4000;
+    if (!off.states_benefit.empty()) {
+        ability_score += value_or_fallback(off.oa_value, 3500.0, 2000);
+    }
+    if (off.cumulative_stacking) {
+        ability_score += value_or_fallback(off.oa_value, 5000.0, 3000);
+    }
 
     // Standard combat mechanics
     if (off.is_ship_specific) ability_score += 4000;
-    if (off.shots_related) ability_score += 5000;
+    if (off.shots_related) ability_score += value_or_fallback(off.oa_value, 6000.0, 4000);
     if (off.crit_related) {
-        ability_score += 4000;
+        ability_score += value_or_fallback(off.oa_value, 5000.0, 3000);
         if (weakness_.crit_damage_gap > 5) ability_score += 2000;
     }
-    if (off.shield_related) ability_score += 3000;  // Good for PvE survivability
-    if (off.mitigation_related) ability_score += 3000;
-    if (off.weapon_delay) ability_score += 3000;
+    if (off.shield_related) ability_score += value_or_fallback(off.oa_value, 4000.0, 2000);
+    if (off.mitigation_related) ability_score += value_or_fallback(off.oa_value, 4000.0, 2000);
+    if (off.weapon_delay) ability_score += value_or_fallback(off.oa_value, 4000.0, 2000);
     if (off.player_uses) ability_score += 2000;
 
-    // OA quality
-    if (off.oa_pct > 0 && !off.is_bda()) {
-        ability_score += std::min(off.oa_pct, 500.0) * 4.0;
-    }
+    // OA quality — value-based
+    ability_score += oa_quality_score(off, 4000.0);
 
     // Penalties for single-mode officers
     if (off.is_pve_specific && !off.is_dual_use) ability_score -= 6000;
@@ -1003,8 +1346,6 @@ double CrewOptimizer::score_scenario_individual(const ClassifiedOfficer& off,
     if (scenario == Scenario::PvP) return score_pvp_individual(off);
     if (scenario == Scenario::Hybrid) return score_hybrid_individual(off);
 
-    const auto& d = off.description;
-
     // Normalized stat tiebreaker
     double norm_atk = off.attack / roster_max_attack_;
     double norm_def = off.defense / roster_max_defense_;
@@ -1015,42 +1356,50 @@ double CrewOptimizer::score_scenario_individual(const ClassifiedOfficer& off,
 
     switch (scenario) {
     case Scenario::BaseCracker:
-        if (off.base_attack) ability_score += 15000;
+        if (off.base_attack) ability_score += value_or_fallback(off.oa_value, 18000.0, 12000);
         if (off.base_defend) ability_score -= 10000;
-        if (off.crit_related) ability_score += 6000;
-        if (off.shots_related) ability_score += 5000;
-        if (off.weapon_delay) ability_score += 6000;
-        if (off.apex && contains(d, "shred")) ability_score += 4000;
-        if (contains(d, "shield piercing") || contains(d, "armor piercing")) ability_score += 3000;
+        if (off.crit_related) ability_score += value_or_fallback(off.oa_value, 7500.0, 5000);
+        if (off.shots_related) ability_score += value_or_fallback(off.oa_value, 6000.0, 4000);
+        if (off.weapon_delay) ability_score += value_or_fallback(off.oa_value, 7500.0, 5000);
+        if (off.apex_shred) ability_score += value_or_fallback(off.oa_value, 5000.0, 3000);
+        if (off.shield_piercing || off.armor_piercing)
+            ability_score += value_or_fallback(off.oa_value, 4000.0, 2000);
         if (off.is_pvp_specific) ability_score += 3000;
-        if (off.ability_amplifier) ability_score += 5000;
+        if (off.ability_amplifier) {
+            ability_score += (off.synergy_full > 0.0) ? off.synergy_full * 25000.0 : 5000.0;
+        }
         if (off.stat_booster) ability_score += 3000;
         if (off.pve_hostile && !off.base_attack && !off.is_pvp_specific) ability_score -= 6000;
         if (off.mining || off.cargo) ability_score -= 12000;
         break;
 
     case Scenario::PvEHostile:
-        if (off.pve_hostile) ability_score += 12000;
-        if (off.mitigation_related) ability_score += 7000;
-        if (off.shield_related) ability_score += 5000;
-        if (off.crit_related) ability_score += 5000;
-        if (off.repair) ability_score += 4000;
+        if (off.pve_hostile) ability_score += value_or_fallback(off.oa_value, 15000.0, 10000);
+        if (off.mitigation_related) ability_score += value_or_fallback(off.oa_value, 8500.0, 5000);
+        if (off.shield_related) ability_score += value_or_fallback(off.oa_value, 6000.0, 4000);
+        if (off.crit_related) ability_score += value_or_fallback(off.oa_value, 6000.0, 4000);
+        if (off.repair) ability_score += value_or_fallback(off.oa_value, 5000.0, 3000);
         if (off.stat_booster) ability_score += 5000;
-        if (off.ability_amplifier) ability_score += 8000;
+        if (off.ability_amplifier) {
+            ability_score += (off.synergy_full > 0.0) ? off.synergy_full * 40000.0 : 8000.0;
+        }
         if (off.loot) ability_score += 2000;
         if (off.is_pvp_specific && !off.pve_hostile) ability_score -= 8000;
         if (off.mining) ability_score -= 10000;
         break;
 
     case Scenario::MissionBoss:
-        if (off.mission_boss) ability_score += 12000;
-        if (off.pve_hostile) ability_score += 8000;
-        if (off.crit_related) ability_score += 7000;
-        if (off.isolytic_related) ability_score += 6000;
-        if (off.shots_related) ability_score += 5000;
-        if (off.mitigation_related) ability_score += 5000;
-        if (off.shield_related) ability_score += 3000;
-        if (off.ability_amplifier) ability_score += 6000;
+        if (off.mission_boss) ability_score += value_or_fallback(off.oa_value, 15000.0, 10000);
+        if (off.pve_hostile) ability_score += value_or_fallback(off.oa_value, 10000.0, 6000);
+        if (off.crit_related) ability_score += value_or_fallback(off.oa_value, 8500.0, 5000);
+        if (off.isolytic_cascade) ability_score += value_or_fallback(off.oa_value, 7500.0, 5000);
+        if (off.isolytic_defense) ability_score += value_or_fallback(off.oa_value, 3000.0, 1500);
+        if (off.shots_related) ability_score += value_or_fallback(off.oa_value, 6000.0, 4000);
+        if (off.mitigation_related) ability_score += value_or_fallback(off.oa_value, 6000.0, 4000);
+        if (off.shield_related) ability_score += value_or_fallback(off.oa_value, 4000.0, 2000);
+        if (off.ability_amplifier) {
+            ability_score += (off.synergy_full > 0.0) ? off.synergy_full * 30000.0 : 6000.0;
+        }
         if (off.stat_booster) ability_score += 4000;
         // Extra weight on high attack in boss fights
         ability_score += norm_atk * 3000.0;
@@ -1071,22 +1420,24 @@ double CrewOptimizer::score_scenario_individual(const ClassifiedOfficer& off,
 
     case Scenario::Armada:
         // Armada priority: MAX LOOT/DIRECTIVES ROI, not raw combat power.
-        // User can clear most armadas — the goal is to maximize rewards.
-        if (off.loot) ability_score += 18000;           // Loot officers are THE priority
-        if (off.armada) ability_score += 12000;          // Armada-specific abilities
-        if (off.armada_solo) ability_score += 6000;      // Solo armada bonus
+        if (off.loot) ability_score += 18000;
+        if (off.armada) ability_score += value_or_fallback(off.oa_value, 15000.0, 10000);
+        if (off.armada_solo) ability_score += 6000;
         if (off.non_armada_only) ability_score -= 15000;
         // Combat is secondary — enough to survive but not the focus
         if (off.pve_hostile && !off.non_armada_only) ability_score += 4000;
-        if (off.mitigation_related) ability_score += 3000;  // Survivability
+        if (off.mitigation_related) ability_score += value_or_fallback(off.oa_value, 4000.0, 2000);
         if (off.shield_related) ability_score += 2000;
-        if (off.crit_related) ability_score += 3000;
+        if (off.crit_related) ability_score += value_or_fallback(off.oa_value, 4000.0, 2000);
         if (off.stat_booster) ability_score += 3000;
-        if (off.ability_amplifier) ability_score += 4000;
+        if (off.ability_amplifier) {
+            ability_score += (off.synergy_full > 0.0) ? off.synergy_full * 20000.0 : 4000.0;
+        }
         if (off.is_pvp_specific && !off.armada) ability_score -= 6000;
         if (off.mining || off.cargo) ability_score -= 10000;
         break;
 
+    // Mining scenarios — mostly left as-is (working fine), only light improvements
     case Scenario::MiningSpeed:
         if (off.mining_speed) ability_score += 18000;
         else if (off.mining) ability_score += 8000;
@@ -1315,18 +1666,23 @@ void CrewOptimizer::apply_oa_ship_penalty(double& total, CrewBreakdown& bd,
 }
 
 // OA% bonus: all bridge officers' Officer Abilities fire passively.
-// Officers with higher OA% have stronger abilities. Dedicated BDAs are detected
-// from the roster's CM/BDA slot and excluded since they are designed as
-// below-deck officers.
-// NEW: OA bonus is now scenario-weighted — a mining OA shouldn't help PvP.
+// Officers with higher OA values have stronger abilities. Dedicated BDAs are
+// excluded since they are designed as below-deck officers.
+// Value-based: uses oa_value (actual ability magnitude) when available, else oa_pct.
+// OA bonus is scenario-weighted — a mining OA shouldn't help PvP.
 void CrewOptimizer::apply_oa_bonus(double& total, CrewBreakdown& bd,
                                     const ClassifiedOfficer* crew[3],
                                     Scenario scenario) const {
     double oa_bonus = 0.0;
     for (int i = 0; i < 3; ++i) {
         if (crew[i]->is_bda()) continue;  // BDA officers don't have meaningful OA%
-        double oa = crew[i]->oa_pct;
-        if (oa <= 0) continue;
+
+        // Prefer oa_value (actual decimal magnitude) over oa_pct (legacy percentage)
+        double oa_val = crew[i]->oa_value;
+        if (oa_val <= 0.0 && crew[i]->oa_pct > 0.0) {
+            oa_val = crew[i]->oa_pct / 100.0;
+        }
+        if (oa_val <= 0.0) continue;
 
         // Check scenario relevance: penalize OA that doesn't match the scenario
         double relevance = 1.0;
@@ -1347,12 +1703,16 @@ void CrewOptimizer::apply_oa_bonus(double& total, CrewBreakdown& bd,
             relevance = 0.1;  // PvP OA in mining = nearly worthless
         }
 
-        // Cap at 1500% — beyond that it's usually a special mechanic
-        double capped = std::min(oa, 1500.0);
-        oa_bonus += capped * 20.0 * relevance;
+        // Cap at 15.0 (1500%) — beyond that it's usually a special mechanic
+        double capped = std::min(oa_val, 15.0);
+        // Scale: a typical strong OA (0.80) gives 0.80 * 2000 = 1600 points
+        oa_bonus += capped * 2000.0 * relevance;
     }
     if (oa_bonus > 0) {
         total += oa_bonus;
+        bd.oa_bonus = oa_bonus;
+        bd.synergy_notes.push_back(
+            "OA% bonus: +" + std::to_string(static_cast<int>(oa_bonus)) + " from crew ability magnitudes");
     }
 }
 
@@ -1397,14 +1757,22 @@ void CrewOptimizer::apply_bridge_synergy(double& total, CrewBreakdown& bd,
     auto calc_bars = [&](const ClassifiedOfficer& side) -> int {
         if (side.group.empty() || side.group != captain.group) return 0;
         // Same group as captain
-        if (all_unique_classes) return 2;  // 20%
-        return 1;  // 10% (class collision)
+        if (all_unique_classes) return 2;  // Full synergy
+        return 1;  // Half synergy (class collision)
     };
 
     int bars_left = calc_bars(b1);
     int bars_right = calc_bars(b2);
 
-    double synergy_pct = bars_left * 10.0 + bars_right * 10.0;  // 0, 10, 20, 30, or 40
+    // Use per-officer synergy_full/synergy_half values when available;
+    // fall back to hardcoded 20%/10% if bootstrap data is missing.
+    auto synergy_for = [&](const ClassifiedOfficer& side, int bars) -> double {
+        if (bars == 2) return (side.synergy_full > 0.0) ? side.synergy_full * 100.0 : 20.0;
+        if (bars == 1) return (side.synergy_half > 0.0) ? side.synergy_half * 100.0 : 10.0;
+        return 0.0;
+    };
+
+    double synergy_pct = synergy_for(b1, bars_left) + synergy_for(b2, bars_right);
 
     if (synergy_pct <= 0.0) return;
 
@@ -1413,9 +1781,12 @@ void CrewOptimizer::apply_bridge_synergy(double& total, CrewBreakdown& bd,
     bd.bridge_synergy_bars_right = bars_right;
 
     // The synergy multiplies the captain's CM.  In scoring terms, the CM
-    // bonus was already applied as `cm_pct * cm_scope_weight()`.
+    // bonus was already applied as value-based: cm_val * cm_scope_weight() * 100.
     // The synergy adds (synergy_pct / 100) * that same CM contribution.
-    double cm_base = std::min(captain.cm_pct, 500.0) * cm_scope_weight(captain.cm_scope);
+    double cm_val = captain.cm_value;
+    if (cm_val <= 0.0 && captain.cm_pct > 0.0) cm_val = captain.cm_pct / 100.0;
+    cm_val = std::min(cm_val, 5.0);
+    double cm_base = cm_val * cm_scope_weight(captain.cm_scope) * 100.0;
     double synergy_bonus = cm_base * (synergy_pct / 100.0);
 
     // Additional flat incentive for achieving synergy — this encourages the
@@ -1480,25 +1851,20 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
     ship_label[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(ship_label[0])));
 
     // ===================================================================
-    // STEP 2: Synergy-Adjusted CM — PRIMARY scoring factor
+    // STEP 2: Synergy-Adjusted CM — PRIMARY scoring factor (value-based)
     // ===================================================================
-    // "A 10% CM with +40% synergy (=14%) beats a 12% CM with 0% synergy"
-    // The CM bonus must be large enough that synergy meaningfully changes
-    // the ranking.  We compute the full synergy-adjusted CM as one unit.
-    //
-    // Formula: effective_cm_score = cm_pct * scope_weight * (1 + synergy_pct/100)
-    // This replaces the old separate CM bonus + bridge synergy approach.
-
     if (captain.is_bda()) {
         double penalty = total * 0.25;
         total -= penalty;
+        bd.penalty_total += penalty;
         bd.penalties.push_back("'" + captain.name + "' has a BDA, not a Captain Maneuver -- wasted captain slot");
     } else if (!cm_works_on_ship(captain)) {
         double penalty = total * 0.2;
         total -= penalty;
+        bd.penalty_total += penalty;
         bd.penalties.push_back("'" + captain.name + "' CM locked to non-" + ship_label + " ship type");
     } else {
-        // Compute synergy percentage inline (mirrors apply_bridge_synergy logic)
+        // Compute synergy percentage inline
         double synergy_pct = 0.0;
         if (!captain.group.empty()) {
             bool all_unique_classes = (captain.officer_class != 0 &&
@@ -1516,7 +1882,6 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
             int bars_right = calc_bars(b2);
             synergy_pct = bars_left * 10.0 + bars_right * 10.0;
 
-            // Record synergy info in breakdown
             if (synergy_pct > 0) {
                 bd.bridge_synergy_pct = synergy_pct;
                 bd.bridge_synergy_bars_left = bars_left;
@@ -1531,51 +1896,54 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
             }
         }
 
-        // Synergy-adjusted CM: this is THE primary crew-level factor.
-        // Base CM score scaled by 3x compared to old model so it competes
-        // with individual scores, and synergy multiplies it further.
-        double cm_base = std::min(captain.cm_pct, 500.0) * cm_scope_weight(captain.cm_scope);
+        // Value-based CM: use cm_value (actual decimal) * scope_weight * synergy
+        double cm_val = captain.cm_value;
+        if (cm_val <= 0.0 && captain.cm_pct > 0.0) cm_val = captain.cm_pct / 100.0;
+        cm_val = std::min(cm_val, 5.0);  // Cap at 500%
+
+        double cm_base = cm_val * cm_scope_weight(captain.cm_scope) * 100.0;  // Scale to crew range
         double synergy_mult = 1.0 + synergy_pct / 100.0;
         double cm_bonus = cm_base * synergy_mult;
 
-        // Additional flat synergy incentive: even low-scope CMs benefit from
-        // synergy in practice.  +2500 per synergy% encourages 40% synergy.
-        // 40% synergy = +100K flat.  This is large by design — the user's
-        // framework says synergy-adjusted CM should be a "PRIMARY factor".
+        // Flat synergy incentive: encourages high synergy even for low-scope CMs
         cm_bonus += synergy_pct * 2500.0;
 
         total += cm_bonus;
-        bd.bridge_synergy_bonus = cm_bonus - cm_base;  // Record synergy-only portion
+        bd.bridge_synergy_bonus = cm_bonus - cm_base;
     }
 
     // ===================================================================
-    // STEP 1: Crew-level Mitigation Delta
+    // STEP 1: Crew-level Mitigation Delta — value-based piercing coverage
     // ===================================================================
-    // Crews with piercing coverage bypass the 71.2% mitigation cap.
-    // A crew with 2+ piercing officers is META — the opponent cannot mitigate.
+    // Sum actual piercing values from all officers for value-based scoring.
+    // Officers with higher piercing values create a stronger mitigation delta.
     {
         int pierce_officers = 0;
+        double pierce_value_sum = 0.0;
         for (int i = 0; i < 3; ++i) {
-            if (crew[i]->armor_piercing || crew[i]->shield_piercing || crew[i]->accuracy_boost)
+            if (crew[i]->armor_piercing || crew[i]->shield_piercing || crew[i]->accuracy_boost) {
                 ++pierce_officers;
+                pierce_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
         }
         if (pierce_officers >= 2) {
-            total += 60000;
+            double pierce_bonus = pierce_value_sum * 40000.0;
+            if (pierce_bonus < 40000) pierce_bonus = 40000;  // Minimum floor
+            total += pierce_bonus;
             bd.synergy_notes.push_back(
                 "Piercing coverage (" + std::to_string(pierce_officers) +
                 "/3 officers bypass mitigation cap)");
         } else if (pierce_officers == 1) {
-            total += 20000;
+            double pierce_bonus = pierce_value_sum * 25000.0;
+            if (pierce_bonus < 15000) pierce_bonus = 15000;
+            total += pierce_bonus;
             bd.synergy_notes.push_back("Partial piercing coverage (1/3 officers)");
         }
     }
 
     // ===================================================================
-    // STEP 3: Proc Factor — state chain with reliability weighting
+    // Crit coverage — value-based (PvP is always combat)
     // ===================================================================
-    // State chains are valuable but must be weighted by proc reliability.
-    // Guaranteed-proc crews (Strike Team) >> chance-based.
-    // State value differentiation: burning/breach > morale in PvP.
     {
         std::set<std::string> all_applied, all_benefit;
         for (int i = 0; i < 3; ++i) {
@@ -1583,27 +1951,34 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
             for (const auto& s : crew[i]->states_benefit) all_benefit.insert(s);
         }
 
-        // Intersection = synergy states
         std::set<std::string> synergy_states;
         for (const auto& s : all_applied) {
             if (all_benefit.count(s)) synergy_states.insert(s);
         }
 
         if (!synergy_states.empty()) {
-            // State value differentiation: burning/breach are offensive META,
-            // morale is weaker, assimilate is niche
-            double chain_bonus = 0.0;
-            for (const auto& s : synergy_states) {
-                if (s == "burning" || s == "breach") {
-                    chain_bonus += 50000;   // Top-tier offensive states
-                } else if (s == "morale") {
-                    chain_bonus += 30000;   // Defensive/utility state
-                } else {
-                    chain_bonus += 40000;   // assimilate, other
+            // Value-based state chain: sum OA values of state officers,
+            // then scale by state type importance
+            double crew_state_value = 0.0;
+            for (int i = 0; i < 3; ++i) {
+                if (!crew[i]->states_applied.empty() || !crew[i]->states_benefit.empty()) {
+                    crew_state_value += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
                 }
             }
 
-            // Beneficiary multiplier (capped)
+            double chain_bonus = 0.0;
+            for (const auto& s : synergy_states) {
+                double state_base = crew_state_value * 25000.0;
+                if (s == "burning" || s == "breach") {
+                    chain_bonus += std::max(state_base, 35000.0);
+                } else if (s == "morale") {
+                    chain_bonus += std::max(state_base * 0.7, 20000.0);
+                } else {
+                    chain_bonus += std::max(state_base * 0.85, 28000.0);
+                }
+            }
+
+            // Beneficiary multiplier
             int beneficiaries = 0;
             for (int i = 0; i < 3; ++i) {
                 for (const auto& s : crew[i]->states_benefit) {
@@ -1612,18 +1987,29 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
             }
             chain_bonus *= 1.0 + std::min(beneficiaries, 2) * 0.25;
 
-            // Proc reliability bonus: guaranteed procs amplify the chain value
+            // Proc reliability: scale by actual proc chances when available
             int guaranteed_count = 0;
+            double avg_chance = 0.0;
+            int chance_count = 0;
             for (int i = 0; i < 3; ++i) {
-                if (crew[i]->proc_guaranteed && !crew[i]->states_applied.empty())
-                    ++guaranteed_count;
+                if (!crew[i]->states_applied.empty()) {
+                    if (crew[i]->proc_guaranteed) ++guaranteed_count;
+                    if (crew[i]->oa_chance > 0.0) {
+                        avg_chance += crew[i]->oa_chance;
+                        ++chance_count;
+                    }
+                }
             }
             if (guaranteed_count >= 2) {
-                chain_bonus *= 1.4;  // 40% bonus: fully self-proccing crew
+                chain_bonus *= 1.4;
                 bd.synergy_notes.push_back(
                     "Guaranteed state procs (" + std::to_string(guaranteed_count) + " officers)");
             } else if (guaranteed_count == 1) {
-                chain_bonus *= 1.15;  // 15% bonus: partial reliability
+                chain_bonus *= 1.15;
+            } else if (chance_count > 0) {
+                // Use actual average proc chance to scale
+                double avg_ch = avg_chance / chance_count;
+                chain_bonus *= std::max(avg_ch, 0.3);  // Floor at 30% effectiveness
             }
 
             total += chain_bonus;
@@ -1638,8 +2024,7 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
                 "State synergy chain: " + joined + " (" +
                 std::to_string(beneficiaries) + " officers benefit)");
 
-            // State-spread penalty: crews applying 3+ DIFFERENT states are
-            // unfocused — the META rewards focused state application
+            // State-spread penalty
             if (all_applied.size() >= 3) {
                 double spread_penalty = total * 0.10;
                 total -= spread_penalty;
@@ -1648,7 +2033,6 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
                     " different states) -- focused crews are more effective");
             }
         } else if (all_applied.empty()) {
-            // No state applicator at all — conditional abilities may not trigger
             double penalty = total * 0.15;
             total -= penalty;
             bd.penalties.push_back("No state applicator: conditional abilities may not trigger");
@@ -1659,78 +2043,97 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
     apply_coherence(total, bd, crew, 40000, 15000);
 
     // ===================================================================
-    // STEP 4: RPS META Archetype Detection
+    // STEP 4: RPS META Archetype Detection — value-based
     // ===================================================================
-    // Detect crew archetype and give bonus for coherent builds:
-    //   Generalist: shots + raw damage officers
-    //   Apex Barrier: defensive apex absorption
-    //   Strike Team: sustained piercing + cumulative damage
-    //   Isolytic: cascade tie-breaker
     {
         int apex_barrier_count = 0;
         int apex_shred_count = 0;
         int isolytic_cascade_count = 0;
         int shots_count = 0;
         int cumulative_count = 0;
+        double barrier_value_sum = 0.0;
+        double shred_value_sum = 0.0;
+        double isolytic_value_sum = 0.0;
+        double shots_value_sum = 0.0;
+        double cumul_value_sum = 0.0;
+
         for (int i = 0; i < 3; ++i) {
-            if (crew[i]->apex_barrier) ++apex_barrier_count;
-            if (crew[i]->apex_shred) ++apex_shred_count;
-            if (crew[i]->isolytic_cascade) ++isolytic_cascade_count;
-            if (crew[i]->shots_related) ++shots_count;
-            if (crew[i]->cumulative_stacking) ++cumulative_count;
+            if (crew[i]->apex_barrier) {
+                ++apex_barrier_count;
+                barrier_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+            if (crew[i]->apex_shred) {
+                ++apex_shred_count;
+                shred_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+            if (crew[i]->isolytic_cascade) {
+                ++isolytic_cascade_count;
+                isolytic_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+            if (crew[i]->shots_related) {
+                ++shots_count;
+                shots_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+            if (crew[i]->cumulative_stacking) {
+                ++cumulative_count;
+                cumul_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
         }
 
-        // Apex Barrier crew: absorbs generalist damage
         if (apex_barrier_count >= 2) {
-            total += 50000;
+            double bonus = std::max(barrier_value_sum * 30000.0, 35000.0);
+            total += bonus;
             bd.synergy_notes.push_back(
                 "Apex Barrier crew (" + std::to_string(apex_barrier_count) + "/3 officers)");
         }
-
-        // Apex Shred crew: counters barrier META
         if (apex_shred_count >= 2) {
-            total += 60000;
+            double bonus = std::max(shred_value_sum * 35000.0, 40000.0);
+            total += bonus;
             bd.synergy_notes.push_back(
                 "Apex Shred crew (" + std::to_string(apex_shred_count) +
                 "/3) -- counters Apex Barrier META");
         }
-
-        // Isolytic cascade crew: tie-breaker mechanic
         if (isolytic_cascade_count >= 2) {
-            total += 40000;
+            double bonus = std::max(isolytic_value_sum * 25000.0, 28000.0);
+            total += bonus;
             bd.synergy_notes.push_back(
                 "Isolytic Cascade coverage (" + std::to_string(isolytic_cascade_count) + "/3 officers)");
         }
-
-        // Generalist crew: massive shots coverage
         if (shots_count >= 2) {
-            total += 30000;
+            double bonus = std::max(shots_value_sum * 20000.0, 20000.0);
+            total += bonus;
             bd.synergy_notes.push_back(
                 "Generalist shots crew (" + std::to_string(shots_count) + "/3 officers)");
         }
-
-        // Cumulative grind crew: effects compound each round
         if (cumulative_count >= 2) {
-            total += 35000;
+            double bonus = std::max(cumul_value_sum * 22000.0, 25000.0);
+            total += bonus;
             bd.synergy_notes.push_back(
                 "Cumulative stacking crew (" + std::to_string(cumulative_count) +
                 "/3) -- effects compound each round");
         }
     }
 
-    // Crit coverage (secondary)
+    // Ship-type coverage (PvP is always combat)
     {
         int crit_officers = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->crit_related) ++crit_officers;
+        double crit_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->crit_related) {
+                ++crit_officers;
+                crit_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (crit_officers >= 2) {
-            total += 30000;
-            bd.crit_bonus = 30000;
+            double bonus = std::max(crit_value_sum * 18000.0, 20000.0);
+            total += bonus;
+            bd.crit_bonus = bonus;
             bd.synergy_notes.push_back(
                 "Strong crit coverage (" + std::to_string(crit_officers) + "/3 officers)");
         }
     }
 
-    // Ship-type coverage (secondary)
+    // Ship-type coverage
     {
         int ship_officers = 0;
         for (int i = 0; i < 3; ++i) if (crew[i]->is_ship_specific) ++ship_officers;
@@ -1745,24 +2148,19 @@ CrewResult CrewOptimizer::score_pvp_crew(const ClassifiedOfficer& captain,
     // Weakness counters
     apply_weakness_counters_pvp(total, bd, crew, 25000, 15000);
 
-    // PvE-only penalty
+    // PvE-only penalty — use classification tags, not fragile text matching
     for (int i = 0; i < 3; ++i) {
-        const auto& d = crew[i]->description;
-        if (contains_any(d, {"hostile", "mining", "cargo", "resources",
-                              "armada only", "non-player", "reputation",
-                              "warp range", "warp speed"})) {
-            if (!crew[i]->is_pvp_specific) {
+        if (crew[i]->mining || crew[i]->cargo || crew[i]->pve_hostile ||
+            crew[i]->is_pve_specific || crew[i]->warp) {
+            if (!crew[i]->is_pvp_specific && !crew[i]->is_dual_use) {
                 double penalty = total * 0.15;
                 total -= penalty;
+                bd.penalty_total += penalty;
                 bd.penalties.push_back(
-                    "PvE officer '" + crew[i]->name + "' in PvP crew");
+                    "PvE/utility officer '" + crew[i]->name + "' in PvP crew");
             }
         }
     }
-
-    // NOTE: Bridge synergy is now computed inline above (Step 2) to make
-    // the synergy-adjusted CM a single unified calculation.
-    // apply_bridge_synergy() is NOT called here to avoid double-counting.
 
     // OA% bonus — scenario-weighted
     apply_oa_bonus(total, bd, crew, Scenario::PvP);
@@ -1798,14 +2196,18 @@ CrewResult CrewOptimizer::score_hybrid_crew(const ClassifiedOfficer& captain,
     std::string ship_label = ship_type_str(ship_type_);
     ship_label[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(ship_label[0])));
 
-    // Synergy-adjusted CM (same approach as PvP but slightly lower synergy incentive)
+    // ===================================================================
+    // Synergy-Adjusted CM — value-based (same as PvP but slightly lower synergy incentive)
+    // ===================================================================
     if (captain.is_bda()) {
         double penalty = total * 0.25;
         total -= penalty;
+        bd.penalty_total += penalty;
         bd.penalties.push_back("'" + captain.name + "' has a BDA, not a Captain Maneuver -- wasted captain slot");
     } else if (!cm_works_on_ship(captain)) {
         double penalty = total * 0.2;
         total -= penalty;
+        bd.penalty_total += penalty;
         bd.penalties.push_back("'" + captain.name + "' CM locked to non-" + ship_label + " ship type");
     } else {
         // Compute synergy inline
@@ -1840,51 +2242,170 @@ CrewResult CrewOptimizer::score_hybrid_crew(const ClassifiedOfficer& captain,
             }
         }
 
-        double cm_base = std::min(captain.cm_pct, 500.0) * cm_scope_weight(captain.cm_scope);
+        // Value-based CM: use cm_value (actual decimal) * scope_weight * synergy
+        double cm_val = captain.cm_value;
+        if (cm_val <= 0.0 && captain.cm_pct > 0.0) cm_val = captain.cm_pct / 100.0;
+        cm_val = std::min(cm_val, 5.0);  // Cap at 500%
+
+        double cm_base = cm_val * cm_scope_weight(captain.cm_scope) * 100.0;  // Scale to crew range
         double synergy_mult = 1.0 + synergy_pct / 100.0;
         double cm_bonus = cm_base * synergy_mult;
+
         // Slightly lower flat synergy incentive than PvP (2000 vs 2500)
         cm_bonus += synergy_pct * 2000.0;
         total += cm_bonus;
         bd.bridge_synergy_bonus = cm_bonus - cm_base;
     }
 
-    // Ability amplifier captain bonus (strong in hybrid — boosts all abilities)
+    // ===================================================================
+    // Ability amplifier captain — value-based
+    // ===================================================================
     if (captain.ability_amplifier) {
-        total += 80000;
-        bd.amplifier_bonus = 80000;
+        // Value-based: amplifier captain's CM value scales the bonus
+        double amp_val = captain.cm_value;
+        if (amp_val <= 0.0 && captain.cm_pct > 0.0) amp_val = captain.cm_pct / 100.0;
+        double amp_bonus = std::max(amp_val * 200000.0, 60000.0);
+        total += amp_bonus;
+        bd.amplifier_bonus = amp_bonus;
         bd.synergy_notes.push_back(
             "Ability amplifier captain '" + captain.name + "' -- boosts all bridge abilities in both PvE and PvP");
     }
 
-    // Dual-use coherence
+    // ===================================================================
+    // Dual-use coherence — value-based
+    // ===================================================================
     {
         int dual_use_count = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->is_dual_use) ++dual_use_count;
+        double dual_use_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->is_dual_use) {
+                ++dual_use_count;
+                dual_use_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (dual_use_count == 3) {
-            total += 60000;
-            bd.dual_use_bonus = 60000;
+            double bonus = std::max(dual_use_value_sum * 35000.0, 50000.0);
+            total += bonus;
+            bd.dual_use_bonus = bonus;
             bd.synergy_notes.push_back("Full dual-use crew -- all 3 officers work in both PvE and PvP");
         } else if (dual_use_count == 2) {
-            total += 25000;
-            bd.dual_use_bonus = 25000;
+            double bonus = std::max(dual_use_value_sum * 20000.0, 20000.0);
+            total += bonus;
+            bd.dual_use_bonus = bonus;
             bd.synergy_notes.push_back("Partial dual-use crew -- 2/3 officers work in both modes");
         }
     }
 
-    // State synergy chain — 60K for hybrid (lower than PvP)
-    apply_state_chain(total, bd, crew, 60000, false);
+    // ===================================================================
+    // State synergy chain — value-weighted (hybrid: lower than PvP)
+    // ===================================================================
+    {
+        std::set<std::string> all_applied, all_benefit;
+        for (int i = 0; i < 3; ++i) {
+            for (const auto& s : crew[i]->states_applied) all_applied.insert(s);
+            for (const auto& s : crew[i]->states_benefit) all_benefit.insert(s);
+        }
 
-    // Coherence
+        std::set<std::string> synergy_states;
+        for (const auto& s : all_applied) {
+            if (all_benefit.count(s)) synergy_states.insert(s);
+        }
+
+        if (!synergy_states.empty()) {
+            // Sum OA values of state-relevant officers
+            double crew_state_value = 0.0;
+            for (int i = 0; i < 3; ++i) {
+                if (!crew[i]->states_applied.empty() || !crew[i]->states_benefit.empty()) {
+                    crew_state_value += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+                }
+            }
+
+            double chain_bonus = 0.0;
+            for (const auto& s : synergy_states) {
+                // Hybrid: 20000 base per 1.0 of state value (lower than PvP's 25000)
+                double state_base = crew_state_value * 20000.0;
+                if (s == "burning" || s == "breach") {
+                    chain_bonus += std::max(state_base, 28000.0);
+                } else if (s == "morale") {
+                    chain_bonus += std::max(state_base * 0.7, 16000.0);
+                } else {
+                    chain_bonus += std::max(state_base * 0.85, 22000.0);
+                }
+            }
+
+            // Beneficiary multiplier
+            int beneficiaries = 0;
+            for (int i = 0; i < 3; ++i) {
+                for (const auto& s : crew[i]->states_benefit) {
+                    if (all_applied.count(s)) { ++beneficiaries; break; }
+                }
+            }
+            chain_bonus *= 1.0 + std::min(beneficiaries, 2) * 0.25;
+
+            // Proc reliability
+            int guaranteed_count = 0;
+            double avg_chance = 0.0;
+            int chance_count = 0;
+            for (int i = 0; i < 3; ++i) {
+                if (!crew[i]->states_applied.empty()) {
+                    if (crew[i]->proc_guaranteed) ++guaranteed_count;
+                    if (crew[i]->oa_chance > 0.0) {
+                        avg_chance += crew[i]->oa_chance;
+                        ++chance_count;
+                    }
+                }
+            }
+            if (guaranteed_count >= 2) {
+                chain_bonus *= 1.3;
+            } else if (guaranteed_count == 1) {
+                chain_bonus *= 1.1;
+            } else if (chance_count > 0) {
+                double avg_ch = avg_chance / chance_count;
+                chain_bonus *= std::max(avg_ch, 0.3);
+            }
+
+            total += chain_bonus;
+            bd.state_chain_bonus = chain_bonus;
+
+            std::string joined;
+            for (const auto& s : synergy_states) {
+                if (!joined.empty()) joined += ", ";
+                joined += s;
+            }
+            bd.synergy_notes.push_back(
+                "State synergy chain: " + joined + " (" +
+                std::to_string(beneficiaries) + " officers benefit)");
+
+            // State-spread penalty (mirroring PvP)
+            if (all_applied.size() >= 3) {
+                double spread_penalty = total * 0.10;
+                total -= spread_penalty;
+                bd.penalties.push_back(
+                    "State spread (" + std::to_string(all_applied.size()) +
+                    " different states) -- focused crews are more effective");
+            }
+        }
+    }
+
+    // Coherence (focused state theme)
     apply_coherence(total, bd, crew, 35000, 15000);
 
-    // Crit coverage
+    // ===================================================================
+    // Crit coverage — value-based
+    // ===================================================================
     {
         int crit_officers = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->crit_related) ++crit_officers;
+        double crit_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->crit_related) {
+                ++crit_officers;
+                crit_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (crit_officers >= 2) {
-            total += 30000;
-            bd.crit_bonus = 30000;
+            double bonus = std::max(crit_value_sum * 15000.0, 18000.0);
+            total += bonus;
+            bd.crit_bonus = bonus;
             bd.synergy_notes.push_back(
                 "Strong crit coverage (" + std::to_string(crit_officers) + "/3 officers)");
         }
@@ -1962,26 +2483,39 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
     std::string ship_label = ship_type_str(ship_type_);
     ship_label[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(ship_label[0])));
 
-    // Captain maneuver — scope-weighted
+    // ===================================================================
+    // Captain maneuver — value-based scope-weighted
+    // ===================================================================
     if (captain.is_bda()) {
         double penalty = total * 0.25;
         total -= penalty;
+        bd.penalty_total += penalty;
         bd.penalties.push_back("'" + captain.name + "' has a BDA, not a Captain Maneuver -- wasted captain slot");
     } else if (!cm_works_on_ship(captain)) {
         double penalty = total * 0.2;
         total -= penalty;
+        bd.penalty_total += penalty;
         bd.penalties.push_back("'" + captain.name + "' CM locked to non-" + ship_label + " ship type");
     } else {
-        double captain_slot_bonus = std::min(captain.cm_pct, 500.0) * cm_scope_weight(captain.cm_scope);
+        // Value-based CM: use cm_value (actual decimal) * scope_weight
+        double cm_val = captain.cm_value;
+        if (cm_val <= 0.0 && captain.cm_pct > 0.0) cm_val = captain.cm_pct / 100.0;
+        cm_val = std::min(cm_val, 5.0);
+        double captain_slot_bonus = cm_val * cm_scope_weight(captain.cm_scope) * 100.0;
         total += captain_slot_bonus;
         score_parts.captain_slot += captain_slot_bonus;
     }
 
-    // Ability amplifier captain
+    // ===================================================================
+    // Ability amplifier captain — value-based
+    // ===================================================================
     if (captain.ability_amplifier) {
-        total += 60000;
-        bd.amplifier_bonus = 60000;
-        score_parts.synergy += 60000;
+        double amp_val = captain.cm_value;
+        if (amp_val <= 0.0 && captain.cm_pct > 0.0) amp_val = captain.cm_pct / 100.0;
+        double amp_bonus = std::max(amp_val * 150000.0, 45000.0);
+        total += amp_bonus;
+        bd.amplifier_bonus = amp_bonus;
+        score_parts.synergy += amp_bonus;
         bd.synergy_notes.push_back(
             "Ability amplifier captain '" + captain.name + "' boosts all bridge abilities");
     }
@@ -1994,19 +2528,104 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
                                scenario == Scenario::MiningCrystal ||
                                scenario == Scenario::MiningGeneral);
     if (!is_mining_scenario) {
-        // Combat scenarios: state chain matters (60K per state)
-        apply_state_chain(total, bd, crew, 60000, false);
+        // ===================================================================
+        // Combat scenarios: value-based state chain
+        // ===================================================================
+        {
+            std::set<std::string> all_applied, all_benefit;
+            for (int i = 0; i < 3; ++i) {
+                for (const auto& s : crew[i]->states_applied) all_applied.insert(s);
+                for (const auto& s : crew[i]->states_benefit) all_benefit.insert(s);
+            }
+
+            std::set<std::string> synergy_states;
+            for (const auto& s : all_applied) {
+                if (all_benefit.count(s)) synergy_states.insert(s);
+            }
+
+            if (!synergy_states.empty()) {
+                double crew_state_value = 0.0;
+                for (int i = 0; i < 3; ++i) {
+                    if (!crew[i]->states_applied.empty() || !crew[i]->states_benefit.empty()) {
+                        crew_state_value += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+                    }
+                }
+
+                double chain_bonus = 0.0;
+                for (const auto& s : synergy_states) {
+                    double state_base = crew_state_value * 22000.0;
+                    if (s == "burning" || s == "breach") {
+                        chain_bonus += std::max(state_base, 30000.0);
+                    } else if (s == "morale") {
+                        chain_bonus += std::max(state_base * 0.7, 18000.0);
+                    } else {
+                        chain_bonus += std::max(state_base * 0.85, 24000.0);
+                    }
+                }
+
+                int beneficiaries = 0;
+                for (int i = 0; i < 3; ++i) {
+                    for (const auto& s : crew[i]->states_benefit) {
+                        if (all_applied.count(s)) { ++beneficiaries; break; }
+                    }
+                }
+                chain_bonus *= 1.0 + std::min(beneficiaries, 2) * 0.25;
+
+                // Proc reliability
+                int guaranteed_count = 0;
+                double avg_chance = 0.0;
+                int chance_count = 0;
+                for (int i = 0; i < 3; ++i) {
+                    if (!crew[i]->states_applied.empty()) {
+                        if (crew[i]->proc_guaranteed) ++guaranteed_count;
+                        if (crew[i]->oa_chance > 0.0) {
+                            avg_chance += crew[i]->oa_chance;
+                            ++chance_count;
+                        }
+                    }
+                }
+                if (guaranteed_count >= 2) {
+                    chain_bonus *= 1.3;
+                } else if (guaranteed_count == 1) {
+                    chain_bonus *= 1.1;
+                } else if (chance_count > 0) {
+                    double avg_ch = avg_chance / chance_count;
+                    chain_bonus *= std::max(avg_ch, 0.3);
+                }
+
+                total += chain_bonus;
+                bd.state_chain_bonus = chain_bonus;
+
+                std::string joined;
+                for (const auto& s : synergy_states) {
+                    if (!joined.empty()) joined += ", ";
+                    joined += s;
+                }
+                bd.synergy_notes.push_back(
+                    "State synergy chain: " + joined + " (" +
+                    std::to_string(beneficiaries) + " officers benefit)");
+            }
+        }
         // Coherence
-        apply_coherence(total, bd, crew, 40000, 18000);
+        apply_coherence(total, bd, crew, 40000, 15000);
     }
 
-    // Crit coverage
+    // ===================================================================
+    // Crit coverage — value-based
+    // ===================================================================
     {
         int crit_officers = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->crit_related) ++crit_officers;
+        double crit_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->crit_related) {
+                ++crit_officers;
+                crit_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (crit_officers >= 2) {
-            total += 25000;
-            bd.crit_bonus = 25000;
+            double crit_bonus = std::max(crit_value_sum * 14000.0, 18000.0);
+            total += crit_bonus;
+            bd.crit_bonus = crit_bonus;
             bd.synergy_notes.push_back(
                 "Strong crit coverage (" + std::to_string(crit_officers) + "/3 officers)");
         }
@@ -2024,44 +2643,76 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
         }
     }
 
-    // Scenario-specific crew bonuses
+    // ===================================================================
+    // Scenario-specific crew bonuses — value-based
+    // ===================================================================
     double scenario_bonus = 0.0;
 
     if (scenario == Scenario::BaseCracker) {
         int base_attackers = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->base_attack) ++base_attackers;
+        double attacker_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->base_attack) {
+                ++base_attackers;
+                attacker_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (base_attackers >= 2) {
-            scenario_bonus += base_attackers * 30000;
+            scenario_bonus += std::max(attacker_value_sum * 40000.0, 50000.0);
             bd.synergy_notes.push_back(
                 "Station attack crew (" + std::to_string(base_attackers) + "/3 officers)");
         }
         int delay_officers = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->weapon_delay) ++delay_officers;
+        double delay_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->weapon_delay) {
+                ++delay_officers;
+                delay_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (delay_officers >= 1) {
-            scenario_bonus += delay_officers * 15000;
+            scenario_bonus += std::max(delay_value_sum * 20000.0, 12000.0);
             bd.synergy_notes.push_back(
                 "Weapon delay (" + std::to_string(delay_officers) + " officer(s))");
         }
     } else if (scenario == Scenario::PvEHostile) {
         int pve_count = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->pve_hostile) ++pve_count;
+        double pve_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->pve_hostile) {
+                ++pve_count;
+                pve_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (pve_count >= 2) {
-            scenario_bonus += pve_count * 20000;
+            scenario_bonus += std::max(pve_value_sum * 25000.0, 35000.0);
             bd.synergy_notes.push_back(
                 "PvE-focused crew (" + std::to_string(pve_count) + "/3 officers)");
         }
         int repair_count = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->repair) ++repair_count;
+        double repair_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->repair) {
+                ++repair_count;
+                repair_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (repair_count >= 1) {
-            scenario_bonus += repair_count * 10000;
+            scenario_bonus += std::max(repair_value_sum * 14000.0, 8000.0);
             bd.synergy_notes.push_back(
                 "Repair capability (" + std::to_string(repair_count) + " officer(s))");
         }
     } else if (scenario == Scenario::MissionBoss) {
         int mission_count = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->mission_boss) ++mission_count;
+        double mission_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->mission_boss) {
+                ++mission_count;
+                mission_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (mission_count >= 1) {
-            scenario_bonus += mission_count * 25000;
+            scenario_bonus += std::max(mission_value_sum * 30000.0, 20000.0);
             bd.synergy_notes.push_back(
                 "Mission specialist (" + std::to_string(mission_count) + " officer(s))");
         }
@@ -2071,22 +2722,52 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
             scenario_bonus += static_cast<int>((total_atk - 150000) * 0.1);
         }
         int iso_count = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->isolytic_related) ++iso_count;
-        if (iso_count >= 2) scenario_bonus += iso_count * 15000;
+        double iso_value_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->isolytic_cascade || crew[i]->isolytic_defense) {
+                ++iso_count;
+                iso_value_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
+        if (iso_count >= 2) {
+            scenario_bonus += std::max(iso_value_sum * 18000.0, 25000.0);
+        }
     } else if (scenario == Scenario::Loot) {
         int mining_count = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->mining) ++mining_count;
+        double mining_val_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->mining) {
+                ++mining_count;
+                mining_val_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
         if (mining_count >= 2) {
-            scenario_bonus += mining_count * 30000;
+            scenario_bonus += std::max(mining_val_sum * 35000.0, 50000.0);
             bd.synergy_notes.push_back(
                 "Mining crew (" + std::to_string(mining_count) + "/3 officers)");
         }
         int cargo_count = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->cargo) ++cargo_count;
-        if (cargo_count >= 1) scenario_bonus += cargo_count * 20000;
+        double cargo_val_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->cargo) {
+                ++cargo_count;
+                cargo_val_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
+        if (cargo_count >= 1) {
+            scenario_bonus += std::max(cargo_val_sum * 25000.0, 15000.0);
+        }
         int loot_count = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->loot) ++loot_count;
-        if (loot_count >= 1) scenario_bonus += loot_count * 20000;
+        double loot_val_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->loot) {
+                ++loot_count;
+                loot_val_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
+        if (loot_count >= 1) {
+            scenario_bonus += std::max(loot_val_sum * 25000.0, 15000.0);
+        }
         double total_def = 0, total_hp = 0;
         for (int i = 0; i < 3; ++i) { total_def += crew[i]->defense; total_hp += crew[i]->health; }
         scenario_bonus += static_cast<int>(total_def * 0.1 + total_hp * 0.05);
@@ -2095,8 +2776,8 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
                scenario == Scenario::MiningGas ||
                scenario == Scenario::MiningOre ||
                scenario == Scenario::MiningCrystal ||
-               scenario == Scenario::MiningGeneral ||
-               scenario == Scenario::Loot) {
+               scenario == Scenario::MiningGeneral) {
+        // Mining scenarios: left mostly as-is per instructions
         double mining_value = captain_mining_value(captain, scenario) +
                               bridge_mining_value(b1, scenario) +
                               bridge_mining_value(b2, scenario);
@@ -2133,38 +2814,54 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
             bd.synergy_notes.push_back("Protected cargo effects detected");
         }
     } else if (scenario == Scenario::Armada) {
-        // Armada: LOOT ROI focus. Multiple loot officers stack reward bonuses.
+        // Armada: LOOT ROI focus — value-based
         int armada_count = 0;
         int loot_count = 0;
+        double armada_val_sum = 0.0;
+        double loot_val_sum = 0.0;
         for (int i = 0; i < 3; ++i) {
-            if (crew[i]->armada) ++armada_count;
-            if (crew[i]->loot) ++loot_count;
+            if (crew[i]->armada) {
+                ++armada_count;
+                armada_val_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+            if (crew[i]->loot) {
+                ++loot_count;
+                loot_val_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
         }
         // Loot coverage is the PRIMARY crew-level factor
         if (loot_count >= 2) {
-            scenario_bonus += loot_count * 30000;
+            scenario_bonus += std::max(loot_val_sum * 35000.0, 50000.0);
             bd.synergy_notes.push_back(
                 "Loot crew (" + std::to_string(loot_count) + "/3 officers boost rewards)");
         } else if (loot_count == 1) {
-            scenario_bonus += 15000;
+            scenario_bonus += std::max(loot_val_sum * 20000.0, 12000.0);
             bd.synergy_notes.push_back("Partial loot coverage (1/3 officers)");
         }
         // Armada-specific officers are secondary
         if (armada_count >= 2) {
-            scenario_bonus += armada_count * 15000;
+            scenario_bonus += std::max(armada_val_sum * 18000.0, 25000.0);
             bd.synergy_notes.push_back(
                 "Armada crew (" + std::to_string(armada_count) + "/3 officers)");
         }
         int iso_count = 0;
-        for (int i = 0; i < 3; ++i) if (crew[i]->isolytic_related) ++iso_count;
-        if (iso_count >= 2) scenario_bonus += iso_count * 10000;
+        double iso_val_sum = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            if (crew[i]->isolytic_related) {
+                ++iso_count;
+                iso_val_sum += (crew[i]->oa_value > 0.0) ? crew[i]->oa_value : 0.5;
+            }
+        }
+        if (iso_count >= 2) {
+            scenario_bonus += std::max(iso_val_sum * 12000.0, 16000.0);
+        }
     }
 
     total += scenario_bonus;
     bd.scenario_bonus = scenario_bonus;
     score_parts.scenario += scenario_bonus;
 
-    // Weakness counters (only for pvp/base_cracker in generic)
+    // Weakness counters (only for base_cracker in generic scenario)
     if (scenario == Scenario::BaseCracker) {
         double weakness_bonus = 0.0;
         if (weakness_.crit_damage_gap > 3) {
@@ -2218,6 +2915,17 @@ CrewResult CrewOptimizer::score_scenario_crew(const ClassifiedOfficer& captain,
                 bd.penalty_total += penalty;
                 score_parts.penalties += penalty;
                 bd.penalties.push_back("'" + crew[i]->name + "' is a mining/cargo officer -- useless in armada");
+            }
+        }
+    } else if (scenario == Scenario::PvEHostile || scenario == Scenario::MissionBoss) {
+        for (int i = 0; i < 3; ++i) {
+            if ((crew[i]->mining || crew[i]->cargo) &&
+                !crew[i]->pve_hostile && !crew[i]->mission_boss && !crew[i]->is_dual_use) {
+                double penalty = total * 0.15;
+                total -= penalty;
+                bd.penalty_total += penalty;
+                score_parts.penalties += penalty;
+                bd.penalties.push_back("'" + crew[i]->name + "' is a mining/cargo officer -- useless in hostile combat");
             }
         }
     } else if (scenario == Scenario::Loot) {
@@ -2423,28 +3131,48 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
         std::vector<std::string> reasons;
         bool dedicated_bda = off.is_bda();
 
-        // 1. Base OA value
+        // 1. Base BDA value — value-based
+        // Dedicated BDA officers have bda_value from bootstrap/API data.
+        // Use actual ability magnitude instead of flat bonus.
         if (dedicated_bda) {
-            score += 50000.0;
+            double bda_val = off.bda_value;
+            if (bda_val <= 0.0 && off.oa_value > 0.0) bda_val = off.oa_value;
+            double base_bonus = std::max(bda_val * 80000.0, 40000.0);
+            score += base_bonus;
             reasons.push_back("Designed as BDA officer");
         } else {
             // Non-BDA officers are fallback options only.
             score -= 25000.0;
         }
-        score += std::min(off.oa_pct, 500.0) * 10.0;
+
+        // OA quality: use actual oa_value instead of oa_pct * 10
+        double oa_val = off.oa_value;
+        if (oa_val <= 0.0 && off.oa_pct > 0.0) oa_val = off.oa_pct / 100.0;
+        if (oa_val > 0.0) {
+            score += std::min(oa_val, 5.0) * 2000.0;  // up to 10000 for extreme values
+        }
+
+        // BDA effect magnitude
         double bda_effect = off.bda_effect_pct();
         if (bda_effect > 0) {
-            score += std::min(bda_effect, 300.0) * 120.0;
+            // Value-based: scale by actual BDA value when available
+            double bda_val = off.bda_value;
+            if (bda_val > 0.0) {
+                score += std::min(bda_val, 3.0) * 12000.0;  // up to 36000
+            } else {
+                score += std::min(bda_effect, 300.0) * 120.0;  // legacy fallback
+            }
             reasons.push_back("Strong BDA effect: " + std::to_string((int)std::round(bda_effect)) + "%");
         }
 
-        // 2. State synergy: BDA applies states the crew benefits from
+        // 2. State synergy: BDA applies states the crew benefits from — value-weighted
         std::set<std::string> chain_add;
         for (const auto& s : off.states_applied) {
             if (crew_benefit.count(s)) chain_add.insert(s);
         }
         if (!chain_add.empty()) {
-            score += static_cast<double>(chain_add.size()) * 20000.0;
+            double state_val = (oa_val > 0.0) ? oa_val : 0.5;
+            score += static_cast<double>(chain_add.size()) * std::max(state_val * 25000.0, 15000.0);
             std::string states_str;
             for (const auto& s : chain_add) {
                 if (!states_str.empty()) states_str += ", ";
@@ -2453,13 +3181,14 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
             reasons.push_back("Applies " + states_str + " (crew benefits)");
         }
 
-        // 3. State synergy: BDA benefits from states the crew applies
+        // 3. State synergy: BDA benefits from states the crew applies — value-weighted
         std::set<std::string> chain_receive;
         for (const auto& s : off.states_benefit) {
             if (crew_applied.count(s)) chain_receive.insert(s);
         }
         if (!chain_receive.empty()) {
-            score += static_cast<double>(chain_receive.size()) * 15000.0;
+            double state_val = (oa_val > 0.0) ? oa_val : 0.5;
+            score += static_cast<double>(chain_receive.size()) * std::max(state_val * 18000.0, 10000.0);
             std::string states_str;
             for (const auto& s : chain_receive) {
                 if (!states_str.empty()) states_str += ", ";
@@ -2468,36 +3197,40 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
             reasons.push_back("Benefits from " + states_str + " (crew applies)");
         }
 
-        // 4. Cover missing crew capabilities
+        // 4. Cover missing crew capabilities — value-weighted
         if (!has_crit && off.crit_related) {
-            score += 10000.0;
+            double crit_val = std::max(oa_val * 12000.0, 7000.0);
+            score += crit_val;
             reasons.push_back("Adds crit coverage");
         }
         if (!has_shield && off.shield_related) {
-            score += 8000.0;
+            double shield_val = std::max(oa_val * 10000.0, 5000.0);
+            score += shield_val;
             reasons.push_back("Adds shield support");
         }
         if (!has_mitigation && off.mitigation_related) {
-            score += 8000.0;
+            double mit_val = std::max(oa_val * 10000.0, 5000.0);
+            score += mit_val;
             reasons.push_back("Adds mitigation");
         }
 
-        // 5. Scenario fit: below-deck picks still need to match the dock's job.
+        // 5. Scenario fit — value-based where applicable
+        // BDA below-deck picks still need to match the dock's job.
         switch (mode) {
         case Scenario::PvP:
             if (off.is_pvp_specific) {
-                score += 15000.0;
+                score += std::max(oa_val * 18000.0, 12000.0);
                 reasons.push_back("Fits PvP dock");
             }
-            if (off.crit_related) score += 5000.0;
-            if (off.shots_related) score += 5000.0;
-            if (off.isolytic_related) score += 5000.0;
+            if (off.crit_related) score += std::max(oa_val * 6000.0, 3000.0);
+            if (off.shots_related) score += std::max(oa_val * 6000.0, 3000.0);
+            if (off.isolytic_related) score += std::max(oa_val * 6000.0, 3000.0);
             if (off.is_pve_specific && !off.is_pvp_specific) score -= 12000.0;
             break;
 
         case Scenario::Hybrid:
             if (off.is_dual_use) {
-                score += 12000.0;
+                score += std::max(oa_val * 14000.0, 8000.0);
                 reasons.push_back("Fits hybrid dock");
             }
             if (off.is_pve_specific && !off.is_dual_use) score -= 4000.0;
@@ -2506,131 +3239,143 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
 
         case Scenario::BaseCracker:
             if (off.base_attack) {
-                score += 20000.0;
+                score += std::max(oa_val * 25000.0, 15000.0);
                 reasons.push_back("Fits station attack");
             }
-            if (off.weapon_delay) score += 8000.0;
+            if (off.weapon_delay) score += std::max(oa_val * 10000.0, 5000.0);
             if (off.base_defend) score -= 10000.0;
             if (off.mining || off.cargo) score -= 12000.0;
             break;
 
         case Scenario::PvEHostile:
             if (off.pve_hostile) {
-                score += 18000.0;
+                score += std::max(oa_val * 22000.0, 14000.0);
                 reasons.push_back("Fits hostile grinding");
             }
-            if (off.repair) score += 6000.0;
+            if (off.repair) score += std::max(oa_val * 8000.0, 4000.0);
             if (off.loot) score += 4000.0;
             if (off.is_pvp_specific && !off.pve_hostile) score -= 10000.0;
             break;
 
         case Scenario::MissionBoss:
             if (off.mission_boss || off.pve_hostile) {
-                score += 16000.0;
+                score += std::max(oa_val * 20000.0, 12000.0);
                 reasons.push_back("Fits mission boss");
             }
-            if (off.crit_related) score += 6000.0;
-            if (off.isolytic_related) score += 6000.0;
+            if (off.crit_related) score += std::max(oa_val * 8000.0, 4000.0);
+            if (off.isolytic_related) score += std::max(oa_val * 8000.0, 4000.0);
             if (off.armada && !off.pve_hostile) score -= 5000.0;
             break;
 
         case Scenario::Loot:
             if (off.loot) {
-                score += 18000.0;
+                score += std::max(oa_val * 22000.0, 14000.0);
                 reasons.push_back("Fits loot dock");
             }
             if (off.mining) score += 12000.0;
             if (off.cargo) score += 10000.0;
             if (off.warp) score += 4000.0;
-            if (contains(off.bda_text, "loot") || contains(off.bda_text, "reward")) score += 12000.0;
-            if (contains(off.bda_text, "cargo")) score += 8000.0;
+            if (contains(off.bda_text, "loot") || contains(off.bda_text, "reward")) {
+                score += std::max(off.bda_value * 15000.0, 10000.0);
+            }
+            if (contains(off.bda_text, "cargo")) {
+                score += std::max(off.bda_value * 10000.0, 6000.0);
+            }
             if (!off.loot && !off.mining && !off.cargo && !off.warp) score -= 10000.0;
             break;
 
         case Scenario::Armada:
             if (off.armada) {
-                score += 20000.0;
+                score += std::max(oa_val * 25000.0, 15000.0);
                 reasons.push_back("Fits armada dock");
             }
-            if (off.armada_solo) score += 6000.0;
-            if (off.crit_related) score += 5000.0;
-            if (off.isolytic_related) score += 5000.0;
+            if (off.armada_solo) score += std::max(oa_val * 8000.0, 4000.0);
+            if (off.crit_related) score += std::max(oa_val * 6000.0, 3000.0);
+            if (off.isolytic_related) score += std::max(oa_val * 6000.0, 3000.0);
             if (off.non_armada_only) score -= 15000.0;
             break;
 
         case Scenario::MiningSpeed:
             if (off.mining_speed) {
-                score += 25000.0;
+                score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits mining speed dock");
             }
             if (off.mining) score += 12000.0;
             if (off.cargo) score += 5000.0;
             if (contains(off.bda_text, "mining speed") || contains(off.bda_text, "mining rate") || contains(off.bda_text, "mining efficiency")) {
-                score += 16000.0;
+                score += std::max(off.bda_value * 20000.0, 12000.0);
             }
             if (!off.mining_speed && !off.mining && !off.cargo) score -= 12000.0;
             break;
 
         case Scenario::MiningProtected:
             if (off.protected_cargo) {
-                score += 25000.0;
+                score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits protected cargo dock");
             }
             if (off.cargo) score += 12000.0;
             if (off.node_defense) score += 8000.0;
             if (off.mining) score += 5000.0;
             if (contains(off.bda_text, "protected cargo") || contains(off.bda_text, "protect cargo")) {
-                score += 16000.0;
+                score += std::max(off.bda_value * 20000.0, 12000.0);
             }
             if (!off.protected_cargo && !off.cargo && !off.node_defense) score -= 12000.0;
             break;
 
         case Scenario::MiningCrystal:
             if (off.mining_crystal) {
-                score += 25000.0;
+                score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits crystal mining dock");
             }
             if (off.mining_speed) score += 10000.0;
             if (off.mining) score += 8000.0;
             if (off.cargo || off.protected_cargo) score += 4000.0;
-            if (contains(off.bda_text, "crystal")) score += 16000.0;
+            if (contains(off.bda_text, "crystal")) {
+                score += std::max(off.bda_value * 20000.0, 12000.0);
+            }
             if (!off.mining_crystal && !off.mining && !off.cargo) score -= 12000.0;
             break;
 
         case Scenario::MiningGas:
             if (off.mining_gas) {
-                score += 25000.0;
+                score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits gas mining dock");
             }
             if (off.mining_speed) score += 10000.0;
             if (off.mining) score += 8000.0;
             if (off.cargo || off.protected_cargo) score += 4000.0;
-            if (contains(off.bda_text, "gas")) score += 16000.0;
+            if (contains_word(off.bda_text, "gas") || contains(off.bda_text, "gas mining")) {
+                score += std::max(off.bda_value * 20000.0, 12000.0);
+            }
             if (!off.mining_gas && !off.mining && !off.cargo) score -= 12000.0;
             break;
 
         case Scenario::MiningOre:
             if (off.mining_ore) {
-                score += 25000.0;
+                score += std::max(oa_val * 30000.0, 20000.0);
                 reasons.push_back("Fits ore mining dock");
             }
             if (off.mining_speed) score += 10000.0;
             if (off.mining) score += 8000.0;
             if (off.cargo || off.protected_cargo) score += 4000.0;
-            if (contains(off.bda_text, "ore")) score += 16000.0;
+            if (contains_word(off.bda_text, "ore") || contains(off.bda_text, "ore mining")) {
+                score += std::max(off.bda_value * 20000.0, 12000.0);
+            }
             if (!off.mining_ore && !off.mining && !off.cargo) score -= 12000.0;
             break;
 
         case Scenario::MiningGeneral:
             if (off.mining) {
-                score += 18000.0;
+                score += std::max(oa_val * 22000.0, 14000.0);
                 reasons.push_back("Fits mining dock");
             }
             if (off.mining_speed) score += 12000.0;
             if (off.cargo) score += 10000.0;
             if (off.protected_cargo) score += 8000.0;
             if (off.node_defense) score += 5000.0;
-            if (contains(off.bda_text, "mining") || contains(off.bda_text, "cargo")) score += 12000.0;
+            if (contains(off.bda_text, "mining") || contains(off.bda_text, "cargo")) {
+                score += std::max(off.bda_value * 15000.0, 10000.0);
+            }
             if (!off.mining && !off.cargo && !off.protected_cargo) score -= 12000.0;
             break;
         }
@@ -2678,6 +3423,7 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
     for (int i = 0; i < n; ++i) {
         const auto& c = candidates[i];
         BdaSuggestion bda;
+        // Core fields
         bda.name = c.off->name;
         bda.level = c.off->level;
         bda.rank = c.off->rank;
@@ -2688,6 +3434,27 @@ std::vector<BdaSuggestion> CrewOptimizer::find_best_bda(
         bda.display = c.off->description;
         bda.score = std::round(c.score);
         bda.reasons = c.reasons;
+        // Detail fields
+        bda.is_dedicated_bda = c.dedicated_bda;
+        bda.officer_type = c.off->officer_type_str;
+        bda.bda_text = c.off->bda_text;
+        bda.oa_text = c.off->oa_text;
+        bda.bda_value = c.off->bda_value;
+        bda.oa_value = c.off->oa_value;
+        // Tag fields
+        bda.cargo = c.off->cargo;
+        bda.loot = c.off->loot;
+        bda.mining = c.off->mining;
+        bda.protected_cargo = c.off->protected_cargo;
+        bda.crit_related = c.off->crit_related;
+        bda.shield_related = c.off->shield_related;
+        bda.mitigation_related = c.off->mitigation_related;
+        bda.repair = c.off->repair;
+        bda.armada = c.off->armada;
+        // Percentage fields
+        bda.oa_cargo_pct = c.off->oa_cargo_pct;
+        bda.oa_protected_cargo_pct = c.off->oa_protected_cargo_pct;
+        bda.oa_mining_speed_pct = c.off->oa_mining_speed_pct;
         result.push_back(std::move(bda));
     }
 
@@ -2739,6 +3506,14 @@ LoadoutResult CrewOptimizer::optimize_dock_loadout(
         switch (scenario) {
             case Scenario::PvP:
             case Scenario::Hybrid:
+                score += grade_band_bonus(6);
+                if (ship.ship_type == ShipType::Explorer) score += 90;
+                if (ship.ship_type == ShipType::Battleship) score += 70;
+                if (ship.ship_type == ShipType::Interceptor) score += 50;
+                if (is_pvp_ship) score += 100;
+                if (has_name("revenant") || has_name("cube")) score += 120;
+                if (is_mining_ship) score -= 200;  // mining ships bad for PvP
+                break;
             case Scenario::BaseCracker:
                 score += grade_band_bonus(6);
                 if (ship.ship_type == ShipType::Interceptor) score += 90;
@@ -2746,7 +3521,7 @@ LoadoutResult CrewOptimizer::optimize_dock_loadout(
                 if (ship.ship_type == ShipType::Explorer) score += 50;
                 if (is_pvp_ship) score += 100;
                 if (has_name("revenant") || has_name("cube")) score += 120;
-                if (is_mining_ship) score -= 200;  // mining ships bad for PvP
+                if (is_mining_ship) score -= 200;
                 break;
             case Scenario::Armada:
             case Scenario::MissionBoss:
