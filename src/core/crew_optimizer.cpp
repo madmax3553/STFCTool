@@ -127,6 +127,170 @@ MiningObjective scenario_mining_objective(Scenario s) {
 }
 
 // ---------------------------------------------------------------------------
+// Hostile type / objective string conversions
+// ---------------------------------------------------------------------------
+
+const char* hostile_type_str(HostileType t) {
+    switch (t) {
+        case HostileType::Generic:        return "generic";
+        case HostileType::Swarm:          return "swarm";
+        case HostileType::BorgProbe:      return "borg_probe";
+        case HostileType::Eclipse:        return "eclipse";
+        case HostileType::Gorn:           return "gorn";
+        case HostileType::Xindi:          return "xindi";
+        case HostileType::Silent:         return "silent";
+        case HostileType::Species8472:    return "species_8472";
+        case HostileType::Breen:          return "breen";
+        case HostileType::Hirogen:        return "hirogen";
+        case HostileType::TexasClass:     return "texas_class";
+        case HostileType::Monaveen:       return "monaveen";
+        case HostileType::MirrorUniverse: return "mirror_universe";
+        case HostileType::Freebooter:     return "freebooter";
+        case HostileType::Actian:         return "actian";
+        case HostileType::Assimilated:    return "assimilated";
+    }
+    return "generic";
+}
+
+HostileType hostile_type_from_str(const std::string& s) {
+    if (s == "swarm")           return HostileType::Swarm;
+    if (s == "borg_probe")      return HostileType::BorgProbe;
+    if (s == "eclipse")         return HostileType::Eclipse;
+    if (s == "gorn")            return HostileType::Gorn;
+    if (s == "xindi")           return HostileType::Xindi;
+    if (s == "silent")          return HostileType::Silent;
+    if (s == "species_8472")    return HostileType::Species8472;
+    if (s == "breen")           return HostileType::Breen;
+    if (s == "hirogen")         return HostileType::Hirogen;
+    if (s == "texas_class")     return HostileType::TexasClass;
+    if (s == "monaveen")        return HostileType::Monaveen;
+    if (s == "mirror_universe") return HostileType::MirrorUniverse;
+    if (s == "freebooter")      return HostileType::Freebooter;
+    if (s == "actian")          return HostileType::Actian;
+    if (s == "assimilated")     return HostileType::Assimilated;
+    return HostileType::Generic;
+}
+
+const char* hostile_type_label(HostileType t) {
+    switch (t) {
+        case HostileType::Generic:        return "Generic Hostiles";
+        case HostileType::Swarm:          return "Swarm";
+        case HostileType::BorgProbe:      return "Borg Probes (Vi'Dar)";
+        case HostileType::Eclipse:        return "Eclipse Hostiles";
+        case HostileType::Gorn:           return "Gorn (Isolytic Only)";
+        case HostileType::Xindi:          return "Xindi";
+        case HostileType::Silent:         return "Silent Enemies";
+        case HostileType::Species8472:    return "Species 8472 Bioships";
+        case HostileType::Breen:          return "Breen";
+        case HostileType::Hirogen:        return "Hirogen Elite";
+        case HostileType::TexasClass:     return "Texas Class";
+        case HostileType::Monaveen:       return "Monaveen";
+        case HostileType::MirrorUniverse: return "Mirror Universe";
+        case HostileType::Freebooter:     return "Freebooters";
+        case HostileType::Actian:         return "Actian (Mantis)";
+        case HostileType::Assimilated:    return "Assimilated Continuum";
+    }
+    return "Generic Hostiles";
+}
+
+const char* hostile_objective_str(HostileObjective o) {
+    switch (o) {
+        case HostileObjective::Balanced:   return "balanced";
+        case HostileObjective::PunchUp:    return "punch_up";
+        case HostileObjective::LootGrind:  return "loot_grind";
+        case HostileObjective::HullLife:   return "hull_life";
+        case HostileObjective::XPGrind:    return "xp_grind";
+        case HostileObjective::RepGrind:   return "rep_grind";
+        case HostileObjective::PartsGrind: return "parts_grind";
+        case HostileObjective::Speed:      return "speed";
+    }
+    return "balanced";
+}
+
+HostileObjective hostile_objective_from_str(const std::string& s) {
+    if (s == "punch_up")    return HostileObjective::PunchUp;
+    if (s == "loot_grind")  return HostileObjective::LootGrind;
+    if (s == "hull_life")   return HostileObjective::HullLife;
+    if (s == "xp_grind")    return HostileObjective::XPGrind;
+    if (s == "rep_grind")   return HostileObjective::RepGrind;
+    if (s == "parts_grind") return HostileObjective::PartsGrind;
+    if (s == "speed")       return HostileObjective::Speed;
+    return HostileObjective::Balanced;
+}
+
+const char* hostile_objective_label(HostileObjective o) {
+    switch (o) {
+        case HostileObjective::Balanced:   return "Balanced (Default)";
+        case HostileObjective::PunchUp:    return "Punch Up (Max Damage)";
+        case HostileObjective::LootGrind:  return "Loot Grind (Max Loot/Hull)";
+        case HostileObjective::HullLife:   return "Hull Life (Max Kills Before Repair)";
+        case HostileObjective::XPGrind:    return "XP Grind (Ship XP)";
+        case HostileObjective::RepGrind:   return "Rep Grind (Reputation)";
+        case HostileObjective::PartsGrind: return "Parts Grind (Ship Parts)";
+        case HostileObjective::Speed:      return "Speed (Fast Kills)";
+    }
+    return "Balanced (Default)";
+}
+
+// ---------------------------------------------------------------------------
+// Armada type / objective string conversions
+// ---------------------------------------------------------------------------
+
+const char* armada_type_str(ArmadaType t) {
+    switch (t) {
+        case ArmadaType::Normal:  return "normal";
+        case ArmadaType::Eclipse: return "eclipse";
+        case ArmadaType::Swarm:   return "swarm";
+        case ArmadaType::Borg:    return "borg";
+    }
+    return "normal";
+}
+
+ArmadaType armada_type_from_str(const std::string& s) {
+    if (s == "eclipse") return ArmadaType::Eclipse;
+    if (s == "swarm")   return ArmadaType::Swarm;
+    if (s == "borg")    return ArmadaType::Borg;
+    return ArmadaType::Normal;
+}
+
+const char* armada_type_label(ArmadaType t) {
+    switch (t) {
+        case ArmadaType::Normal:  return "Normal Armada";
+        case ArmadaType::Eclipse: return "Eclipse Armada";
+        case ArmadaType::Swarm:   return "Swarm Armada";
+        case ArmadaType::Borg:    return "Borg Armada";
+    }
+    return "Normal Armada";
+}
+
+const char* armada_objective_str(ArmadaObjective o) {
+    switch (o) {
+        case ArmadaObjective::Balanced: return "balanced";
+        case ArmadaObjective::MaxLoot:  return "max_loot";
+        case ArmadaObjective::MaxPower: return "max_power";
+        case ArmadaObjective::Support:  return "support";
+    }
+    return "balanced";
+}
+
+ArmadaObjective armada_objective_from_str(const std::string& s) {
+    if (s == "max_loot")  return ArmadaObjective::MaxLoot;
+    if (s == "max_power") return ArmadaObjective::MaxPower;
+    if (s == "support")   return ArmadaObjective::Support;
+    return ArmadaObjective::Balanced;
+}
+
+const char* armada_objective_label(ArmadaObjective o) {
+    switch (o) {
+        case ArmadaObjective::Balanced: return "Balanced (Default)";
+        case ArmadaObjective::MaxLoot:  return "Max Loot (Directive ROI)";
+        case ArmadaObjective::MaxPower: return "Max Power (Survivability + DPS)";
+        case ArmadaObjective::Support:  return "Support (States for Alliance)";
+    }
+    return "Balanced (Default)";
+}
+
+// ---------------------------------------------------------------------------
 // Ship type conversions
 // ---------------------------------------------------------------------------
 

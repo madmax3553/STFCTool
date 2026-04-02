@@ -68,6 +68,98 @@ const char* mining_objective_str(MiningObjective o);
 MiningResource scenario_mining_resource(Scenario s);
 MiningObjective scenario_mining_objective(Scenario s);
 
+// ---------------------------------------------------------------------------
+// Hostile sub-types — what kind of hostile are we fighting?
+// ---------------------------------------------------------------------------
+
+enum class HostileType {
+    Generic,      // General hostiles (no specific type)
+    Swarm,        // Swarm hostiles (Franklin-A, never use Chen)
+    BorgProbe,    // Borg probes (Vi'Dar, cargo + loot focus)
+    Eclipse,      // Eclipse hostiles
+    Gorn,         // Gorn (only affected by isolytic damage)
+    Xindi,        // Xindi (loot + isolytic)
+    Silent,       // Silent Enemies (crit damage reduction, burning interaction)
+    Species8472,  // Species 8472 Bioships (piercing focus)
+    Breen,        // Breen hostiles
+    Hirogen,      // Hirogen Elite hostiles
+    TexasClass,   // Texas Class
+    Monaveen,     // Monaveen
+    MirrorUniverse, // Mirror Universe
+    Freebooter,   // Freebooters (punch up crew)
+    Actian,       // Actian hostiles (mantis)
+    Assimilated,  // Assimilated Continuum
+};
+
+const char* hostile_type_str(HostileType t);
+HostileType hostile_type_from_str(const std::string& s);
+
+inline const std::vector<HostileType>& all_hostile_types() {
+    static const std::vector<HostileType> v = {
+        HostileType::Generic, HostileType::Swarm, HostileType::BorgProbe,
+        HostileType::Eclipse, HostileType::Gorn, HostileType::Xindi,
+        HostileType::Silent, HostileType::Species8472, HostileType::Breen,
+        HostileType::Hirogen, HostileType::TexasClass, HostileType::Monaveen,
+        HostileType::MirrorUniverse, HostileType::Freebooter, HostileType::Actian,
+        HostileType::Assimilated
+    };
+    return v;
+}
+
+// ---------------------------------------------------------------------------
+// Hostile objectives — what are we optimizing for?
+// ---------------------------------------------------------------------------
+
+enum class HostileObjective {
+    Balanced,     // Default: good mix of damage + survivability
+    PunchUp,      // Max damage to kill above your level
+    LootGrind,    // Maximize loot per hull
+    HullLife,     // Maximize kills before hull death (sustained grinding)
+    XPGrind,      // Ship XP efficiency
+    RepGrind,     // Reputation gain maximization
+    PartsGrind,   // Ship parts farming (within triangle)
+    Speed,        // Fast kills (wave defense, impulse speed)
+};
+
+const char* hostile_objective_str(HostileObjective o);
+HostileObjective hostile_objective_from_str(const std::string& s);
+
+// ---------------------------------------------------------------------------
+// Armada sub-types — what kind of armada are we running?
+// ---------------------------------------------------------------------------
+
+enum class ArmadaType {
+    Normal,       // Standard armadas
+    Eclipse,      // Eclipse armadas
+    Swarm,        // Swarm armadas
+    Borg,         // Borg armadas
+};
+
+const char* armada_type_str(ArmadaType t);
+ArmadaType armada_type_from_str(const std::string& s);
+
+inline const std::vector<ArmadaType>& all_armada_types() {
+    static const std::vector<ArmadaType> v = {
+        ArmadaType::Normal, ArmadaType::Eclipse,
+        ArmadaType::Swarm, ArmadaType::Borg
+    };
+    return v;
+}
+
+// ---------------------------------------------------------------------------
+// Armada objectives — what are we optimizing for?
+// ---------------------------------------------------------------------------
+
+enum class ArmadaObjective {
+    Balanced,     // Default: good mix of loot + power
+    MaxLoot,      // Maximize loot/directive ROI
+    MaxPower,     // Maximize survivability + damage output
+    Support,      // Apply states (breach/burning) for alliance benefit
+};
+
+const char* armada_objective_str(ArmadaObjective o);
+ArmadaObjective armada_objective_from_str(const std::string& s);
+
 const char* ship_type_str(ShipType s);
 ShipType ship_type_from_str(const std::string& s);
 
@@ -188,6 +280,45 @@ struct ClassifiedOfficer {
     bool non_armada_only = false;
     bool repair = false;
     bool apex = false;
+
+    // Hostile-type specificity tags (which hostile types this officer excels against)
+    bool hostile_swarm = false;        // Effective against swarm hostiles
+    bool hostile_borg = false;         // Effective against borg/probes
+    bool hostile_eclipse = false;      // Effective against eclipse hostiles
+    bool hostile_gorn = false;         // Effective against gorn (isolytic only)
+    bool hostile_xindi = false;        // Effective against xindi
+    bool hostile_silent = false;       // Effective against silent enemies
+    bool hostile_8472 = false;         // Effective against species 8472
+    bool hostile_breen = false;        // Effective against breen
+    bool hostile_hirogen = false;      // Effective against hirogen
+    bool hostile_texas = false;        // Effective against texas class
+    bool hostile_monaveen = false;     // Effective against monaveen
+    bool hostile_mirror = false;       // Effective in mirror universe
+    bool hostile_freebooter = false;   // Effective against freebooters
+    bool hostile_actian = false;       // Effective against actian/mantis
+    bool hostile_assimilated = false;  // Effective against assimilated continuum
+
+    // Armada-type specificity tags
+    bool armada_eclipse = false;       // Effective in eclipse armadas
+    bool armada_swarm = false;         // Effective in swarm armadas
+    bool armada_borg = false;          // Effective in borg armadas
+
+    // Hostile objective affinity tags
+    bool loot_multiplier = false;      // Specifically increases loot (not just generic loot tag)
+    bool rep_boost = false;            // Increases reputation gain
+    bool xp_boost = false;            // Increases ship XP
+    bool impulse_speed = false;        // Increases impulse/warp for speed runs
+    bool hull_sustain = false;         // Keeps ship alive longer (repair, shield regen, mitigation)
+    bool crit_damage_reduce = false;   // Reduces critical damage taken (key vs Silent Enemies)
+    bool extra_shots = false;          // Increases number of weapon shots
+
+    // Weapon-type dependency
+    bool needs_kinetic = false;        // Officer ability requires kinetic weapon hit
+    bool needs_energy = false;         // Officer ability requires energy weapon hit
+
+    // StewieDoo context (from Officer Tool spreadsheet)
+    std::string stewiedoo_notes;       // Human-written context about this officer
+    double stewiedoo_score = 0.0;      // Overall 1-5 rating from Officer Tool
 
     // Mining subcategory tags
     bool mining_crystal = false;
