@@ -26,6 +26,7 @@
 #include "util/csv_import.h"
 #include "core/crew_optimizer.h"
 #include "core/planner.h"
+#include "core/ai_crew_engine.h"
 
 using namespace ftxui;
 namespace fs = std::filesystem;
@@ -848,6 +849,61 @@ struct AppState {
     int selected_crew_bda = 0;     // BDA selection within crew tab
     bool crew_loaded = false;
 
+    // AI Advisor state
+    AiCrewEngine ai_engine;
+    AiCrewResult ai_crew_result;
+    ProgressionAdvice ai_progression_result;
+    MetaAnalysis ai_meta_result;
+    LlmResponse ai_ask_result;
+    std::string ai_stream_text;        // streaming response text
+    std::atomic<bool> ai_running{false};
+    int ai_mode = 0;                   // 0=groups, 1=crew(legacy), 2=progression, 3=meta, 4=ask
+    std::string ai_question;           // free-form question text
+    bool ai_question_active = false;   // true = typing a question
+    int ai_selected_rec = 0;           // selected recommendation index (crew mode)
+    int ai_selected_inv = 0;           // selected investment index (progression mode)
+    int ai_selected_meta = 0;          // selected meta crew index
+    bool ai_initialized = false;
+    bool ai_initializing = false;   // true while background init is running
+
+    // Group-based query pipeline state (NEW)
+    GroupQueryPipelineResult ai_group_result;   // Results from group-based pipeline
+    int ai_selected_group = 0;                  // Selected group in left panel
+    int ai_selected_group_crew = 0;             // Selected crew within selected group
+    std::string ai_group_progress;              // "Querying PvP Combat (3/8)..."
+    std::atomic<bool> ai_cancel_groups{false};  // Cancel flag for group pipeline
+
+    // META cache refresh state
+    std::atomic<bool> ai_meta_refreshing{false};  // true while Gemini META refresh is running
+    std::string ai_meta_progress;                  // "Refreshing PvP Combat (2/8)..."
+
+    void ai_init() {
+        std::string err = ai_engine.initialize();
+        ai_initialized = true;
+        ai_initializing = false;
+        if (!err.empty()) {
+            set_status("AI: " + err);
+        } else {
+            auto s = ai_engine.status();
+            set_status("AI: " + s.provider + "/" + s.model +
+                       (s.is_fallback ? " (fallback)" : "") +
+                       (s.has_search ? " [search]" : ""));
+        }
+    }
+
+    // Trigger AI initialization in background thread (lazy, non-blocking).
+    // Safe to call multiple times — only the first call does anything.
+    void ai_init_lazy() {
+        if (ai_initialized || ai_initializing) return;
+        ai_initializing = true;
+        set_status("AI: Initializing...");
+        std::thread([this]() {
+            ai_init();
+            auto screen = ScreenInteractive::Active();
+            if (screen) screen->PostEvent(Event::Custom);
+        }).detach();
+    }
+
     // Loadout state
     std::vector<DockConfig> dock_configs;
     LoadoutResult loadout_result;
@@ -912,6 +968,10 @@ struct AppState {
     }
 
     AppState() : api_client("data/game_data"), ingress_server("data/player_data", 8270) {
+        // On startup, only load from cache — don't make network calls.
+        // User can press [R] to refresh from api.spocks.club.
+        api_client.set_cache_only(true);
+
         // Auto-load cached game data if available
         if (fs::exists("data/game_data/officers.json")) {
             api_client.fetch_all(game_data);
@@ -944,6 +1004,10 @@ struct AppState {
         }
 
         rebuild_optimizer_from_current_data();
+
+        // AI advisor initialization is deferred to first AI tab access
+        // to avoid SSL/network calls during startup that can crash.
+        // See ai_init() — called lazily from render_ai_advisor() and AI event handler.
 
         // Initialize dock configs and try loading saved loadout
         init_dock_configs();
@@ -1290,7 +1354,7 @@ static Element render_overview(AppState& state) {
 
     auto crew_status = state.crew_loaded
         ? hbox({text(" ROSTER: "), text(std::to_string(state.roster.size()) + " officers loaded") | color(Color::Green)})
-        : hbox({text(" ROSTER: "), text("No roster.csv found") | color(Color::Yellow)});
+        : hbox({text(" ROSTER: "), text("No roster — sync from Sync tab") | color(Color::Yellow)});
 
     return vbox({
         text("STFC Tool - Dashboard") | bold | center,
@@ -1673,8 +1737,8 @@ static Element render_crew_optimizer(AppState& state) {
             text("Crew Optimizer") | bold | center,
             separator(),
             text("No roster loaded.") | center,
-            text("Place roster.csv in the project root and restart.") | center | dim,
-            text("Export from the STFC spreadsheet to CSV format.") | center | dim,
+            text("Use the Sync tab to sync your account from the community mod.") | center | dim,
+            text("Or place roster.csv in the project root as a fallback.") | center | dim,
         });
     }
 
@@ -1955,7 +2019,7 @@ static Element render_loadout(AppState& state) {
             text("7-Dock Loadout Optimizer") | bold | center,
             separator(),
             text("No roster loaded.") | center,
-            text("Place roster.csv in the project root and restart.") | center | dim,
+            text("Use the Sync tab to sync your account from the community mod.") | center | dim,
         });
     }
 
@@ -3363,7 +3427,7 @@ static Element render_help() {
                 separatorEmpty(),
                 text("Data:") | bold | color(Color::Cyan),
                 text("  Cached in data/game_data/"),
-                text("  Roster from roster.csv"),
+                text("  Roster from community mod sync (Sync tab)"),
                 text("  Plans in data/player_data/"),
             }) | flex,
         }),
@@ -3374,6 +3438,598 @@ static Element render_help() {
 
 // ---------------------------------------------------------------------------
 // Status bar
+// ---------------------------------------------------------------------------
+// View: AI Advisor
+// ---------------------------------------------------------------------------
+
+// Helper: wrap text into lines of at most `width` characters
+static Elements wrap_text(const std::string& s, int width, Decorator dec = nothing) {
+    Elements result;
+    std::istringstream stream(s);
+    std::string line;
+    while (std::getline(stream, line)) {
+        while ((int)line.size() > width) {
+            size_t cut = line.rfind(' ', width);
+            if (cut == std::string::npos || cut == 0) cut = width;
+            result.push_back(text(line.substr(0, cut)) | dec);
+            line = line.substr(cut + (line[cut] == ' ' ? 1 : 0));
+        }
+        result.push_back(text(line) | dec);
+    }
+    return result;
+}
+
+static Element render_ai_advisor(AppState& state) {
+    // Lazy initialization: first time the AI tab is rendered, init the engine
+    // in a background thread. This avoids SSL/network calls during startup.
+    if (!state.ai_initialized && !state.ai_initializing) {
+        state.ai_init_lazy();
+    }
+
+    // Show initializing state
+    if (state.ai_initializing) {
+        return vbox({
+            text("AI Advisor") | bold | center,
+            separator(),
+            text("  Initializing AI engine...") | dim | center,
+            filler(),
+        }) | flex;
+    }
+
+    static const char* mode_names[] = {"Groups", "Crew Recs", "Progression", "META Analysis", "Ask"};
+    int safe_mode = std::clamp(state.ai_mode, 0, 4);
+
+    // --- AI Status bar ---
+    auto ai_stat = state.ai_engine.status();
+    Color status_color = ai_stat.available ? Color::Green : Color::Red;
+    std::string status_text_str = ai_stat.available
+        ? (ai_stat.provider + "/" + ai_stat.model +
+           (ai_stat.is_fallback ? " (fallback)" : "") +
+           (ai_stat.has_search ? " [search]" : "") +
+           (ai_stat.has_streaming ? " [stream]" : ""))
+        : ("Unavailable" + (ai_stat.error.empty() ? "" : ": " + ai_stat.error));
+
+    auto header = vbox({
+        text("AI Advisor") | bold | center,
+        separator(),
+        hbox({
+            text("  Status: "),
+            text(status_text_str) | bold | color(status_color),
+            filler(),
+            text("  Tunnel: "),
+            text(ai_stat.tunnel_status.empty() ? "N/A" : ai_stat.tunnel_status) | dim,
+        }),
+        hbox({
+            text("  Mode: "),
+            text(mode_names[safe_mode]) | bold | color(Color::Cyan),
+            text("  [</>] change") | dim,
+            filler(),
+            text("  META: "),
+            text(state.ai_engine.meta_cache().age_str()) | dim | color(state.ai_engine.meta_cache().empty() ? Color::Yellow : Color::Green),
+            text("  [M] Refresh") | dim,
+        }),
+        hbox({
+            filler(),
+            text(state.ai_running ? "  [Running...]" : "  [Enter] Run") | dim,
+            text("  [I] Re-init") | dim,
+        }),
+    });
+
+    // --- Loading state ---
+    if (state.ai_running || state.ai_meta_refreshing) {
+        Elements stream_lines;
+        std::string stream_copy;
+        {
+            std::lock_guard<std::mutex> lk(state.status_mutex);
+            stream_copy = state.ai_stream_text;
+        }
+
+        if (state.ai_meta_refreshing) {
+            // META cache refresh in progress
+            stream_lines.push_back(text("Refreshing META cache from Gemini...") | bold | center | color(Color::Cyan));
+            if (!state.ai_meta_progress.empty()) {
+                stream_lines.push_back(text(state.ai_meta_progress) | center);
+            }
+            stream_lines.push_back(text("(Press Escape to cancel)") | dim | center);
+            if (!stream_copy.empty()) {
+                stream_lines.push_back(text("") );
+                std::string preview = stream_copy.substr(0, std::min(stream_copy.size(), size_t(500)));
+                if (stream_copy.size() > 500) preview += "...";
+                auto plines = wrap_text(preview, 90, dim);
+                for (auto& l : plines) stream_lines.push_back(std::move(l));
+            }
+        } else if (stream_copy.empty()) {
+            if (safe_mode == 0 && !state.ai_group_progress.empty()) {
+                // Groups mode — show per-group progress
+                stream_lines.push_back(text(state.ai_group_progress) | bold | center);
+                stream_lines.push_back(text("(Press Escape to cancel)") | dim | center);
+            } else {
+                stream_lines.push_back(text("Waiting for AI response...") | dim | center);
+                stream_lines.push_back(text("(First query may take 1-3 minutes for model cold-start)") | dim | center);
+            }
+        } else if (safe_mode == 4) {
+            // "Ask" mode — show raw streaming text (human-readable)
+            auto lines = wrap_text(stream_copy, 90);
+            for (auto& l : lines) stream_lines.push_back(std::move(l));
+        } else {
+            // Structured modes (crew/progression/meta) — show progress, not raw JSON
+            size_t token_est = 0;
+            for (char c : stream_copy) if (c == ' ' || c == '\n' || c == '{' || c == '"') token_est++;
+            stream_lines.push_back(text("AI is generating response...") | bold | center);
+            stream_lines.push_back(text("") );
+            stream_lines.push_back(hbox({
+                filler(),
+                text("Received ~" + std::to_string(token_est) + " tokens (" +
+                     std::to_string(stream_copy.size()) + " chars)") | dim,
+                filler(),
+            }));
+            stream_lines.push_back(text("") );
+            // Show a small preview of the beginning
+            std::string preview = stream_copy.substr(0, std::min(stream_copy.size(), size_t(200)));
+            if (stream_copy.size() > 200) preview += "...";
+            stream_lines.push_back(text("Preview:") | dim);
+            auto plines = wrap_text(preview, 90, dim);
+            for (auto& l : plines) stream_lines.push_back(std::move(l));
+        }
+        return vbox({
+            header,
+            separator(),
+            vbox(stream_lines) | flex | vscroll_indicator | yframe,
+        });
+    }
+
+    // --- Content by mode ---
+    Element content;
+
+    if (safe_mode == 0) {
+        // Groups mode — per-group AI crew recommendations
+        if (!state.ai_group_result.ok() && state.ai_group_result.group_results.empty()) {
+            if (!state.ai_group_result.error.empty()) {
+                content = vbox({
+                    text("Error: " + state.ai_group_result.error) | color(Color::Red),
+                    text("Press [Enter] to retry.") | dim,
+                });
+            } else {
+                content = vbox({
+                    text("Press [Enter] to run group-based AI crew analysis.") | center | dim,
+                    text("") ,
+                    text("Officers are split into focused groups (PvP, PvE, Base, Armada, etc.)") | center | dim,
+                    text("and each group is queried separately for better results.") | center | dim,
+                    text("") ,
+                    text("Rate results with [+] Good / [-] Bad to improve future queries.") | center | dim,
+                });
+            }
+        } else {
+            // Left panel: group list
+            Elements left_rows;
+            for (size_t i = 0; i < state.ai_group_result.group_results.size(); ++i) {
+                const auto& gr = state.ai_group_result.group_results[i];
+                bool sel = ((int)i == state.ai_selected_group);
+
+                // Rating indicator
+                std::string rating_str;
+                Color rating_color = Color::GrayDark;
+                if (gr.rating == AiRating::Good) { rating_str = " [+]"; rating_color = Color::Green; }
+                else if (gr.rating == AiRating::Bad) { rating_str = " [-]"; rating_color = Color::Red; }
+
+                // Status indicator
+                Color status_color = gr.ok() ? Color::Green : (gr.error.empty() ? Color::GrayLight : Color::Red);
+                std::string crew_count_str = gr.ok() ? std::to_string(gr.crews.size()) + " crews" :
+                    (!gr.error.empty() ? "error" : "pending");
+
+                auto row = hbox({
+                    text(sel ? "> " : "  "),
+                    text(gr.group_name) | bold | color(Color::Cyan),
+                    text(" (" + std::to_string(gr.officer_count) + " officers)") | dim,
+                    filler(),
+                    text(crew_count_str) | color(status_color),
+                    text(rating_str) | bold | color(rating_color),
+                });
+                if (sel) row = row | inverted | focus;
+                left_rows.push_back(row);
+                if (i < state.ai_group_result.group_results.size() - 1)
+                    left_rows.push_back(separatorLight());
+            }
+
+            // Right panel: selected group's crew details
+            Element detail = text("");
+            int sgi = state.ai_selected_group;
+            if (sgi >= 0 && sgi < (int)state.ai_group_result.group_results.size()) {
+                const auto& gr = state.ai_group_result.group_results[sgi];
+                Elements lines;
+
+                if (gr.ok()) {
+                    lines.push_back(text(gr.group_name + " Crews") | bold);
+                    lines.push_back(separator());
+
+                    for (size_t ci = 0; ci < gr.crews.size(); ++ci) {
+                        const auto& crew = gr.crews[ci];
+                        bool crew_sel = ((int)ci == state.ai_selected_group_crew);
+
+                        lines.push_back(hbox({
+                            text(crew_sel ? "> " : "  "),
+                            text("#" + std::to_string(ci + 1)) | bold |
+                                color(ci == 0 ? Color(Color::Gold1) : Color(Color::GrayLight)),
+                            text("  Captain: "),
+                            text(crew.captain) | bold | color(Color::Yellow),
+                            filler(),
+                            text("Conf: " + std::to_string((int)(crew.confidence * 100)) + "%") | dim,
+                        }));
+                        lines.push_back(hbox({
+                            text("      Bridge: "),
+                            text(crew.bridge.size() > 0 ? crew.bridge[0] : "?") | color(Color::Cyan),
+                            text(" + "),
+                            text(crew.bridge.size() > 1 ? crew.bridge[1] : "?") | color(Color::Cyan),
+                        }));
+
+                        // Show reasoning for selected crew
+                        if (crew_sel && !crew.reasoning.empty()) {
+                            lines.push_back(separator());
+                            auto wrapped = wrap_text(crew.reasoning, 48);
+                            for (auto& w : wrapped) lines.push_back(std::move(w));
+                        }
+
+                        if (!crew.below_decks.empty() && crew_sel) {
+                            lines.push_back(text("    Below Decks:") | bold | color(Color::Magenta));
+                            for (const auto& bd : crew.below_decks) {
+                                lines.push_back(text("      " + bd) | color(Color::Cyan));
+                            }
+                        }
+
+                        if (ci < gr.crews.size() - 1)
+                            lines.push_back(separatorLight());
+                    }
+                } else if (!gr.error.empty()) {
+                    lines.push_back(text(gr.group_name) | bold);
+                    lines.push_back(separator());
+                    lines.push_back(text("Error: " + gr.error) | color(Color::Red));
+                } else {
+                    lines.push_back(text(gr.group_name) | bold);
+                    lines.push_back(separator());
+                    lines.push_back(text("No results yet.") | dim);
+                }
+
+                detail = vbox(lines);
+            }
+
+            // Pipeline progress footer
+            Elements footer;
+            if (state.ai_group_result.groups_total > 0) {
+                footer.push_back(hbox({
+                    text("  Groups: " + std::to_string(state.ai_group_result.groups_completed) +
+                         "/" + std::to_string(state.ai_group_result.groups_total) +
+                         " queried, " + std::to_string(state.ai_group_result.groups_succeeded) + " OK") | dim,
+                    filler(),
+                    text(!state.ai_group_result.model_used.empty() ?
+                         "Model: " + state.ai_group_result.model_used : "") | dim,
+                }));
+            }
+            footer.push_back(hbox({
+                text("  [Up/Down] groups  [Left/Right] crews  [+] Good  [-] Bad  [Enter] Re-run") | dim,
+            }));
+
+            content = vbox({
+                hbox({
+                    vbox(left_rows) | vscroll_indicator | yframe | size(WIDTH, EQUAL, 45),
+                    separator(),
+                    detail | flex | vscroll_indicator | yframe,
+                }) | flex,
+                separator(),
+                vbox(footer),
+            });
+        }
+    } else if (safe_mode == 1) {
+        // Crew Recommendations
+        if (!state.ai_crew_result.ok()) {
+            if (!state.ai_crew_result.error.empty()) {
+                content = vbox({
+                    text("Error: " + state.ai_crew_result.error) | color(Color::Red),
+                    text("Press [Enter] to retry.") | dim,
+                });
+            } else {
+                content = text("Press [Enter] to get AI crew recommendations for the current scenario.") | center | dim;
+            }
+        } else {
+            Elements left_rows;
+            for (size_t i = 0; i < state.ai_crew_result.recommendations.size(); ++i) {
+                const auto& rec = state.ai_crew_result.recommendations[i];
+                bool sel = ((int)i == state.ai_selected_rec);
+
+                auto row = vbox({
+                    hbox({
+                        text("#" + std::to_string(i + 1)) | bold |
+                            color(i == 0 ? Color(Color::Gold1) : Color(Color::GrayLight)),
+                        text("  Captain: "),
+                        text(rec.captain) | bold | color(Color::Yellow),
+                        filler(),
+                        text("Conf: " + std::to_string((int)(rec.confidence * 100)) + "%") | dim,
+                    }),
+                    hbox({
+                        text("    Bridge: "),
+                        text(rec.bridge.size() > 0 ? rec.bridge[0] : "?") | color(Color::Cyan),
+                        text(" + "),
+                        text(rec.bridge.size() > 1 ? rec.bridge[1] : "?") | color(Color::Cyan),
+                    }),
+                });
+                if (sel) row = row | inverted | focus;
+                left_rows.push_back(row);
+                if (i < state.ai_crew_result.recommendations.size() - 1)
+                    left_rows.push_back(separatorLight());
+            }
+
+            // Detail for selected
+            Element detail = text("");
+            int sri = state.ai_selected_rec;
+            if (sri >= 0 && sri < (int)state.ai_crew_result.recommendations.size()) {
+                const auto& rec = state.ai_crew_result.recommendations[sri];
+                Elements lines;
+                lines.push_back(text("AI Reasoning") | bold);
+                lines.push_back(separator());
+
+                auto wrapped = wrap_text(rec.reasoning, 50);
+                for (auto& w : wrapped) lines.push_back(std::move(w));
+
+                if (!rec.ship_advice.empty()) {
+                    lines.push_back(separator());
+                    lines.push_back(hbox({text("Ship: ") | bold, text(rec.ship_advice) | color(Color::Yellow)}));
+                }
+
+                if (!rec.below_decks.empty()) {
+                    lines.push_back(separator());
+                    lines.push_back(text("Below Decks:") | bold | color(Color::Magenta));
+                    for (const auto& bd : rec.below_decks) {
+                        lines.push_back(text("  " + bd) | color(Color::Cyan));
+                    }
+                }
+
+                if (!rec.warnings.empty()) {
+                    lines.push_back(separator());
+                    lines.push_back(text("Warnings:") | bold | color(Color::Red));
+                    for (const auto& w : rec.warnings) {
+                        auto wl = wrap_text("  " + w, 50, color(Color::Red) | dim);
+                        for (auto& l : wl) lines.push_back(std::move(l));
+                    }
+                }
+
+                detail = vbox(lines);
+            }
+
+            content = hbox({
+                vbox(left_rows) | vscroll_indicator | yframe | flex,
+                separator(),
+                detail | size(WIDTH, EQUAL, 55) | vscroll_indicator | yframe,
+            });
+
+            // Show model info
+            Elements footer;
+            if (!state.ai_crew_result.model_used.empty())
+                footer.push_back(text("  Model: " + state.ai_crew_result.model_used) | dim);
+            if (state.ai_crew_result.search_grounded)
+                footer.push_back(text("  [Web Search Grounded]") | color(Color::Green) | dim);
+            if (!footer.empty()) {
+                content = vbox({content | flex, separator(), hbox(footer)});
+            }
+        }
+    } else if (safe_mode == 2) {
+        // Progression Advice
+        if (!state.ai_progression_result.ok()) {
+            if (!state.ai_progression_result.error.empty()) {
+                content = vbox({
+                    text("Error: " + state.ai_progression_result.error) | color(Color::Red),
+                    text("Press [Enter] to retry.") | dim,
+                });
+            } else {
+                content = text("Press [Enter] to get AI progression advice.") | center | dim;
+            }
+        } else {
+            Elements left_rows;
+            for (size_t i = 0; i < state.ai_progression_result.investments.size(); ++i) {
+                const auto& inv = state.ai_progression_result.investments[i];
+                bool sel = ((int)i == state.ai_selected_inv);
+
+                Color prio_color = inv.priority <= 1 ? Color::Red
+                    : (inv.priority <= 3 ? Color::Yellow : Color::GrayLight);
+
+                auto row = vbox({
+                    hbox({
+                        text("P" + std::to_string(inv.priority)) | bold | color(prio_color),
+                        text("  [" + inv.category + "] ") | dim,
+                        text(inv.target) | bold | color(Color::Cyan),
+                    }),
+                    hbox({
+                        text("    " + inv.action) | dim,
+                    }),
+                });
+                if (sel) row = row | inverted | focus;
+                left_rows.push_back(row);
+                if (i < state.ai_progression_result.investments.size() - 1)
+                    left_rows.push_back(separatorLight());
+            }
+
+            // Detail for selected
+            Element detail = text("");
+            int sii = state.ai_selected_inv;
+            if (sii >= 0 && sii < (int)state.ai_progression_result.investments.size()) {
+                const auto& inv = state.ai_progression_result.investments[sii];
+                Elements lines;
+                lines.push_back(text("Investment Detail") | bold);
+                lines.push_back(separator());
+                lines.push_back(hbox({text("Category: ") | bold, text(inv.category)}));
+                lines.push_back(hbox({text("Target:   ") | bold, text(inv.target) | color(Color::Cyan)}));
+                lines.push_back(hbox({text("Action:   ") | bold, text(inv.action)}));
+                lines.push_back(separator());
+                lines.push_back(text("Reason:") | bold);
+                auto wrapped = wrap_text(inv.reason, 50);
+                for (auto& w : wrapped) lines.push_back(std::move(w));
+                detail = vbox(lines);
+            }
+
+            // Summary
+            Elements summary_lines;
+            if (!state.ai_progression_result.summary.empty()) {
+                summary_lines.push_back(separator());
+                summary_lines.push_back(text("Summary:") | bold);
+                auto wrapped = wrap_text(state.ai_progression_result.summary, 90, dim);
+                for (auto& w : wrapped) summary_lines.push_back(std::move(w));
+            }
+
+            content = vbox({
+                hbox({
+                    vbox(left_rows) | vscroll_indicator | yframe | flex,
+                    separator(),
+                    detail | size(WIDTH, EQUAL, 55) | vscroll_indicator | yframe,
+                }) | flex,
+                vbox(summary_lines),
+            });
+        }
+    } else if (safe_mode == 3) {
+        // META Analysis
+        if (!state.ai_meta_result.ok()) {
+            if (!state.ai_meta_result.error.empty()) {
+                content = vbox({
+                    text("Error: " + state.ai_meta_result.error) | color(Color::Red),
+                    text("Press [Enter] to retry.") | dim,
+                });
+            } else {
+                content = text("Press [Enter] to analyze the current META for your scenario.") | center | dim;
+            }
+        } else {
+            Elements left_rows;
+            for (size_t i = 0; i < state.ai_meta_result.top_crews.size(); ++i) {
+                const auto& mc = state.ai_meta_result.top_crews[i];
+                bool sel = ((int)i == state.ai_selected_meta);
+
+                // Readiness indicator based on player_has vs missing
+                std::string readiness;
+                Color readiness_color = Color::GrayLight;
+                if (!mc.player_has.empty() || !mc.missing.empty()) {
+                    int total = (int)mc.player_has.size() + (int)mc.missing.size();
+                    int owned = (int)mc.player_has.size();
+                    readiness = " [" + std::to_string(owned) + "/" + std::to_string(total) + "]";
+                    if (mc.missing.empty())
+                        readiness_color = Color::Green;
+                    else if (owned >= total / 2)
+                        readiness_color = Color::Yellow;
+                    else
+                        readiness_color = Color::RedLight;
+                }
+
+                auto row = vbox({
+                    hbox({
+                        text("#" + std::to_string(i + 1)) | bold |
+                            color(i == 0 ? Color(Color::Gold1) : Color(Color::GrayLight)),
+                        text("  ") ,
+                        text(mc.captain) | bold | color(Color::Yellow),
+                        text("  for "),
+                        text(mc.scenario) | color(Color::Cyan),
+                        text(readiness) | color(readiness_color),
+                    }),
+                    hbox({
+                        text("    Bridge: "),
+                        text(mc.bridge.size() > 0 ? mc.bridge[0] : "?") | color(Color::Cyan),
+                        text(" + "),
+                        text(mc.bridge.size() > 1 ? mc.bridge[1] : "?") | color(Color::Cyan),
+                    }),
+                });
+                if (sel) row = row | inverted | focus;
+                left_rows.push_back(row);
+                if (i < state.ai_meta_result.top_crews.size() - 1)
+                    left_rows.push_back(separatorLight());
+            }
+
+            // Detail for selected
+            Element detail = text("");
+            int smi = state.ai_selected_meta;
+            if (smi >= 0 && smi < (int)state.ai_meta_result.top_crews.size()) {
+                const auto& mc = state.ai_meta_result.top_crews[smi];
+                Elements lines;
+                lines.push_back(text("META Crew Detail") | bold);
+                lines.push_back(separator());
+
+                // Show player ownership status
+                if (!mc.player_has.empty()) {
+                    lines.push_back(text("You have:") | bold | color(Color::Green));
+                    for (const auto& name : mc.player_has)
+                        lines.push_back(text("  + " + name) | color(Color::Green));
+                }
+                if (!mc.missing.empty()) {
+                    lines.push_back(text("Missing:") | bold | color(Color::RedLight));
+                    for (const auto& name : mc.missing)
+                        lines.push_back(text("  - " + name) | color(Color::RedLight));
+                }
+                if (!mc.substitutes.empty()) {
+                    lines.push_back(text("Substitutes:") | bold | color(Color::Yellow));
+                    for (const auto& [miss, sub] : mc.substitutes)
+                        lines.push_back(text("  " + miss + " -> " + sub) | color(Color::Yellow));
+                }
+                if (!mc.player_has.empty() || !mc.missing.empty())
+                    lines.push_back(separator());
+
+                auto wrapped = wrap_text(mc.explanation, 50);
+                for (auto& w : wrapped) lines.push_back(std::move(w));
+                detail = vbox(lines);
+            }
+
+            // META summary + sources
+            Elements summary_lines;
+            if (!state.ai_meta_result.meta_summary.empty()) {
+                summary_lines.push_back(separator());
+                summary_lines.push_back(text("META Summary:") | bold);
+                auto wrapped = wrap_text(state.ai_meta_result.meta_summary, 90, dim);
+                for (auto& w : wrapped) summary_lines.push_back(std::move(w));
+            }
+            if (!state.ai_meta_result.sources.empty()) {
+                summary_lines.push_back(separator());
+                summary_lines.push_back(text("Sources:") | bold | dim);
+                for (const auto& src : state.ai_meta_result.sources) {
+                    summary_lines.push_back(text("  " + src) | dim | color(Color::Blue));
+                }
+            }
+
+            content = vbox({
+                hbox({
+                    vbox(left_rows) | vscroll_indicator | yframe | flex,
+                    separator(),
+                    detail | size(WIDTH, EQUAL, 55) | vscroll_indicator | yframe,
+                }) | flex,
+                vbox(summary_lines),
+            });
+        }
+    } else if (safe_mode == 4) {
+        // Ask mode (free-form question)
+        Elements ask_lines;
+        ask_lines.push_back(hbox({
+            text("  Question: "),
+            text(state.ai_question.empty() ? "(type to enter question)" : state.ai_question)
+                | (state.ai_question_active ? (bold | color(Color::White)) : dim),
+            text(state.ai_question_active ? "_" : "") | blink,
+        }));
+        ask_lines.push_back(text("  [A] Start typing  [Enter] Ask  [Esc] Cancel input") | dim);
+        ask_lines.push_back(separator());
+
+        if (!state.ai_ask_result.content.empty()) {
+            auto wrapped = wrap_text(state.ai_ask_result.content, 90);
+            for (auto& w : wrapped) ask_lines.push_back(std::move(w));
+            if (!state.ai_ask_result.model_used.empty()) {
+                ask_lines.push_back(separator());
+                ask_lines.push_back(text("  Model: " + state.ai_ask_result.model_used) | dim);
+            }
+        } else if (!state.ai_ask_result.error.empty()) {
+            ask_lines.push_back(text("Error: " + state.ai_ask_result.error) | color(Color::Red));
+        } else {
+            ask_lines.push_back(text("Ask any STFC question with your account context.") | center | dim);
+        }
+
+        content = vbox(ask_lines);
+    }
+
+    return vbox({
+        header,
+        separator(),
+        content | flex | vscroll_indicator | yframe,
+    });
+}
+
 // ---------------------------------------------------------------------------
 
 static Element render_status_bar(AppState& state) {
@@ -3407,6 +4063,7 @@ int main() {
         "Officers",
         "Ships",
         "Sync",
+        "AI",
     };
 
     int selected_tab = 0;
@@ -3447,6 +4104,7 @@ int main() {
             case 5: content = render_officers(*state); break;
             case 6: content = render_ships(*state); break;
             case 7: content = render_sync(*state); break;
+            case 8: content = render_ai_advisor(*state); break;
             default: content = text("Unknown tab");
         }
 
@@ -3509,6 +4167,8 @@ int main() {
                 state->loading = true;
                 state->set_status("Fetching game data from api.spocks.club...");
                 std::thread([state]() {
+                    state->api_client.set_cache_only(false);
+                    state->api_client.set_force_refresh(true);
                     state->api_client.set_progress_callback(
                         [state](const std::string& step, int, int) {
                             state->set_status("Loading " + step + "...");
@@ -3748,6 +4408,358 @@ int main() {
                 if (max_bda > 0) {
                     state->selected_crew_bda = (state->selected_crew_bda + 1) % max_bda;
                 }
+                return true;
+            }
+        }
+
+        // === AI Advisor tab events ===
+        if (selected_tab == 8) {
+            // Text input mode for Ask
+            if (state->ai_question_active) {
+                if (event == Event::Escape) {
+                    state->ai_question_active = false;
+                    return true;
+                }
+                if (event == Event::Return) {
+                    state->ai_question_active = false;
+                    // Fall through to run the query below
+                } else if (event == Event::Backspace) {
+                    if (!state->ai_question.empty()) state->ai_question.pop_back();
+                    return true;
+                } else if (event.is_character()) {
+                    state->ai_question += event.character();
+                    return true;
+                }
+                // If we didn't return, it was Enter — fall through
+            }
+
+            // Mode cycling
+            if (event == Event::Character('<') || event == Event::Character(',')) {
+                state->ai_mode = (state->ai_mode + 4) % 5;  // wrap backwards (5 modes)
+                return true;
+            }
+            if (event == Event::Character('>') || event == Event::Character('.')) {
+                state->ai_mode = (state->ai_mode + 1) % 5;
+                return true;
+            }
+
+            // Cancel running group pipeline
+            if (event == Event::Escape && state->ai_running && state->ai_mode == 0) {
+                state->ai_cancel_groups = true;
+                state->set_status("Cancelling group pipeline...");
+                return true;
+            }
+
+            // Rating keys (Groups mode only)
+            if (state->ai_mode == 0 && !state->ai_running) {
+                if (event == Event::Character('+') || event == Event::Character('=') ||
+                    event == Event::Character('g') || event == Event::Character('G')) {
+                    int sgi = state->ai_selected_group;
+                    if (sgi >= 0 && sgi < (int)state->ai_group_result.group_results.size()) {
+                        auto& gr = state->ai_group_result.group_results[sgi];
+                        if (!gr.history_id.empty()) {
+                            gr.rating = AiRating::Good;
+                            state->ai_engine.rate_result(gr.history_id, AiRating::Good);
+                            state->set_status("Rated " + gr.group_name + " as Good [+]");
+                        }
+                    }
+                    return true;
+                }
+                if (event == Event::Character('-') || event == Event::Character('_') ||
+                    event == Event::Character('b') || event == Event::Character('B')) {
+                    int sgi = state->ai_selected_group;
+                    if (sgi >= 0 && sgi < (int)state->ai_group_result.group_results.size()) {
+                        auto& gr = state->ai_group_result.group_results[sgi];
+                        if (!gr.history_id.empty()) {
+                            gr.rating = AiRating::Bad;
+                            state->ai_engine.rate_result(gr.history_id, AiRating::Bad);
+                            state->set_status("Rated " + gr.group_name + " as Bad [-]");
+                        }
+                    }
+                    return true;
+                }
+            }
+
+            // Navigate results
+            if (event == Event::ArrowDown) {
+                if (state->ai_mode == 0) {
+                    int max = (int)state->ai_group_result.group_results.size() - 1;
+                    if (state->ai_selected_group < max) {
+                        state->ai_selected_group++;
+                        state->ai_selected_group_crew = 0;
+                    }
+                } else if (state->ai_mode == 1) {
+                    int max = (int)state->ai_crew_result.recommendations.size() - 1;
+                    if (state->ai_selected_rec < max) state->ai_selected_rec++;
+                } else if (state->ai_mode == 2) {
+                    int max = (int)state->ai_progression_result.investments.size() - 1;
+                    if (state->ai_selected_inv < max) state->ai_selected_inv++;
+                } else if (state->ai_mode == 3) {
+                    int max = (int)state->ai_meta_result.top_crews.size() - 1;
+                    if (state->ai_selected_meta < max) state->ai_selected_meta++;
+                }
+                return true;
+            }
+            if (event == Event::ArrowUp) {
+                if (state->ai_mode == 0) {
+                    if (state->ai_selected_group > 0) {
+                        state->ai_selected_group--;
+                        state->ai_selected_group_crew = 0;
+                    }
+                } else if (state->ai_mode == 1) {
+                    if (state->ai_selected_rec > 0) state->ai_selected_rec--;
+                } else if (state->ai_mode == 2) {
+                    if (state->ai_selected_inv > 0) state->ai_selected_inv--;
+                } else if (state->ai_mode == 3) {
+                    if (state->ai_selected_meta > 0) state->ai_selected_meta--;
+                }
+                return true;
+            }
+            // Left/Right navigate crews within a group (Groups mode)
+            if (state->ai_mode == 0) {
+                if (event == Event::ArrowRight) {
+                    int sgi = state->ai_selected_group;
+                    if (sgi >= 0 && sgi < (int)state->ai_group_result.group_results.size()) {
+                        int max = (int)state->ai_group_result.group_results[sgi].crews.size() - 1;
+                        if (state->ai_selected_group_crew < max) state->ai_selected_group_crew++;
+                    }
+                    return true;
+                }
+                if (event == Event::ArrowLeft) {
+                    if (state->ai_selected_group_crew > 0) state->ai_selected_group_crew--;
+                    return true;
+                }
+            }
+
+            // Start typing a question (Ask mode)
+            if (event == Event::Character('a') || event == Event::Character('A')) {
+                if (state->ai_mode == 4 && !state->ai_running) {
+                    state->ai_question_active = true;
+                    state->ai_question.clear();
+                    return true;
+                }
+            }
+
+            // Re-initialize AI engine
+            if (event == Event::Character('i') || event == Event::Character('I')) {
+                if (!state->ai_running) {
+                    state->set_status("Re-initializing AI...");
+                    std::thread([state]() {
+                        auto err = state->ai_engine.reinitialize();
+                        if (err.empty()) {
+                            auto s = state->ai_engine.status();
+                            state->set_status("AI re-initialized: " + s.provider + "/" + s.model);
+                        } else {
+                            state->set_status("AI re-init failed: " + err);
+                        }
+                        auto screen = ScreenInteractive::Active();
+                        if (screen) screen->PostEvent(Event::Custom);
+                    }).detach();
+                }
+                return true;
+            }
+
+            // Refresh META cache (Gemini web-search-grounded)
+            if (event == Event::Character('m') || event == Event::Character('M')) {
+                if (!state->ai_running && !state->ai_meta_refreshing) {
+                    if (!state->ai_engine.is_available()) {
+                        state->set_status("AI not available. Press [I] to re-initialize.");
+                        return true;
+                    }
+                    if (!state->optimizer) {
+                        state->set_status("No roster loaded — need officer names for META matching.");
+                        return true;
+                    }
+
+                    state->ai_meta_refreshing = true;
+                    state->ai_meta_progress = "Starting META refresh...";
+                    {
+                        std::lock_guard<std::mutex> lk(state->status_mutex);
+                        state->ai_stream_text.clear();
+                    }
+                    state->ai_cancel_groups = false;
+                    state->set_status("Refreshing META cache from Gemini...");
+
+                    std::thread([state]() {
+                        // Build known officer name list
+                        const auto& officers = state->optimizer->officers();
+                        std::vector<std::string> known_names;
+                        known_names.reserve(officers.size());
+                        for (const auto& off : officers) {
+                            known_names.push_back(off.name);
+                        }
+
+                        auto stream_cb = [state](const std::string& chunk) {
+                            std::lock_guard<std::mutex> lk(state->status_mutex);
+                            state->ai_stream_text += chunk;
+                            auto screen = ScreenInteractive::Active();
+                            if (screen) screen->PostEvent(Event::Custom);
+                        };
+
+                        auto progress_cb = [state](int current, int total, const std::string& group_name) {
+                            state->ai_meta_progress = "Refreshing " + group_name + " (" +
+                                std::to_string(current) + "/" + std::to_string(total) + ")...";
+                            auto screen = ScreenInteractive::Active();
+                            if (screen) screen->PostEvent(Event::Custom);
+                        };
+
+                        auto err = state->ai_engine.refresh_meta_cache(
+                            known_names, stream_cb, progress_cb, &state->ai_cancel_groups);
+
+                        {
+                            std::lock_guard<std::mutex> lk(state->status_mutex);
+                            state->ai_stream_text.clear();
+                        }
+                        state->ai_meta_progress.clear();
+                        state->ai_meta_refreshing = false;
+
+                        if (err.empty()) {
+                            auto age = state->ai_engine.meta_cache().age_str();
+                            int total_officers = 0;
+                            for (const auto& [k, v] : state->ai_engine.meta_cache().groups) {
+                                total_officers += static_cast<int>(v.top_officers.size());
+                            }
+                            state->set_status("META cache refreshed (" + age + ", " +
+                                std::to_string(total_officers) + " META officers matched)");
+                        } else {
+                            state->set_status("META refresh error: " + err);
+                        }
+
+                        auto screen = ScreenInteractive::Active();
+                        if (screen) screen->PostEvent(Event::Custom);
+                    }).detach();
+                }
+                return true;
+            }
+
+            // Cancel META refresh
+            if (event == Event::Escape && state->ai_meta_refreshing) {
+                state->ai_cancel_groups = true;
+                state->set_status("Cancelling META refresh...");
+                return true;
+            }
+
+            // Run AI query
+            if (event == Event::Return && !state->ai_running && !state->ai_meta_refreshing) {
+                if (!state->ai_engine.is_available()) {
+                    state->set_status("AI not available. Press [I] to re-initialize.");
+                    return true;
+                }
+                if (!state->optimizer) {
+                    state->set_status("No roster loaded — AI needs officer data.");
+                    return true;
+                }
+
+                state->ai_running = true;
+                {
+                    std::lock_guard<std::mutex> lk(state->status_mutex);
+                    state->ai_stream_text.clear();
+                }
+                int mode = state->ai_mode;
+
+                // Stream callback: accumulates text for live display
+                auto stream_cb = [state](const std::string& chunk) {
+                    std::lock_guard<std::mutex> lk(state->status_mutex);
+                    state->ai_stream_text += chunk;
+                    // Trigger screen redraw on each chunk
+                    auto screen = ScreenInteractive::Active();
+                    if (screen) screen->PostEvent(Event::Custom);
+                };
+
+                const auto& scenarios = all_dock_scenarios();
+                int safe_scenario = std::clamp(state->crew_scenario, 0, (int)scenarios.size() - 1);
+                ShipType st = ShipType::Explorer;
+                if (state->crew_ship_type == 1) st = ShipType::Battleship;
+                if (state->crew_ship_type == 2) st = ShipType::Interceptor;
+                if (state->crew_ship_type == 3) st = ShipType::Survey;
+
+                std::string question_copy = state->ai_question;
+
+                state->set_status("AI query running (" + std::string(mode == 0 ? "groups" : mode == 1 ? "crew" : mode == 2 ? "progression" : mode == 3 ? "META" : "ask") + ")...");
+
+                std::thread([state, mode, safe_scenario, st, stream_cb, question_copy]() {
+                    const auto& scenarios = all_dock_scenarios();
+                    const auto& officers = state->optimizer->officers();
+
+                    if (mode == 0) {
+                        // Group-based pipeline
+                        state->ai_cancel_groups = false;
+                        state->ai_group_progress = "Starting group pipeline...";
+                        auto progress_cb = [state](int current, int total, const std::string& group_name) {
+                            state->ai_group_progress = "Querying " + group_name + " (" +
+                                std::to_string(current + 1) + "/" + std::to_string(total) + ")...";
+                            auto screen = ScreenInteractive::Active();
+                            if (screen) screen->PostEvent(Event::Custom);
+                        };
+                        state->ai_group_result = state->ai_engine.query_by_groups(
+                            officers, stream_cb, progress_cb, &state->ai_cancel_groups);
+                        state->ai_selected_group = 0;
+                        state->ai_selected_group_crew = 0;
+                        state->ai_group_progress.clear();
+                        if (state->ai_group_result.ok()) {
+                            state->set_status("AI: " + std::to_string(state->ai_group_result.groups_succeeded) +
+                                "/" + std::to_string(state->ai_group_result.groups_total) + " groups succeeded.");
+                        } else {
+                            state->set_status("AI error: " + state->ai_group_result.error);
+                        }
+                    } else if (mode == 1) {
+                        state->ai_crew_result = state->ai_engine.recommend_crews(
+                            state->player_data, state->game_data, officers,
+                            scenarios[safe_scenario], st, 3, {}, stream_cb);
+                        state->ai_selected_rec = 0;
+                        if (state->ai_crew_result.ok()) {
+                            state->set_status("AI: " + std::to_string(state->ai_crew_result.recommendations.size()) + " crew recommendations.");
+                        } else {
+                            state->set_status("AI error: " + state->ai_crew_result.error);
+                        }
+                    } else if (mode == 2) {
+                        state->ai_progression_result = state->ai_engine.advise_progression(
+                            state->player_data, state->game_data, officers, "", stream_cb);
+                        state->ai_selected_inv = 0;
+                        if (state->ai_progression_result.ok()) {
+                            state->set_status("AI: " + std::to_string(state->ai_progression_result.investments.size()) + " investment suggestions.");
+                        } else {
+                            state->set_status("AI error: " + state->ai_progression_result.error);
+                        }
+                    } else if (mode == 3) {
+                        state->ai_meta_result = state->ai_engine.analyze_meta(
+                            scenarios[safe_scenario],
+                            state->player_data, state->game_data, officers,
+                            state->optimizer.get(), stream_cb);
+                        state->ai_selected_meta = 0;
+                        if (state->ai_meta_result.ok()) {
+                            state->set_status("AI: META analysis complete.");
+                        } else {
+                            state->set_status("AI error: " + state->ai_meta_result.error);
+                        }
+                    } else {
+                        if (question_copy.empty()) {
+                            state->ai_ask_result = LlmResponse{};
+                            state->ai_ask_result.error = "No question entered. Press [A] to type a question.";
+                            state->set_status("AI: No question entered.");
+                        } else {
+                            state->ai_ask_result = state->ai_engine.ask_question(
+                                question_copy,
+                                state->player_data, state->game_data, officers, stream_cb);
+                            if (state->ai_ask_result.error.empty()) {
+                                state->set_status("AI: Answer received.");
+                            } else {
+                                state->set_status("AI error: " + state->ai_ask_result.error);
+                            }
+                        }
+                    }
+
+                    // Clear streaming text before marking as done —
+                    // prevents flash of raw text between streaming and parsed display
+                    {
+                        std::lock_guard<std::mutex> lk(state->status_mutex);
+                        state->ai_stream_text.clear();
+                    }
+                    state->ai_running = false;
+                    auto screen = ScreenInteractive::Active();
+                    if (screen) screen->PostEvent(Event::Custom);
+                }).detach();
+
                 return true;
             }
         }
@@ -4154,6 +5166,7 @@ int main() {
 
     // Cleanup
     state->save_plans();
+    state->ai_engine.shutdown();
     state->ingress_server.stop();
 
     return 0;

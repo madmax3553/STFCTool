@@ -14,6 +14,7 @@ add_requires("openssl", {system = true})
 
 target("stfctool")
     set_kind("binary")
+    set_filename("stfctool")
     set_rundir("$(projectdir)")
     add_files("src/main.cpp", "src/data/*.cpp", "src/util/*.cpp", "src/core/*.cpp")
     add_includedirs("src")

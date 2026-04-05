@@ -21,13 +21,19 @@ ApiClient::ApiClient(const std::string& cache_dir)
 }
 
 std::string ApiClient::api_get(const std::string& path) {
-    httplib::SSLClient cli("api.spocks.club", 443);
-    cli.set_connection_timeout(10);
-    cli.set_read_timeout(30);
+    if (cache_only_) return "";
+    try {
+        httplib::SSLClient cli("api.spocks.club", 443);
+        cli.set_connection_timeout(10);
+        cli.set_read_timeout(30);
+        cli.enable_server_certificate_verification(false);
 
-    auto res = cli.Get(path);
-    if (res && res->status == 200) {
-        return res->body;
+        auto res = cli.Get(path);
+        if (res && res->status == 200) {
+            return res->body;
+        }
+    } catch (...) {
+        // SSL connection failed — fall through to return empty
     }
     return "";
 }

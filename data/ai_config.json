@@ -1,0 +1,26 @@
+{
+  "api_key_env": "",
+  "cache_ttl_hours": 24,
+  "enable_search": false,
+  "endpoint": "http://127.0.0.1:11434",
+  "fallback_api_key_env": "GEMINI_API_KEY",
+  "fallback_endpoint": "https://generativelanguage.googleapis.com",
+  "fallback_model": "gemini-2.5-flash",
+  "fallback_provider": "gemini",
+  "max_tokens": 4096,
+  "model": "llama3.2:1b",
+  "provider": "ollama",
+  "temperature": 0.3,
+  "tunnel": {
+    "connect_timeout": 10,
+    "local_port": 11434,
+    "remote_host": "localhost",
+    "remote_port": 11434,
+    "ssh_host": "192.168.1.225",
+    "ssh_key_path": "",
+    "ssh_port": 22,
+    "ssh_user": "groot",
+    "strict_host_checking": false
+  },
+  "tunnel_enabled": true
+}

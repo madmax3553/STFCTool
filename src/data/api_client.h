@@ -28,6 +28,9 @@ public:
     // Force refresh from API (ignore cache)
     void set_force_refresh(bool force) { force_refresh_ = force; }
 
+    // Cache-only mode: never make network requests, only read from disk
+    void set_cache_only(bool cache_only) { cache_only_ = cache_only; }
+
     // Set a progress callback: (step_name, current, total)
     using ProgressCallback = std::function<void(const std::string&, int, int)>;
     void set_progress_callback(ProgressCallback cb) { progress_cb_ = std::move(cb); }
@@ -35,6 +38,7 @@ public:
 private:
     std::string cache_dir_;
     bool force_refresh_ = false;
+    bool cache_only_ = false;
     ProgressCallback progress_cb_;
 
     // HTTP GET to api.spocks.club, returns response body or empty on error
