@@ -1,167 +1,414 @@
 {
   "groups": {
     "Apex & Isolytic": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 47.958289489s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "Armada": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 49.487366923s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "Base Attack": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 51.008982681s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "Base Defend": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 50.258002985s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "Loot & Cargo": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 48.835258952s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "PvE General": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 52.23265016s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "PvE Specialized": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 51.639562285s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "PvP General": {
-      "meta_summary": "```json\n{\n  \"officers\": [\n    {\n      \"name\": \"Mirror Picard\",\n      \"role\": \"CM\",\n      \"reason\": \"The cornerstone of the Mirror crew, he applies the 'Assimilated' debuff, enabling massive damage and mitigation from other Mirror officers.\"\n    },\n    {\n      \"name\": \"Mirror Data\",\n      \"role\": \"OA\",\n      \"reason\": \"Essential for Mirror crews, he significantly reduces the opponent's mitigation and provides an 'Apex Barrier' for defense.\"\n    },\n    {\n      \"name\": \"Mirror Kira\",\n      \"role\": ",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
+      "meta_summary": "The current high-end meta is a literal arms race between Carol Freeman's Isolytic Cascade offense and Mirror Data's Apex Barrier defense.",
+      "model_used": "manual-template",
+      "timestamp": 1775442415,
+      "top_crews_desc": [
+        "Carol Freeman + Lorca + Honorguard Worf — The premier offensive Isolytic crew; Lorca's breach unlocks Worf's penetration, allowing Freeman's Isolytic Cascade to shred hull directly.",
+        "Mirror Picard + Mirror Data + Mirror Kira — The apex of defensive stability, stacking massive Apex Barriers with Mirror Data and Isolytic Defense from Picard and Kira.",
+        "Infiltrator Tuvok + Carol Freeman + Lorca — A high-risk 'Glass Cannon' build that stacks Tuvok's Isolytic damage with Freeman's shot multipliers for instant round-one deletions."
+      ],
       "top_officers": [
+        "Alexander Marcus",
+        "Borg Queen",
         "Carol Freeman",
-        "Damar",
         "Data",
-        "Garak",
+        "Enterprise-E Picard",
+        "Enterprise-E Troi",
         "Gul Dukat",
-        "Honorguard Worf",
-        "Hugh",
-        "Icheb",
-        "Infiltrator Tuvok",
+        "Kira Nerys",
         "LORCA",
-        "Mariachi Q",
-        "Mirror Data",
-        "Mirror Ezri",
         "Mirror Kira",
         "Mirror Picard",
-        "Mirror Troi",
-        "Specialist Seven",
-        "Starfleet Q",
         "Tuvok",
         "Weyoun",
         "Worf"
       ]
     },
-    "PvP on Battleship": {
-      "meta_summary": "```json\n{\n  \"officers\": [\n    {\n      \"name\": \"SNW La'an\",\n      \"role\": \"CM\",\n      \"reason\": \"As Captain, she significantly increases weapon shots and applies Burning, which activates her powerful Captain Maneuver for Battleships in PvP.\"\n    },\n    {\n      \"name\": \"SNW Una\",\n      \"role\": \"OA\",\n      \"reason\": \"She decreases enemy shield mitigation, which is crucial for Battleships to maximize their damage output in PvP.\"\n    },\n    {\n      \"name\": \"Shaxs (Lower Decks)\",\n      \"role\": \"OA\",\n ",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
+    "Armada": {
+      "meta_summary": "Armada crews focus on long-term scaling, critical hit consistency (Khan/Sela), and Isolytic damage to overcome the massive health pools of epic targets.",
+      "model_used": "manual-template",
+      "timestamp": 1775442388,
+      "top_crews_desc": [
+        "Five of Eleven + Six of Eleven + Seven of Eleven — The 'Borg Armada' trinity. Maximizes loot, mitigation, and weapon damage specifically against Armada targets.",
+        "Kathryn Janeway + Suder + The Doctor — The high-level Isolytic Armada meta. Janeway and Suder provide massive scaling damage while The Doctor provides necessary hull sustain.",
+        "Enterprise-E Picard + Enterprise-E Data + Enterprise-E Troi — The premier 'State' crew for Armadas, applying constant Morale and Isolytic buffs that benefit the entire group in the fight."
+      ],
       "top_officers": [
+        "B'Elanna Torres",
+        "Beverly Crusher",
+        "Christopher Pike",
+        "Data",
+        "Enterprise-E Picard",
+        "Enterprise-E Troi",
+        "Five of Eleven",
+        "Gorkon",
+        "Hugh Culber",
+        "Kathryn Janeway",
+        "Khan Noonien Singh",
+        "LORCA",
+        "Marlena Moreau",
+        "Nine of Eleven",
+        "Sela",
+        "Seven of Eleven",
+        "Six of Eleven",
+        "Suder",
+        "The Doctor",
+        "William T. Riker"
+      ]
+    },
+    "Base Attack": {
+      "meta_summary": "Base attacking relies on high shot counts to overwhelm station defenses and Isolytic damage to bypass the massive mitigation of high-level platforms.",
+      "model_used": "manual-template",
+      "timestamp": 1775442388,
+      "top_crews_desc": [
+        "Dukat + Weyoun + Damar — The 'Strike Team' Battleship crew is the gold standard for base cracking due to its massive shot volume and critical damage scaling against stations.",
+        "Carol Freeman + Lorca + Honorguard Worf — Utilizes Isolytic Cascade damage to bypass standard station mitigation, making it effective for 'punching up' against higher level docks.",
+        "Lorca + Harrison + Honorguard Worf — Harrison ignores a percentage of the station's shield at the start of the fight, allowing Lorca’s Breach-driven damage to hit the hull immediately."
+      ],
+      "top_officers": [
+        "Alexander Marcus",
         "Carol Freeman",
         "Damar",
         "Data",
-        "Garak",
+        "Gorkon",
         "Gul Dukat",
-        "Honorguard Worf",
-        "Icheb",
-        "Infiltrator Tuvok",
+        "John Harrison",
+        "Khan Noonien Singh",
+        "Kira Nerys",
         "LORCA",
-        "Mirror Data",
-        "Mirror Ezri",
         "Mirror Kira",
-        "Nero",
-        "Shaxs",
-        "Specialist Seven",
+        "Mirror Picard",
+        "Tuvok",
+        "Weyoun",
+        "Worf",
+        "Yuki Sulu"
+      ]
+    },
+    "Base Defend": {
+      "meta_summary": "Station defense is currently defined by the Mirror Universe meta, prioritizing Apex Barriers and Isolytic mitigation to outlast the attacker's initial burst.",
+      "model_used": "manual-template",
+      "timestamp": 1775442388,
+      "top_crews_desc": [
+        "Mirror Data + Mirror Picard + Mirror Kira — The current defensive peak; provides massive Apex Barriers and Isolytic Defense that effectively neutralizes most incoming attackers.",
+        "Dukat + Weyoun + Mirror Data — A hybrid build that uses the station's natural firepower to scale damage while utilizing Data's barrier for survivability.",
+        "Mirror Picard + Mirror Beverly + Mirror Geordi — A specialized Isolytic defense build that reduces the attacker's ability to ramp up damage over long engagements."
+      ],
+      "top_officers": [
+        "Alexander Marcus",
+        "Carol Freeman",
+        "Data",
+        "Gorkon",
+        "Gul Dukat",
+        "James T. Kirk",
+        "LORCA",
+        "Mirror Kira",
+        "Mirror Picard",
+        "Nyota Uhura",
         "Spock",
         "Tuvok",
-        "Worf"
+        "Weyoun",
+        "Worf",
+        "Yuki Sulu"
+      ]
+    },
+    "Loot & Cargo": {
+      "meta_summary": "Loot meta centers on Five of Eleven for hostile grinding and Enterprise-E Data for state-based multipliers, while T'Pring remains the queen of protected cargo.",
+      "model_used": "manual-template",
+      "timestamp": 1775442415,
+      "top_crews_desc": [
+        "Five of Eleven + Seven of Eleven + Nine of Eleven — The definitive 'Borg Loot' crew. Five increases loot drops from hostiles, Seven increases synergy, and Nine significantly boosts cargo capacity.",
+        "Enterprise-E Data + Enterprise-E Picard + Enterprise-E Troi — The modern 'State' loot crew. Data provides massive loot multipliers as long as the Morale state is active, which Picard and Troi guarantee.",
+        "T'Pring (Rare) + Stonn + Dupont — The ultimate 'protected cargo' and mining speed setup, ensuring you keep more of what you mine and extract it faster."
+      ],
+      "top_officers": [
+        "Barot",
+        "Data",
+        "Enterprise-E Picard",
+        "Enterprise-E Troi",
+        "Five of Eleven",
+        "Four of Eleven",
+        "Ghrush",
+        "Helvia",
+        "Kathryn Janeway",
+        "Neelix",
+        "Nine of Eleven",
+        "Raphaël DuPont",
+        "Seven of Eleven",
+        "Stonn",
+        "T'Pring",
+        "Ten of Eleven",
+        "The Doctor"
+      ]
+    },
+    "PvE General": {
+      "meta_summary": "General PvE revolves around mitigation scaling for low-level dailies (Pike/Moreau) and Isolytic damage/critical ramping (Janeway/Suder) for high-level G5/G6 power grinding.",
+      "model_used": "manual-template",
+      "timestamp": 1775442353,
+      "top_crews_desc": [
+        "Christopher Pike + Marlena Moreau + Chen — The 'PMC' classic. Pike and Moreau provide massive mitigation scaling, while Chen negates energy weapon damage from most standard hostiles.",
+        "Kathryn Janeway + Suder + Seska — The 'JSS' modern meta. Janeway provides Isolytic damage and shield bypass, while Suder and Seska ramp up critical damage for high-level grinding.",
+        "SNW Christopher Pike + SNW Spock + SNW Nyota Uhura — The Strange New Worlds 'Trinity.' Designed to exploit the combat triangle (Explorer/Battleship/Interceptor) for maximum survivability."
+      ],
+      "top_officers": [
+        "B'Elanna Torres",
+        "Christopher Pike",
+        "Data",
+        "Enterprise-E Picard",
+        "Five of Eleven",
+        "Grace Chen",
+        "Hugh Culber",
+        "Kathryn Janeway",
+        "Marlena Moreau",
+        "Nyota Uhura",
+        "SNW Erica Ortegas",
+        "Seska",
+        "Seven of Eleven",
+        "Seven of Nine",
+        "Spock",
+        "Suder",
+        "T'Laan",
+        "The Doctor"
+      ]
+    },
+    "PvE Specialized": {
+      "meta_summary": "Specialized PvE requires tailored mechanics: Xindi require shield-bypass mitigation (Archer), while Voyager/Gorn loops rely on Janeway’s Isolytic scaling and loot-multiplying bridge officers.",
+      "model_used": "manual-template",
+      "timestamp": 1775442353,
+      "top_crews_desc": [
+        "Jonathan Archer + Trip Tucker + Doctor Phlox — The premier Xindi-Aquatic crew. Archer and Phlox provide the specific mitigation and damage required to survive Xindi shield-bypass mechanics.",
+        "Kathryn Janeway + The Doctor + Enterprise-E Data — The dominant Voyager/Species 8472 crew. Combines Janeway's Isolytic output with The Doctor’s healing and Data's loot/damage scaling.",
+        "Severus + Decius + Charvanek — The 'Romulan Burning' crew for Silent Enemies. High percentage hull damage per round allows smaller ships to punch up against massive Silent targets."
+      ],
+      "top_officers": [
+        "Christopher Pike",
+        "Data",
+        "Decius",
+        "Enterprise-E Picard",
+        "Five of Eleven",
+        "Frank Leslie",
+        "Hugh Culber",
+        "Jonathan Archer",
+        "Kathryn Janeway",
+        "Liviana Charvanek",
+        "Marlena Moreau",
+        "Neelix",
+        "Phlox",
+        "Seven of Nine",
+        "Severus",
+        "T'Laan",
+        "The Doctor",
+        "Tom Paris",
+        "Trip Tucker"
+      ]
+    },
+    "PvP General": {
+      "meta_summary": "The General PvP meta is dominated by Isolytic Damage and Apex Barriers, where victory is decided by who can bypass mitigation first.",
+      "model_used": "manual-template",
+      "timestamp": 1775442291,
+      "top_crews_desc": [
+        "Carol Freeman + Lorca + Honorguard Worf — The current gold standard for Isolytic Cascade scaling and guaranteed Round 1 Hull Breach synergy.",
+        "Mirror Picard + Mirror Data + Mirror Kira — The premier defensive meta crew, utilizing Apex Barrier and Isolytic Defense to outlast opponents.",
+        "Lorca + Honorguard Worf + Damar — A classic heavy-hitting Breach crew that remains effective against high-mitigation targets."
+      ],
+      "top_officers": [
+        "Alexander Marcus",
+        "Carol Freeman",
+        "Damar",
+        "Data",
+        "Gorkon",
+        "Gul Dukat",
+        "LORCA",
+        "Mirror Kira",
+        "Mirror Picard",
+        "T'Pring",
+        "Tuvok",
+        "Weyoun",
+        "Worf",
+        "Yuki Sulu"
+      ]
+    },
+    "PvP on Battleship": {
+      "meta_summary": "Battleship crews focus on armor mitigation and maximizing shot volume to crush Explores and Stations.",
+      "model_used": "manual-template",
+      "timestamp": 1775442291,
+      "top_crews_desc": [
+        "Dukat + Weyoun + Damar — The definitive Battleship crew, focusing on high shot count and massive critical hit damage.",
+        "Mirror Picard + Mirror Data + Damar — Provides the Battleship with the necessary Isolytic defense to survive long enough for its heavy weapons to fire.",
+        "Carol Freeman + Dukat + Lorca — Uses Freeman to multiply the already high weapon count of Battleships like the Monaveen or Tribune."
+      ],
+      "top_officers": [
+        "Alexander Marcus",
+        "Carol Freeman",
+        "Damar",
+        "Data",
+        "Gorkon",
+        "Gul Dukat",
+        "LORCA",
+        "Mirror Kira",
+        "Mirror Picard",
+        "Strike Team SNW Ortegas",
+        "Tuvok",
+        "Weyoun",
+        "Worf",
+        "Yuki Sulu"
       ]
     },
     "PvP on Explorer": {
-      "meta_summary": "The current META for PvP on Explorer ships in Star Trek Fleet Command, as of April 5, 2026, emphasizes specialized Explorer Strike Teams and the powerful Mirror Universe synergy for anti-Explorer combat. These crews focus on maximizing offensive output through critical hits and weapon damage, while also employing strong defensive mechanics like Morale and Apex Barriers to enhance survivability against other players.\n\nHere are the top 15-20 officers for PvP on Explorer, along with their roles and",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "PvP on Interceptor": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 20.196971151s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "PvP vs Battleship": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 53.337716498s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
-    },
-    "PvP vs Explorer": {
-      "meta_summary": "```json\n{\n  \"officers\": [\n    {\n      \"name\": \"Weyoun\",\n      \"role\": \"CM\",\n      \"reason\": \"As Captain, Weyoun provides a 100% chance to apply Morale, which is crucial for activating many anti-Explorer officer abilities and boosting piercing stats on an Explorer ship.\"\n    },\n    {\n      \"name\": \"Pon\",\n      \"role\": \"OA\",\n      \"reason\": \"Pon significantly decreases the opponent's critical hit chance, providing essential defense for your Explorer in PvP, especially when paired with Morale.\"\n   ",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
+      "meta_summary": "Explorer crews prioritize Shield/Apex regeneration and Isolytic scaling to leverage their high natural health pools.",
+      "model_used": "manual-template",
+      "timestamp": 1775442291,
+      "top_crews_desc": [
+        "Strike Team Una + Strike Team La'an + Strike Team Ortegas — Optimizes Explorer survivability while scaling damage against Interceptors.",
+        "Carol Freeman + Mirror Data + Lorca — Combines the Explorer's natural shield health with Mirror Data's Apex Barrier and Freeman's Isolytic output.",
+        "SNW James T. Kirk + SNW Uhura + Lorca — Focuses on maximizing the Explorer's shield uptime while maintaining Breach for offensive pressure."
+      ],
       "top_officers": [
         "Alexander Marcus",
+        "Carol Freeman",
+        "Damar",
         "Data",
-        "Five of Eleven",
-        "Ikat'ika",
-        "John Harrison",
+        "Gorkon",
+        "James T. Kirk",
+        "Jean-Luc Picard",
         "LORCA",
-        "Mirror Data",
         "Mirror Kira",
-        "Mirror Troi",
-        "SNW James Kirk",
-        "Soran",
-        "Vella",
+        "Mirror Picard",
+        "Tuvok",
+        "Worf",
+        "Yuki Sulu"
+      ]
+    },
+    "PvP on Interceptor": {
+      "meta_summary": "Interceptor crews lean into high-speed critical strikes and Isolytic Cascade to end fights before their lower health becomes a factor.",
+      "model_used": "manual-template",
+      "timestamp": 1775442291,
+      "top_crews_desc": [
+        "Strike Team Ortegas + Strike Team Una + Strike Team La'an — Maximizes Interceptor critical hit chance and Isolytic damage specifically against Battleships.",
+        "Carol Freeman + Lorca + Infiltrator Tuvok — Capitalizes on Interceptor speed to deliver massive Isolytic 'glass cannon' strikes early in the fight.",
+        "Mirror Picard + Mirror Data + Mirror Kira — Counters the Interceptor's natural fragility with Apex Barriers and Isolytic evasion."
+      ],
+      "top_officers": [
+        "Alexander Marcus",
+        "Carol Freeman",
+        "Damar",
+        "Data",
+        "Gorkon",
+        "James T. Kirk",
+        "LORCA",
+        "Mirror Kira",
+        "Mirror Picard",
+        "Spock",
+        "Tuvok",
+        "Worf",
+        "Yuki Sulu"
+      ]
+    },
+    "PvP vs Battleship": {
+      "meta_summary": "To kill Battleships, you must apply Hull Breach and high Armor Piercing to negate their massive mitigation.",
+      "model_used": "manual-template",
+      "timestamp": 1775442291,
+      "top_crews_desc": [
+        "Strike Team Ortegas + Strike Team Una + Strike Team La'an — Specifically designed to shred Battleship armor and exploit their lower evasion stats.",
+        "Lorca + Honorguard Worf + Damar — Hull Breach is the hard counter to Battleship armor, making this classic combo lethal here.",
+        "Carol Freeman + Strike Team Ortegas + Lorca — Blends the anti-Battleship specialized damage with the universal Isolytic meta."
+      ],
+      "top_officers": [
+        "Alexander Marcus",
+        "Carol Freeman",
+        "Damar",
+        "Data",
+        "Gorkon",
+        "Gul Dukat",
+        "LORCA",
+        "Mirror Kira",
+        "Mirror Picard",
+        "Spock",
+        "Tuvok",
+        "Worf",
+        "Yuki Sulu"
+      ]
+    },
+    "PvP vs Explorer": {
+      "meta_summary": "Countering Explorers requires Shield Piercing or Shield Stripping (Yuki) to expose their hull to Isolytic damage.",
+      "model_used": "manual-template",
+      "timestamp": 1775442291,
+      "top_crews_desc": [
+        "Yuki Sulu + Lorca + Honorguard Worf — Yuki strips Explorer shields instantly, allowing Breach and Isolytic damage to hit the hull directly.",
+        "Carol Freeman + Yuki Sulu + Lorca — Combined shield stripping and Isolytic scaling to bypass the Explorer's primary defense.",
+        "Mirror Picard + Mirror Geordi + Mirror Data — Mirror Geordi provides specific debuffs that cripple Explorer mitigation efficiency."
+      ],
+      "top_officers": [
+        "Alexander Marcus",
+        "Carol Freeman",
+        "Damar",
+        "Data",
+        "Gorkon",
+        "Gul Dukat",
+        "LORCA",
+        "Mirror Kira",
+        "Mirror Picard",
+        "T'Pring",
+        "Tuvok",
         "Weyoun",
         "Worf",
         "Yuki Sulu"
       ]
     },
     "PvP vs Interceptor": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 52.721944991s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
+      "meta_summary": "Defeating Interceptors requires high Accuracy to overcome Dodge and Apex Barriers to survive their initial critical hit onslaught.",
+      "model_used": "manual-template",
+      "timestamp": 1775442291,
+      "top_crews_desc": [
+        "Mirror Data + Mirror Picard + Mirror Kira — Mirror Data’s Apex Barrier scales massively against Interceptors, effectively nullifying their early-game burst.",
+        "Dukat + Weyoun + Mirror Data — Combines anti-Interceptor mitigation with the Battleship's natural triangle advantage.",
+        "Strike Team Una + Strike Team La'an + Mirror Data — Focuses on accuracy to counter Interceptor dodge while providing defensive barriers."
+      ],
+      "top_officers": [
+        "Alexander Marcus",
+        "Carol Freeman",
+        "Data",
+        "Gorkon",
+        "Gul Dukat",
+        "James T. Kirk",
+        "LORCA",
+        "Mirror Kira",
+        "Mirror Picard",
+        "Tuvok",
+        "Weyoun",
+        "Worf"
+      ]
     },
     "State Chain": {
-      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 48.272382381s.",
-      "model_used": "gemini-2.5-flash",
-      "timestamp": 1775434109,
-      "top_crews_desc": [],
-      "top_officers": []
+      "meta_summary": "State Chain crews rely on applying a specific status (Morale, Burning, or Breach) to unlock the secondary 'payoff' abilities of the bridge and below-deck officers.",
+      "model_used": "manual-template",
+      "timestamp": 1775442388,
+      "top_crews_desc": [
+        "Enterprise-E Picard + Enterprise-E Data + Enterprise-E Troi — The 'Morale' chain experts. They provide consistent Isolytic damage and damage reduction as long as the Morale state is active.",
+        "Lorca + Honorguard Worf + Infiltrator Tuvok — The 'Hull Breach' chain. Lorca applies the state, while Worf and Tuvok use that state to trigger massive armor piercing and Isolytic cascades.",
+        "Severus + Decius + Charvanek — The 'Burning' chain. Essential for %-based hull damage, which is vital for defeating 'Silent' hostiles and massive PvE targets."
+      ],
+      "top_officers": [
+        "Alexander Marcus",
+        "Carol Freeman",
+        "Christopher Pike",
+        "Data",
+        "Decius",
+        "Enterprise-E Picard",
+        "Enterprise-E Troi",
+        "Gorkon",
+        "LORCA",
+        "Liviana Charvanek",
+        "Marlena Moreau",
+        "Mirror Kira",
+        "Mirror Picard",
+        "Severus",
+        "Tuvok",
+        "Worf",
+        "Yuki Sulu"
+      ]
     }
   },
-  "last_refresh": 1775434109
+  "last_refresh": 1775442415
 }

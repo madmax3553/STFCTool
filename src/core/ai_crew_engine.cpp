@@ -590,15 +590,46 @@ std::string AiCrewEngine::refresh_meta_cache(
     int total = static_cast<int>(std::size(meta_groups));
     MetaCache new_cache;
 
+    // Start from existing cache — only re-query groups that are missing or errored
+    new_cache = meta_cache_;
+
     auto now_epoch = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 
+    int queried = 0;
+    int skipped = 0;
+
     for (int i = 0; i < total; ++i) {
         if (cancel_flag && cancel_flag->load()) {
-            return "Cancelled by user";
+            // Save what we have so far before returning
+            if (queried > 0) {
+                new_cache.last_refresh = now_epoch;
+                meta_cache_ = new_cache;
+                save_meta_cache(meta_cache_);
+            }
+            return "Cancelled by user (" + std::to_string(queried) + " queried, " +
+                   std::to_string(skipped) + " skipped)";
         }
 
         const auto& mg = meta_groups[i];
+
+        // Skip groups that already have valid cached data (non-empty officer list,
+        // no error in summary). This preserves successful results from previous
+        // refreshes and manual template imports, only re-querying failures.
+        auto* existing = new_cache.get_group(mg.name);
+        if (existing && !existing->top_officers.empty() &&
+            existing->meta_summary.substr(0, 6) != "Error:") {
+            ++skipped;
+            if (progress_cb) {
+                progress_cb(i + 1, total, mg.name + " (cached)");
+            }
+            if (stream_cb) {
+                stream_cb("\n--- META: " + mg.name + " (cached, " +
+                          std::to_string(existing->top_officers.size()) + " officers) — skipped ---\n");
+            }
+            continue;
+        }
+
         if (progress_cb) {
             progress_cb(i + 1, total, mg.name);
         }
@@ -676,6 +707,7 @@ std::string AiCrewEngine::refresh_meta_cache(
         }
 
         new_cache.groups[mg.name] = std::move(entry);
+        ++queried;
 
         // Rate-limit protection: space out Gemini requests to avoid burning
         // the 20 req/day free tier limit. Skip delay after the last request.
@@ -689,16 +721,29 @@ std::string AiCrewEngine::refresh_meta_cache(
                 resp.error.find("Quota") != std::string::npos ||
                 resp.error.find("RESOURCE_EXHAUSTED") != std::string::npos);
 
-            int delay_secs = rate_limited ? 15 : 4;
+            if (rate_limited) {
+                // Save progress so far — don't lose successful queries
+                new_cache.last_refresh = now_epoch;
+                meta_cache_ = new_cache;
+                save_meta_cache(meta_cache_);
 
-            if (rate_limited && stream_cb) {
-                stream_cb("\n[Rate limited — waiting " + std::to_string(delay_secs) + "s before next request...]\n");
+                if (stream_cb) {
+                    stream_cb("\n[Rate limited — saved " + std::to_string(queried) +
+                              " results so far. Waiting 15s...]\n");
+                }
             }
+
+            int delay_secs = rate_limited ? 15 : 4;
 
             // Sleep in 1-second increments so we can check cancel flag
             for (int s = 0; s < delay_secs; ++s) {
                 if (cancel_flag && cancel_flag->load()) {
-                    return "Cancelled by user";
+                    // Save partial results before returning
+                    new_cache.last_refresh = now_epoch;
+                    meta_cache_ = new_cache;
+                    save_meta_cache(meta_cache_);
+                    return "Cancelled (" + std::to_string(queried) + " queried, " +
+                           std::to_string(skipped) + " cached)";
                 }
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
@@ -1244,6 +1289,168 @@ LlmResponse AiCrewEngine::ask_question(
                                    Scenario::PvP, ShipType::Explorer);
 
     return advisor_->ask(snapshot, question, stream_cb);
+}
+
+// ===========================================================================
+// Result persistence — save/load crew results to disk
+// ===========================================================================
+
+static json crew_rec_to_json(const AiCrewRecommendation& rec) {
+    json j;
+    j["captain"] = rec.captain;
+    j["bridge"] = rec.bridge;
+    j["below_decks"] = rec.below_decks;
+    j["reasoning"] = rec.reasoning;
+    j["confidence"] = rec.confidence;
+    j["ship_advice"] = rec.ship_advice;
+    j["warnings"] = rec.warnings;
+    return j;
+}
+
+static AiCrewRecommendation crew_rec_from_json(const json& j) {
+    AiCrewRecommendation rec;
+    if (j.contains("captain") && j["captain"].is_string())
+        rec.captain = j["captain"].get<std::string>();
+    if (j.contains("bridge") && j["bridge"].is_array())
+        for (const auto& b : j["bridge"])
+            if (b.is_string()) rec.bridge.push_back(b.get<std::string>());
+    if (j.contains("below_decks") && j["below_decks"].is_array())
+        for (const auto& b : j["below_decks"])
+            if (b.is_string()) rec.below_decks.push_back(b.get<std::string>());
+    if (j.contains("reasoning") && j["reasoning"].is_string())
+        rec.reasoning = j["reasoning"].get<std::string>();
+    if (j.contains("confidence") && j["confidence"].is_number())
+        rec.confidence = j["confidence"].get<double>();
+    if (j.contains("ship_advice") && j["ship_advice"].is_string())
+        rec.ship_advice = j["ship_advice"].get<std::string>();
+    if (j.contains("warnings") && j["warnings"].is_array())
+        for (const auto& w : j["warnings"])
+            if (w.is_string()) rec.warnings.push_back(w.get<std::string>());
+    return rec;
+}
+
+bool save_group_results(const GroupQueryPipelineResult& results,
+                        const std::vector<bool>& locked,
+                        const std::set<std::string>& locked_officers,
+                        const std::string& path)
+{
+    try {
+        json j;
+        j["model_used"] = results.model_used;
+        j["groups_total"] = results.groups_total;
+        j["groups_completed"] = results.groups_completed;
+        j["groups_succeeded"] = results.groups_succeeded;
+        j["error"] = results.error;
+
+        json groups_arr = json::array();
+        for (size_t i = 0; i < results.group_results.size(); ++i) {
+            const auto& gr = results.group_results[i];
+            json gj;
+            gj["group_name"] = gr.group_name;
+            gj["group_id"] = static_cast<int>(gr.group_id);
+            gj["officer_count"] = gr.officer_count;
+            gj["raw_response"] = gr.raw_response;
+            gj["error"] = gr.error;
+            gj["history_id"] = gr.history_id;
+            gj["rating"] = static_cast<int>(gr.rating);
+            gj["locked"] = (i < locked.size()) ? locked[i] : false;
+
+            json crews_arr = json::array();
+            for (const auto& crew : gr.crews) {
+                crews_arr.push_back(crew_rec_to_json(crew));
+            }
+            gj["crews"] = crews_arr;
+            groups_arr.push_back(gj);
+        }
+        j["group_results"] = groups_arr;
+
+        // Save locked officer names
+        json locked_arr = json::array();
+        for (const auto& name : locked_officers) {
+            locked_arr.push_back(name);
+        }
+        j["locked_officer_names"] = locked_arr;
+
+        std::ofstream out(path);
+        if (!out) return false;
+        out << j.dump(2);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool load_group_results(GroupQueryPipelineResult& results,
+                        std::vector<bool>& locked,
+                        std::set<std::string>& locked_officers,
+                        const std::string& path)
+{
+    try {
+        std::ifstream in(path);
+        if (!in) return false;
+
+        json j;
+        in >> j;
+
+        results = {};
+        locked.clear();
+        locked_officers.clear();
+
+        if (j.contains("model_used") && j["model_used"].is_string())
+            results.model_used = j["model_used"].get<std::string>();
+        if (j.contains("groups_total") && j["groups_total"].is_number_integer())
+            results.groups_total = j["groups_total"].get<int>();
+        if (j.contains("groups_completed") && j["groups_completed"].is_number_integer())
+            results.groups_completed = j["groups_completed"].get<int>();
+        if (j.contains("groups_succeeded") && j["groups_succeeded"].is_number_integer())
+            results.groups_succeeded = j["groups_succeeded"].get<int>();
+        if (j.contains("error") && j["error"].is_string())
+            results.error = j["error"].get<std::string>();
+
+        if (j.contains("group_results") && j["group_results"].is_array()) {
+            for (const auto& gj : j["group_results"]) {
+                GroupQueryResult gr;
+                if (gj.contains("group_name") && gj["group_name"].is_string())
+                    gr.group_name = gj["group_name"].get<std::string>();
+                if (gj.contains("group_id") && gj["group_id"].is_number_integer())
+                    gr.group_id = static_cast<OfficerGroupId>(gj["group_id"].get<int>());
+                if (gj.contains("officer_count") && gj["officer_count"].is_number_integer())
+                    gr.officer_count = gj["officer_count"].get<int>();
+                if (gj.contains("raw_response") && gj["raw_response"].is_string())
+                    gr.raw_response = gj["raw_response"].get<std::string>();
+                if (gj.contains("error") && gj["error"].is_string())
+                    gr.error = gj["error"].get<std::string>();
+                if (gj.contains("history_id") && gj["history_id"].is_string())
+                    gr.history_id = gj["history_id"].get<std::string>();
+                if (gj.contains("rating") && gj["rating"].is_number_integer())
+                    gr.rating = static_cast<AiRating>(gj["rating"].get<int>());
+
+                if (gj.contains("crews") && gj["crews"].is_array()) {
+                    for (const auto& cj : gj["crews"]) {
+                        gr.crews.push_back(crew_rec_from_json(cj));
+                    }
+                }
+
+                bool is_locked = false;
+                if (gj.contains("locked") && gj["locked"].is_boolean())
+                    is_locked = gj["locked"].get<bool>();
+
+                results.group_results.push_back(std::move(gr));
+                locked.push_back(is_locked);
+            }
+        }
+
+        if (j.contains("locked_officer_names") && j["locked_officer_names"].is_array()) {
+            for (const auto& name : j["locked_officer_names"]) {
+                if (name.is_string())
+                    locked_officers.insert(name.get<std::string>());
+            }
+        }
+
+        return !results.group_results.empty();
+    } catch (...) {
+        return false;
+    }
 }
 
 // ===========================================================================

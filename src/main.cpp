@@ -3527,6 +3527,19 @@ static Element render_ai_advisor(AppState& state) {
         state.ai_init_lazy();
     }
 
+    // Load saved results on first render (if we have none in memory)
+    if (state.ai_initialized && state.ai_group_result.group_results.empty()) {
+        if (stfc::load_group_results(state.ai_group_result,
+                state.ai_group_locked, state.ai_locked_officer_names)) {
+            // Jump to stage 2 if we loaded valid results
+            if (!state.ai_group_result.group_results.empty()) {
+                state.ai_group_stage = 2;
+                state.ai_selected_group = 0;
+                state.ai_selected_group_crew = 0;
+            }
+        }
+    }
+
     // Show initializing state
     if (state.ai_initializing) {
         return vbox({
@@ -4861,6 +4874,20 @@ int main() {
             // Escape: back one stage (Groups mode only, when not running)
             if (event == Event::Escape && state->ai_mode == 0 && !state->ai_running && !state->ai_meta_refreshing) {
                 if (state->ai_group_stage > 0) {
+                    // When going from Stage 2 → Stage 1, remap ai_selected_group
+                    // from results-array index to prepared-groups index (they may differ)
+                    if (state->ai_group_stage == 2 && !state->ai_group_result.group_results.empty()) {
+                        int sgi = state->ai_selected_group;
+                        if (sgi >= 0 && sgi < (int)state->ai_group_result.group_results.size()) {
+                            const auto& gr_name = state->ai_group_result.group_results[sgi].group_name;
+                            for (int i = 0; i < (int)state->ai_prepared_groups.size(); ++i) {
+                                if (state->ai_prepared_groups[i].name == gr_name) {
+                                    state->ai_selected_group = i;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     state->ai_group_stage--;
                     state->ai_selected_officer = 0;
                     state->ai_officer_scroll = 0;
@@ -4880,6 +4907,8 @@ int main() {
                             gr.rating = AiRating::Good;
                             state->ai_engine.rate_result(gr.history_id, AiRating::Good);
                             state->set_status("Rated " + gr.group_name + " as Good [+]");
+                            stfc::save_group_results(state->ai_group_result,
+                                state->ai_group_locked, state->ai_locked_officer_names);
                         }
                     }
                     return true;
@@ -4893,6 +4922,8 @@ int main() {
                             gr.rating = AiRating::Bad;
                             state->ai_engine.rate_result(gr.history_id, AiRating::Bad);
                             state->set_status("Rated " + gr.group_name + " as Bad [-]");
+                            stfc::save_group_results(state->ai_group_result,
+                                state->ai_group_locked, state->ai_locked_officer_names);
                         }
                     }
                     return true;
@@ -4935,6 +4966,8 @@ int main() {
                             state->set_status("Unlocked " + gr.group_name + " (" +
                                 std::to_string(state->ai_locked_officer_names.size()) + " officers locked total)");
                         }
+                        stfc::save_group_results(state->ai_group_result,
+                            state->ai_group_locked, state->ai_locked_officer_names);
                     }
                     return true;
                 }
@@ -5412,6 +5445,10 @@ int main() {
                                 }
                                 state->ai_selected_group_crew = 0;
                             }
+
+                            // Save results to disk
+                            stfc::save_group_results(state->ai_group_result,
+                                state->ai_group_locked, state->ai_locked_officer_names);
 
                             // Status update (set_status has its own lock)
                             {

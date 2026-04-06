@@ -4,6 +4,7 @@
 #include <memory>
 #include <functional>
 #include <atomic>
+#include <set>
 
 #include "data/llm_client.h"
 #include "data/ssh_tunnel.h"
@@ -88,6 +89,20 @@ struct GroupQueryPipelineResult {
         return result;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Result persistence — save/load crew results to survive restarts
+// ---------------------------------------------------------------------------
+
+bool save_group_results(const GroupQueryPipelineResult& results,
+                        const std::vector<bool>& locked,
+                        const std::set<std::string>& locked_officers,
+                        const std::string& path = "data/ai_results.json");
+
+bool load_group_results(GroupQueryPipelineResult& results,
+                        std::vector<bool>& locked,
+                        std::set<std::string>& locked_officers,
+                        const std::string& path = "data/ai_results.json");
 
 // Callback for streaming AI responses to the TUI
 using AiStreamCallback = std::function<void(const std::string& chunk)>;

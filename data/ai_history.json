@@ -1,6 +1,30 @@
 [
   {
     "group": "PvP General",
+    "id": "1775443019-8366",
+    "input_tokens": 948,
+    "model": "gemini-2.5-flash",
+    "output_tokens": 406,
+    "prompt_summary": "Pick crews from ONLY these 13 officers:\n- T'Pring (CMD R5)\n- Tuvok (SCI R5)\n- Yuki Sulu (ENG R5) [shield]\n- Gorkon (CMD R5) [crit,applies:breach]\n- LORCA (SCI R5) [applies:breach,benefits:breach]\n- Da",
+    "query_type": "group_crew",
+    "rating": 0,
+    "response": "{\n  \"crews\": [\n    {\n      \"captain\": \"Mirror Picard\",\n      \"bridge\": [\n        \"Carol Freeman\",\n        \"Mirror Kira\"\n      ],\n      \"reasoning\": \"This crew is built around the current PvP meta of Isolytic Damage and Apex Barriers. Mirror Picard as Captain delivers an opening strike of Isolytic Damage and applies Apex Barrier, directly targeting enemy mitigation and defenses. Carol Freeman amplifies damage with additional Isolytic Damage and extra shots, significantly boosting the ship's offensive output and benefiting from various debuffs. Mirror Kira further enhances the crew's ability to apply Apex Barrier and provides crucial mitigation, ensuring both offensive pressure and defensive resilience.\"\n    },\n    {\n      \"captain\": \"Gorkon\",\n      \"bridge\": [\n        \"LORCA\",\n        \"Damar\"\n      ],\n      \"reasoning\": \"This crew specializes in applying and exploiting the Breach debuff for massive critical damage. Gorkon as Captain delivers an opening critical strike and applies Breach, setting up the synergy. LORCA ensures consistent application of Breach and gains benefits from it, while Damar capitalizes on the Breach state by significantly boosting critical hit damage, creating a powerful damage burst combination.\"\n    },\n    {\n      \"captain\": \"Alexander Marcus\",\n      \"bridge\": [\n        \"Weyoun\",\n        \"Gul Dukat\"\n      ],\n      \"reasoning\": \"This crew focuses on bypassing enemy shields and generating additional attacks and stat boosts. Alexander Marcus as Captain provides crucial Shield Piercing and applies Morale, weakening enemy defenses and boosting the ship's capabilities from the start. Weyoun synergizes by providing extra shots and further enhancing Morale, leading to increased damage output and ship stats. Gul Dukat adds another layer of offensive pressure by applying and benefiting from Breach, ensuring consistent debuffs and damage even against heavily armored targets.\"\n    }\n  ]\n}",
+    "timestamp": 1775443019
+  },
+  {
+    "group": "PvP General",
+    "id": "1775442495-7710",
+    "input_tokens": 790,
+    "model": "gemini-2.5-flash",
+    "output_tokens": 417,
+    "prompt_summary": "Pick crews from ONLY these 13 officers:\n- T'Pring (CMD R5)\n- Tuvok (SCI R5)\n- Yuki Sulu (ENG R5) [shield]\n- Gorkon (CMD R5) [crit,applies:breach]\n- LORCA (SCI R5) [applies:breach,benefits:breach]\n- Da",
+    "query_type": "group_crew",
+    "rating": 1,
+    "response": "{\n  \"crews\": [\n    {\n      \"captain\": \"Mirror Picard\",\n      \"bridge\": [\n        \"Carol Freeman\",\n        \"Mirror Kira\"\n      ],\n      \"reasoning\": \"This crew is built around the current PvP meta of Isolytic Damage and Apex Barriers. Mirror Picard as Captain delivers an opening strike of Isolytic Damage and applies Apex Barrier, directly countering enemy mitigation. Carol Freeman amplifies damage with additional Isolytic Damage and extra shots, significantly boosting the ship's offensive output. Mirror Kira further enhances Apex Barrier and provides crucial mitigation, making the ship both offensively potent and defensively resilient against other meta crews.\"\n    },\n    {\n      \"captain\": \"Gorkon\",\n      \"bridge\": [\n        \"LORCA\",\n        \"Damar\"\n      ],\n      \"reasoning\": \"This crew focuses on applying and benefiting from Breach, combined with critical hit amplification for massive damage bursts. Gorkon's Captain Maneuver applies Breach and boosts critical chances at the start of combat, providing a powerful opening debuff. LORCA and Damar's Officer Abilities both apply and benefit from Breach, ensuring a constant and powerful damage multiplier. Damar also further boosts critical hits, making this crew capable of devastating burst damage against any opponent.\"\n    },\n    {\n      \"captain\": \"Alexander Marcus\",\n      \"bridge\": [\n        \"Weyoun\",\n        \"Gul Dukat\"\n      ],\n      \"reasoning\": \"This crew aims to bypass shields and deliver sustained damage through Morale and extra shots, augmented by Breach. Alexander Marcus's Captain Maneuver applies Shield Pierce, weakening enemy defenses, and applies Morale for stat boosts. Weyoun complements this by providing extra shots and further Morale application and benefits, leading to higher damage output over time. Gul Dukat adds another significant damage multiplier by applying and benefiting from Breach, making this a well-rounded offensive crew.\"\n    }\n  ]\n}",
+    "timestamp": 1775442495
+  },
+  {
+    "group": "PvP General",
     "id": "1775434641-6351",
     "input_tokens": 786,
     "model": "llama3.1:8b",
