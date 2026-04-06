@@ -1,0 +1,167 @@
+{
+  "groups": {
+    "Apex & Isolytic": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 47.958289489s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "Armada": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 49.487366923s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "Base Attack": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 51.008982681s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "Base Defend": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 50.258002985s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "Loot & Cargo": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 48.835258952s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "PvE General": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 52.23265016s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "PvE Specialized": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 51.639562285s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "PvP General": {
+      "meta_summary": "```json\n{\n  \"officers\": [\n    {\n      \"name\": \"Mirror Picard\",\n      \"role\": \"CM\",\n      \"reason\": \"The cornerstone of the Mirror crew, he applies the 'Assimilated' debuff, enabling massive damage and mitigation from other Mirror officers.\"\n    },\n    {\n      \"name\": \"Mirror Data\",\n      \"role\": \"OA\",\n      \"reason\": \"Essential for Mirror crews, he significantly reduces the opponent's mitigation and provides an 'Apex Barrier' for defense.\"\n    },\n    {\n      \"name\": \"Mirror Kira\",\n      \"role\": ",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": [
+        "Carol Freeman",
+        "Damar",
+        "Data",
+        "Garak",
+        "Gul Dukat",
+        "Honorguard Worf",
+        "Hugh",
+        "Icheb",
+        "Infiltrator Tuvok",
+        "LORCA",
+        "Mariachi Q",
+        "Mirror Data",
+        "Mirror Ezri",
+        "Mirror Kira",
+        "Mirror Picard",
+        "Mirror Troi",
+        "Specialist Seven",
+        "Starfleet Q",
+        "Tuvok",
+        "Weyoun",
+        "Worf"
+      ]
+    },
+    "PvP on Battleship": {
+      "meta_summary": "```json\n{\n  \"officers\": [\n    {\n      \"name\": \"SNW La'an\",\n      \"role\": \"CM\",\n      \"reason\": \"As Captain, she significantly increases weapon shots and applies Burning, which activates her powerful Captain Maneuver for Battleships in PvP.\"\n    },\n    {\n      \"name\": \"SNW Una\",\n      \"role\": \"OA\",\n      \"reason\": \"She decreases enemy shield mitigation, which is crucial for Battleships to maximize their damage output in PvP.\"\n    },\n    {\n      \"name\": \"Shaxs (Lower Decks)\",\n      \"role\": \"OA\",\n ",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": [
+        "Carol Freeman",
+        "Damar",
+        "Data",
+        "Garak",
+        "Gul Dukat",
+        "Honorguard Worf",
+        "Icheb",
+        "Infiltrator Tuvok",
+        "LORCA",
+        "Mirror Data",
+        "Mirror Ezri",
+        "Mirror Kira",
+        "Nero",
+        "Shaxs",
+        "Specialist Seven",
+        "Spock",
+        "Tuvok",
+        "Worf"
+      ]
+    },
+    "PvP on Explorer": {
+      "meta_summary": "The current META for PvP on Explorer ships in Star Trek Fleet Command, as of April 5, 2026, emphasizes specialized Explorer Strike Teams and the powerful Mirror Universe synergy for anti-Explorer combat. These crews focus on maximizing offensive output through critical hits and weapon damage, while also employing strong defensive mechanics like Morale and Apex Barriers to enhance survivability against other players.\n\nHere are the top 15-20 officers for PvP on Explorer, along with their roles and",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "PvP on Interceptor": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 20.196971151s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "PvP vs Battleship": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 53.337716498s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "PvP vs Explorer": {
+      "meta_summary": "```json\n{\n  \"officers\": [\n    {\n      \"name\": \"Weyoun\",\n      \"role\": \"CM\",\n      \"reason\": \"As Captain, Weyoun provides a 100% chance to apply Morale, which is crucial for activating many anti-Explorer officer abilities and boosting piercing stats on an Explorer ship.\"\n    },\n    {\n      \"name\": \"Pon\",\n      \"role\": \"OA\",\n      \"reason\": \"Pon significantly decreases the opponent's critical hit chance, providing essential defense for your Explorer in PvP, especially when paired with Morale.\"\n   ",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": [
+        "Alexander Marcus",
+        "Data",
+        "Five of Eleven",
+        "Ikat'ika",
+        "John Harrison",
+        "LORCA",
+        "Mirror Data",
+        "Mirror Kira",
+        "Mirror Troi",
+        "SNW James Kirk",
+        "Soran",
+        "Vella",
+        "Weyoun",
+        "Worf",
+        "Yuki Sulu"
+      ]
+    },
+    "PvP vs Interceptor": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 52.721944991s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    },
+    "State Chain": {
+      "meta_summary": "Error: Gemini rate limited — retry in a moment. You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 48.272382381s.",
+      "model_used": "gemini-2.5-flash",
+      "timestamp": 1775434109,
+      "top_crews_desc": [],
+      "top_officers": []
+    }
+  },
+  "last_refresh": 1775434109
+}

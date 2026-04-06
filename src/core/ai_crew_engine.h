@@ -143,11 +143,6 @@ public:
         GroupProgressCallback progress_cb = nullptr,
         std::atomic<bool>* cancel_flag = nullptr);
 
-    // Query a single group (for re-running one group or targeted queries)
-    GroupQueryResult query_single_group(
-        const OfficerGroup& group,
-        AiStreamCallback stream_cb = nullptr);
-
     // -------------------------------------------------------------------
     // META cache refresh (Gemini web-search-grounded)
     //
@@ -160,9 +155,11 @@ public:
                                                     const std::string& group_name)>;
 
     // Refresh the META cache. known_officers = all officer names in the roster.
+    // player_ctx = player context for level-aware / ship-aware prompts.
     // Returns empty string on success, error message on failure.
     std::string refresh_meta_cache(
         const std::vector<std::string>& known_officers,
+        const MetaPlayerContext& player_ctx = {},
         AiStreamCallback stream_cb = nullptr,
         MetaRefreshCallback progress_cb = nullptr,
         std::atomic<bool>* cancel_flag = nullptr);
@@ -174,8 +171,54 @@ public:
     void load_meta_cache();
 
     // -------------------------------------------------------------------
-    // History & rating
+    // META template workflow (manual copy-paste via web AI)
+    //
+    // Generates batched prompts the user copies into a web AI (ChatGPT,
+    // Gemini web, Claude web — whichever has the best STFC knowledge).
+    // User pastes the AI response back and we parse it into meta_cache.
+    //
+    // 4 batches:
+    //   0: PvP (7 groups)
+    //   1: PvE (2 groups)
+    //   2: Strategy (4 groups)
+    //   3: Utility (2 groups)
     // -------------------------------------------------------------------
+
+    static constexpr int META_BATCH_COUNT = 4;
+
+    // Get prompt text for a specific batch (0-3)
+    std::string generate_meta_template(int batch_index,
+                                        const MetaPlayerContext& player_ctx = {}) const;
+
+    // Get batch name (e.g., "PvP", "PvE", "Strategy", "Utility")
+    static std::string meta_batch_name(int batch_index);
+
+    // Import a pasted response for a batch. Parses officer names against
+    // known_officers, creates/updates MetaGroupEntries, saves cache.
+    // Returns number of groups successfully imported, or -1 on error.
+    int import_meta_response(int batch_index,
+                             const std::string& response,
+                             const std::vector<std::string>& known_officers);
+
+    // -------------------------------------------------------------------
+    // Group preparation (for staged workflow)
+    //
+    // Prepares groups without querying Ollama. Returns the filtered
+    // officer groups so the TUI can display them for review/editing
+    // before sending to the LLM.
+    // -------------------------------------------------------------------
+
+    // Prepare groups from META cache (or tag-based fallback).
+    // Does NOT query any LLM — just builds the filtered officer lists.
+    std::vector<OfficerGroup> prepare_groups(
+        const std::vector<ClassifiedOfficer>& officers) const;
+
+    // Query a single pre-built group (for step-by-step workflow).
+    // The group can have been edited by the user (officers toggled on/off).
+    // This is the public entry point the TUI calls per-group.
+    GroupQueryResult query_single_group(
+        const OfficerGroup& group,
+        AiStreamCallback stream_cb = nullptr);
 
     AiHistoryStore& history() { return history_; }
     const AiHistoryStore& history() const { return history_; }

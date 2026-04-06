@@ -16,36 +16,67 @@ namespace stfc {
 
 std::string group_id_str(OfficerGroupId id) {
     switch (id) {
-        case OfficerGroupId::PvP_Combat:    return "PvP Combat";
-        case OfficerGroupId::PvE_Hostile:   return "PvE Hostile";
-        case OfficerGroupId::Base_Attack:   return "Base Attack";
-        case OfficerGroupId::Base_Defend:   return "Base Defend";
-        case OfficerGroupId::Armada:        return "Armada";
-        case OfficerGroupId::Mining:        return "Mining";
-        case OfficerGroupId::Loot_Cargo:    return "Loot & Cargo";
-        case OfficerGroupId::State_Chain:   return "State Chain";
-        case OfficerGroupId::Apex_Isolytic: return "Apex & Isolytic";
-        case OfficerGroupId::Support:       return "Support";
+        case OfficerGroupId::PvP_General:        return "PvP General";
+        case OfficerGroupId::PvP_On_Explorer:    return "PvP on Explorer";
+        case OfficerGroupId::PvP_On_Battleship:  return "PvP on Battleship";
+        case OfficerGroupId::PvP_On_Interceptor: return "PvP on Interceptor";
+        case OfficerGroupId::PvP_Vs_Explorer:    return "PvP vs Explorer";
+        case OfficerGroupId::PvP_Vs_Battleship:  return "PvP vs Battleship";
+        case OfficerGroupId::PvP_Vs_Interceptor: return "PvP vs Interceptor";
+        case OfficerGroupId::PvE_General:        return "PvE General";
+        case OfficerGroupId::PvE_Specialized:    return "PvE Specialized";
+        case OfficerGroupId::Base_Attack:        return "Base Attack";
+        case OfficerGroupId::Base_Defend:        return "Base Defend";
+        case OfficerGroupId::Armada:             return "Armada";
+        case OfficerGroupId::Mining:             return "Mining";
+        case OfficerGroupId::Loot_Cargo:         return "Loot & Cargo";
+        case OfficerGroupId::State_Chain:        return "State Chain";
+        case OfficerGroupId::Apex_Isolytic:      return "Apex & Isolytic";
+        case OfficerGroupId::Support:            return "Support";
     }
     return "Unknown";
 }
 
 OfficerGroupId group_id_from_str(const std::string& s) {
-    if (s == "PvP Combat")      return OfficerGroupId::PvP_Combat;
-    if (s == "PvE Hostile")     return OfficerGroupId::PvE_Hostile;
-    if (s == "Base Attack")     return OfficerGroupId::Base_Attack;
-    if (s == "Base Defend")     return OfficerGroupId::Base_Defend;
-    if (s == "Armada")          return OfficerGroupId::Armada;
-    if (s == "Mining")          return OfficerGroupId::Mining;
-    if (s == "Loot & Cargo")    return OfficerGroupId::Loot_Cargo;
-    if (s == "State Chain")     return OfficerGroupId::State_Chain;
-    if (s == "Apex & Isolytic") return OfficerGroupId::Apex_Isolytic;
-    if (s == "Support")         return OfficerGroupId::Support;
+    if (s == "PvP General")        return OfficerGroupId::PvP_General;
+    if (s == "PvP on Explorer")    return OfficerGroupId::PvP_On_Explorer;
+    if (s == "PvP on Battleship")  return OfficerGroupId::PvP_On_Battleship;
+    if (s == "PvP on Interceptor") return OfficerGroupId::PvP_On_Interceptor;
+    if (s == "PvP vs Explorer")    return OfficerGroupId::PvP_Vs_Explorer;
+    if (s == "PvP vs Battleship")  return OfficerGroupId::PvP_Vs_Battleship;
+    if (s == "PvP vs Interceptor") return OfficerGroupId::PvP_Vs_Interceptor;
+    if (s == "PvE General")        return OfficerGroupId::PvE_General;
+    if (s == "PvE Specialized")    return OfficerGroupId::PvE_Specialized;
+    if (s == "Base Attack")        return OfficerGroupId::Base_Attack;
+    if (s == "Base Defend")        return OfficerGroupId::Base_Defend;
+    if (s == "Armada")             return OfficerGroupId::Armada;
+    if (s == "Mining")             return OfficerGroupId::Mining;
+    if (s == "Loot & Cargo")       return OfficerGroupId::Loot_Cargo;
+    if (s == "State Chain")        return OfficerGroupId::State_Chain;
+    if (s == "Apex & Isolytic")    return OfficerGroupId::Apex_Isolytic;
+    if (s == "Support")            return OfficerGroupId::Support;
+    // Legacy compat: map old group names to new equivalents
+    if (s == "PvP Combat")         return OfficerGroupId::PvP_General;
+    if (s == "PvE Hostile")        return OfficerGroupId::PvE_General;
     return OfficerGroupId::Support;
 }
 
 // ===========================================================================
 // Group officers by classification tags
+//
+// NOTE: Tag-based grouping is the FALLBACK when no META cache exists.
+// With META cache, build_meta_filtered_groups() in ai_crew_engine.cpp
+// handles the grouping by intersecting Gemini's per-group officer lists
+// with the owned roster.
+//
+// For the tag-based fallback, we only produce a subset of groups:
+// - PvP_General (all PvP officers — Gemini will split by ship type later)
+// - PvE_General (all PvE officers — Gemini will split general vs specialized)
+// - Plus all the non-PvP/PvE groups unchanged
+//
+// The 7 PvP sub-groups and 2 PvE sub-groups are only meaningful when
+// driven by Gemini's META knowledge. Tag-based classification can't tell
+// "good on Explorer" from "good on Battleship" — that requires META.
 // ===========================================================================
 
 std::vector<OfficerGroup> group_officers(
@@ -64,14 +95,16 @@ std::vector<OfficerGroup> group_officers(
         groups[id] = std::move(g);
     };
 
-    init_group(OfficerGroupId::PvP_Combat,
-        "Officers specializing in player-vs-player combat",
+    // For tag-based fallback, we use PvP_General as the catch-all PvP bucket
+    init_group(OfficerGroupId::PvP_General,
+        "Officers specializing in player-vs-player combat (all ship types)",
         "Focus on: armor/shield piercing, critical hits, damage bursts, "
         "stat boosters, ability amplifiers. Captain CM should deliver a powerful opening "
         "strike or critical debuff. Bridge OA should sustain damage output or defensive advantage.");
 
-    init_group(OfficerGroupId::PvE_Hostile,
-        "Officers effective against hostile NPCs",
+    // For tag-based fallback, PvE_General is the catch-all PvE bucket
+    init_group(OfficerGroupId::PvE_General,
+        "Officers effective against hostile NPCs (swarm, dailies, grinding)",
         "Focus on: sustained damage, survivability, crit damage, extra shots, "
         "hull repair/shield regen. Captain CM should be a big damage opener. "
         "Bridge OA should keep damage output high through long fights. "
@@ -132,7 +165,7 @@ std::vector<OfficerGroup> group_officers(
     // ---------------------------------------------------------------
     // EXCLUSIVE assignment: each officer goes to ONE primary group.
     // Priority order: most-specific tags first, broad tags last.
-    // This prevents 225/289 officers landing in PvP Combat.
+    // This prevents 225/289 officers landing in PvP General.
     // ---------------------------------------------------------------
     for (const auto& off : officers) {
         bool assigned = false;
@@ -185,17 +218,17 @@ std::vector<OfficerGroup> group_officers(
             assigned = true;
         }
 
-        // 8. PvE Hostile — specific PvE tags
+        // 8. PvE General — specific PvE tags
         if (!assigned && (off.pve_hostile || off.is_pve_specific || off.mission_boss ||
             off.hostile_swarm || off.hostile_borg || off.hostile_eclipse ||
             off.hostile_gorn || off.hostile_xindi || off.hostile_silent || off.hostile_8472)) {
-            groups[OfficerGroupId::PvE_Hostile].officers.push_back(&off);
+            groups[OfficerGroupId::PvE_General].officers.push_back(&off);
             assigned = true;
         }
 
-        // 9. PvP Combat — only pvp_specific, NOT dual_use/crit which are too broad
+        // 9. PvP General — only pvp_specific, NOT dual_use/crit which are too broad
         if (!assigned && off.is_pvp_specific) {
-            groups[OfficerGroupId::PvP_Combat].officers.push_back(&off);
+            groups[OfficerGroupId::PvP_General].officers.push_back(&off);
             assigned = true;
         }
 
@@ -208,7 +241,7 @@ std::vector<OfficerGroup> group_officers(
             assigned = true;
         }
 
-        // 11. Unassigned high-rank officers → Support
+        // 11. Unassigned high-rank officers -> Support
         if (!assigned && (off.rank >= 3 || off.rarity == 'E' || off.rarity == 'R')) {
             groups[OfficerGroupId::Support].officers.push_back(&off);
         }
@@ -246,7 +279,7 @@ std::vector<OfficerGroup> group_officers(
                 return a->rarity > b->rarity;
             });
 
-        // No hard cap — the natural filtering chain (META → owned → leveled)
+        // No hard cap — the natural filtering chain (META -> owned -> leveled)
         // produces small groups organically. This tag-based grouping is the
         // fallback when no META cache exists; exclusive assignment already
         // keeps groups manageable.
@@ -254,10 +287,11 @@ std::vector<OfficerGroup> group_officers(
 
     // Collect non-empty groups into result vector
     std::vector<OfficerGroup> result;
-    // Ordered iteration
+    // Ordered iteration — for tag-based fallback, only PvP_General and PvE_General
+    // are populated (the 7 sub-PvP and PvE_Specialized are Gemini-driven only)
     static const OfficerGroupId order[] = {
-        OfficerGroupId::PvP_Combat,
-        OfficerGroupId::PvE_Hostile,
+        OfficerGroupId::PvP_General,
+        OfficerGroupId::PvE_General,
         OfficerGroupId::Base_Attack,
         OfficerGroupId::Base_Defend,
         OfficerGroupId::Armada,
@@ -269,9 +303,9 @@ std::vector<OfficerGroup> group_officers(
     };
 
     for (auto id : order) {
-        auto& g = groups[id];
-        if (!g.empty()) {
-            result.push_back(std::move(g));
+        auto it = groups.find(id);
+        if (it != groups.end() && !it->second.empty()) {
+            result.push_back(std::move(it->second));
         }
     }
 
@@ -282,7 +316,8 @@ std::vector<OfficerGroup> group_officers(
 // Focused system prompts per group
 // ===========================================================================
 
-std::string group_system_prompt(OfficerGroupId group_id) {
+std::string group_system_prompt(OfficerGroupId group_id,
+                               const std::vector<std::string>& example_names) {
     std::ostringstream ss;
 
     // Common preamble — much shorter than the monolithic prompt
@@ -300,13 +335,72 @@ std::string group_system_prompt(OfficerGroupId group_id) {
 
     // Group-specific focus
     switch (group_id) {
-        case OfficerGroupId::PvP_Combat:
-            ss << "FOCUS: PvP COMBAT crews. Prioritize armor/shield piercing, crits, damage bursts, stat boosters.\n";
+        // --- PvP granular by ship type ---
+        case OfficerGroupId::PvP_General:
+            ss << "FOCUS: UNIVERSAL PvP COMBAT crews. These should work well on ANY ship type.\n"
+               << "Prioritize armor/shield piercing, crits, damage bursts, stat boosters.\n"
+               << "Captain CM should deliver a powerful opening strike or critical debuff.\n";
             break;
-        case OfficerGroupId::PvE_Hostile:
-            ss << "FOCUS: PvE HOSTILE GRINDING crews. Prioritize sustained damage, survivability, crit, extra shots.\n"
-               << "Note hostile-type tags (vs_swarm, vs_borg, etc.) for specialized anti-hostile crews.\n";
+        case OfficerGroupId::PvP_On_Explorer:
+            ss << "FOCUS: PvP crews when the player FLIES AN EXPLORER.\n"
+               << "Explorers have strong shields and balanced stats. Optimize for shield synergy, "
+               << "sustained damage, and exploiting the Explorer's defensive strengths.\n"
+               << "Consider officers whose abilities scale with shield stats or provide shield repair.\n";
             break;
+        case OfficerGroupId::PvP_On_Battleship:
+            ss << "FOCUS: PvP crews when the player FLIES A BATTLESHIP.\n"
+               << "Battleships have high hull/armor and strong weapons. Optimize for raw damage output, "
+               << "armor piercing through enemy defenses, and hull-based survivability.\n"
+               << "Consider officers whose abilities scale with weapon damage or hull HP.\n";
+            break;
+        case OfficerGroupId::PvP_On_Interceptor:
+            ss << "FOCUS: PvP crews when the player FLIES AN INTERCEPTOR.\n"
+               << "Interceptors are fast with high crit chance but fragile. Optimize for devastating "
+               << "opening strikes, crit damage multipliers, and speed-based advantages.\n"
+               << "Captain CM should aim to end fights quickly before the Interceptor takes too much damage.\n";
+            break;
+        case OfficerGroupId::PvP_Vs_Explorer:
+            ss << "FOCUS: PvP crews optimized for KILLING EXPLORERS.\n"
+               << "Explorers have strong shields. Prioritize shield piercing, shield drain, "
+               << "and abilities that bypass or strip shields.\n"
+               << "The triangle advantage: Interceptors beat Explorers, so consider "
+               << "crews that amplify the Interceptor advantage or negate Explorer shield strength.\n";
+            break;
+        case OfficerGroupId::PvP_Vs_Battleship:
+            ss << "FOCUS: PvP crews optimized for KILLING BATTLESHIPS.\n"
+               << "Battleships have heavy armor/hull. Prioritize armor piercing, hull damage, "
+               << "and abilities that reduce armor effectiveness.\n"
+               << "The triangle advantage: Explorers beat Battleships, so consider "
+               << "crews that amplify Explorer advantages or bypass Battleship armor.\n";
+            break;
+        case OfficerGroupId::PvP_Vs_Interceptor:
+            ss << "FOCUS: PvP crews optimized for KILLING INTERCEPTORS.\n"
+               << "Interceptors are fast and crit-heavy but fragile. Prioritize damage mitigation "
+               << "against crits, accuracy to hit fast targets, and front-loaded damage to destroy them quickly.\n"
+               << "The triangle advantage: Battleships beat Interceptors, so consider "
+               << "crews that amplify Battleship firepower or reduce incoming crit damage.\n";
+            break;
+
+        // --- PvE ---
+        case OfficerGroupId::PvE_General:
+            ss << "FOCUS: PvE HOSTILE GRINDING crews for daily swarm grinding, general hostiles.\n"
+               << "Prioritize sustained damage, survivability, crit damage, extra shots.\n"
+               << "Hull repair/shield regen keep you grinding longer without going home to repair.\n"
+               << "Captain CM should be a big damage opener. Bridge OA should sustain DPS.\n";
+            break;
+        case OfficerGroupId::PvE_Specialized:
+            ss << "FOCUS: PvE SPECIALIZED HOSTILE crews — borg, eclipse, gorn, xindi, silent enemy, 8472.\n"
+               << "Each hostile type has specific mechanics. Match officers to the hostile type:\n"
+               << "- vs_borg: borg-specific abilities, assimilation defense\n"
+               << "- vs_eclipse: eclipse armada and hostile specialists\n"
+               << "- vs_gorn: gorn-specific combat abilities\n"
+               << "- vs_xindi: xindi engagement specialists\n"
+               << "- vs_silent: silent enemy combat abilities\n"
+               << "- vs_8472: species 8472 specialists\n"
+               << "Build specialized crews per hostile type where possible.\n";
+            break;
+
+        // --- Other scenarios (unchanged) ---
         case OfficerGroupId::Base_Attack:
             ss << "FOCUS: BASE ATTACK crews. Maximum burst damage, armor piercing. Short fights = overwhelming firepower.\n";
             break;
@@ -340,11 +434,21 @@ std::string group_system_prompt(OfficerGroupId group_id) {
             break;
     }
 
+    // Build JSON format example using REAL officer names from the group
+    // (1B models copy examples verbatim, so fake names like "Kirk" cause hallucination)
     ss << "\nRespond with ONLY valid JSON. Use EXACTLY this format:\n"
-       << R"({"crews":[{"captain":"exact officer name","bridge":["officer name 1","officer name 2"],"reasoning":"why this crew works"}]})" << "\n"
-       << "CRITICAL: captain and bridge values must be plain strings (exact names from the list), NOT objects.\n"
-       << "Example with 2 crews:\n"
-       << R"({"crews":[{"captain":"Kirk","bridge":["Spock","McCoy"],"reasoning":"Kirk CM opens strong, Spock OA boosts damage, McCoy OA heals"},{"captain":"Picard","bridge":["Data","Worf"],"reasoning":"Picard CM buffs morale, Data OA crits, Worf OA pierces armor"}]})";
+       << R"({"crews":[{"captain":"NAME","bridge":["NAME","NAME"],"reasoning":"why"}]})" << "\n"
+       << "CRITICAL: captain and bridge values must be plain strings (exact names from the list), NOT objects.\n";
+
+    if (example_names.size() >= 3) {
+        // Use first 3 real officer names as example
+        ss << "Example: "
+           << R"({"crews":[{"captain":")" << example_names[0]
+           << R"(","bridge":[")" << example_names[1] << R"(",")" << example_names[2]
+           << R"("],"reasoning":"explain why"}]})" << "\n";
+    }
+
+    ss << "IMPORTANT: You may ONLY use names from the officer list provided. Do NOT invent names.\n";
 
     return ss.str();
 }

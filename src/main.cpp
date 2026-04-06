@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <atomic>
 #include <mutex>
+#include <set>
 
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
@@ -62,6 +63,38 @@ bool is_mining_scenario(Scenario s) {
         default:
             return false;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard helpers — Wayland (wl-copy/wl-paste) with xclip fallback
+// ---------------------------------------------------------------------------
+
+bool clipboard_copy(const std::string& text) {
+    // Try wl-copy first (Wayland), then xclip (X11)
+    for (const char* cmd : {"wl-copy", "xclip -selection clipboard"}) {
+        FILE* pipe = popen(cmd, "w");
+        if (!pipe) continue;
+        size_t written = fwrite(text.data(), 1, text.size(), pipe);
+        int status = pclose(pipe);
+        if (status == 0 && written == text.size()) return true;
+    }
+    return false;
+}
+
+std::string clipboard_paste() {
+    // Try wl-paste first (Wayland), then xclip (X11)
+    for (const char* cmd : {"wl-paste --no-newline", "xclip -selection clipboard -o"}) {
+        FILE* pipe = popen(cmd, "r");
+        if (!pipe) continue;
+        std::string result;
+        char buf[4096];
+        while (size_t n = fread(buf, 1, sizeof(buf), pipe)) {
+            result.append(buf, n);
+        }
+        int status = pclose(pipe);
+        if (status == 0 && !result.empty()) return result;
+    }
+    return "";
 }
 
 enum class LoadoutPosture {
@@ -866,7 +899,7 @@ struct AppState {
     bool ai_initialized = false;
     bool ai_initializing = false;   // true while background init is running
 
-    // Group-based query pipeline state (NEW)
+    // Group-based query pipeline state
     GroupQueryPipelineResult ai_group_result;   // Results from group-based pipeline
     int ai_selected_group = 0;                  // Selected group in left panel
     int ai_selected_group_crew = 0;             // Selected crew within selected group
@@ -876,6 +909,34 @@ struct AppState {
     // META cache refresh state
     std::atomic<bool> ai_meta_refreshing{false};  // true while Gemini META refresh is running
     std::string ai_meta_progress;                  // "Refreshing PvP Combat (2/8)..."
+
+    // ---------------------------------------------------------------
+    // Staged workflow state (Groups mode sub-stages)
+    //
+    // Stage 0: META Review — show Gemini's META officer list per group
+    //          + which officers you own vs. don't own
+    // Stage 1: Planned Prompt — show editable officer list for selected group
+    //          User can toggle officers on/off with Space, see the prompt
+    //          Press Enter to send THIS group to AI
+    // Stage 2: Results — show AI crew recs for completed groups
+    //          Rate with +/-, press Enter on another group to go to Stage 1
+    // ---------------------------------------------------------------
+    int ai_group_stage = 0;                        // 0=META review, 1=planned prompt, 2=results
+    std::vector<OfficerGroup> ai_prepared_groups;   // Groups built from META cache (editable)
+    // Per-group toggle state: ai_officer_enabled[group_idx][officer_idx] = true/false
+    std::vector<std::vector<bool>> ai_officer_enabled;
+    int ai_officer_scroll = 0;                     // scroll position in officer list (stage 1)
+    int ai_selected_officer = 0;                   // selected officer in stage 1 list
+
+    // Crew locking — locked crew results feed into subsequent AI prompts
+    // so the AI doesn't reuse those officers and builds complementary crews.
+    // locked_crews[group_idx] = true if the user confirmed/locked that group's result.
+    // locked_officer_names = set of officer names used by locked crews (across all groups).
+    std::vector<bool> ai_group_locked;
+    std::set<std::string> ai_locked_officer_names;
+
+    // META template batch state (manual copy-paste workflow)
+    int ai_meta_template_batch = 0;  // Current batch index (0-3: PvP, PvE, Strategy, Utility)
 
     void ai_init() {
         std::string err = ai_engine.initialize();
@@ -3510,7 +3571,19 @@ static Element render_ai_advisor(AppState& state) {
         }),
         hbox({
             filler(),
-            text(state.ai_running ? "  [Running...]" : "  [Enter] Run") | dim,
+            // Stage-aware hints for Groups mode
+            [&]() -> Element {
+                if (safe_mode == 0 && !state.ai_running) {
+                    static const char* stage_hints[] = {
+                        "  [T] Copy template  [P] Paste response  [B] Batch  [M] Refresh  [Enter] Prepare",
+                        "  [Enter] Send to AI  [Space] Toggle  [Esc] Back",
+                        "  [Enter] Re-query  [+/-] Rate  [Esc] Back",
+                    };
+                    int s = std::clamp(state.ai_group_stage, 0, 2);
+                    return text(stage_hints[s]) | dim;
+                }
+                return text(state.ai_running ? "  [Running...]" : "  [Enter] Run") | dim;
+            }(),
             text("  [I] Re-init") | dim,
         }),
     });
@@ -3582,141 +3655,476 @@ static Element render_ai_advisor(AppState& state) {
     Element content;
 
     if (safe_mode == 0) {
-        // Groups mode — per-group AI crew recommendations
-        if (!state.ai_group_result.ok() && state.ai_group_result.group_results.empty()) {
-            if (!state.ai_group_result.error.empty()) {
+        // ===============================================================
+        // Groups mode — 3-stage workflow
+        //
+        // Stage 0: META Review — show Gemini's META cache per group
+        // Stage 1: Planned Prompt — editable officer list for selected group
+        // Stage 2: Results — AI crew recs per group
+        // ===============================================================
+        int stage = std::clamp(state.ai_group_stage, 0, 2);
+        const auto& meta = state.ai_engine.meta_cache();
+
+        if (stage == 0) {
+            // -------------------------------------------------------
+            // Stage 0: META Review
+            // Left: group list from META cache
+            // Right: META officers for selected group, owned vs not-owned
+            // -------------------------------------------------------
+            if (meta.empty()) {
                 content = vbox({
-                    text("Error: " + state.ai_group_result.error) | color(Color::Red),
-                    text("Press [Enter] to retry.") | dim,
+                    text("No META cache available.") | center | color(Color::Yellow),
+                    text("") ,
+                    text("Option 1: Press [T] to copy a META template to clipboard,") | center | dim,
+                    text("paste into a web AI (ChatGPT/Gemini/Claude), copy the response,") | center | dim,
+                    text("then press [P] to import. Press [B] to cycle batches.") | center | dim,
+                    text("") ,
+                    text("Option 2: Press [M] to auto-refresh META from Gemini API.") | center | dim,
+                    text("") ,
+                    text("Once cached, press [Enter] to prepare groups for AI.") | center | dim,
                 });
             } else {
+                // Build sorted group name list for stable ordering
+                static const char* group_order[] = {
+                    "PvP General", "PvP on Explorer", "PvP on Battleship", "PvP on Interceptor",
+                    "PvP vs Explorer", "PvP vs Battleship", "PvP vs Interceptor",
+                    "PvE General", "PvE Specialized",
+                    "Base Attack", "Base Defend",
+                    "Armada", "Loot & Cargo", "State Chain", "Apex & Isolytic"
+                };
+                std::vector<std::string> group_names;
+                for (const auto& name : group_order) {
+                    if (meta.has_group(name)) group_names.push_back(name);
+                }
+                // Add any extras not in the order list
+                for (const auto& [name, _] : meta.groups) {
+                    bool found = false;
+                    for (const auto& g : group_names) { if (g == name) { found = true; break; } }
+                    if (!found) group_names.push_back(name);
+                }
+
+                // Build owned officer name lookup
+                std::set<std::string> owned_lower;
+                if (state.optimizer) {
+                    for (const auto& off : state.optimizer->officers()) {
+                        std::string nl = off.name;
+                        std::transform(nl.begin(), nl.end(), nl.begin(), ::tolower);
+                        owned_lower.insert(nl);
+                    }
+                }
+
+                // Clamp selection
+                int sel_group = std::clamp(state.ai_selected_group, 0,
+                    std::max(0, (int)group_names.size() - 1));
+                state.ai_selected_group = sel_group;
+
+                // Left panel: group list
+                Elements left_rows;
+                for (size_t i = 0; i < group_names.size(); ++i) {
+                    const auto* entry = meta.get_group(group_names[i]);
+                    bool sel = ((int)i == sel_group);
+
+                    int total = entry ? (int)entry->top_officers.size() : 0;
+                    int owned = 0;
+                    if (entry) {
+                        for (const auto& name : entry->top_officers) {
+                            std::string nl = name;
+                            std::transform(nl.begin(), nl.end(), nl.begin(), ::tolower);
+                            if (owned_lower.count(nl)) ++owned;
+                        }
+                    }
+
+                    auto row = hbox({
+                        text(sel ? "> " : "  "),
+                        text(group_names[i]) | bold | color(Color::Cyan),
+                        filler(),
+                        text(std::to_string(owned) + "/" + std::to_string(total) + " owned") |
+                            color(owned > 0 ? Color::Green : Color::Red),
+                    });
+                    if (sel) row = row | inverted | focus;
+                    left_rows.push_back(row);
+                    if (i < group_names.size() - 1)
+                        left_rows.push_back(separatorLight());
+                }
+
+                // Right panel: META officers for selected group
+                Element detail = text("");
+                if (sel_group >= 0 && sel_group < (int)group_names.size()) {
+                    const auto* entry = meta.get_group(group_names[sel_group]);
+                    Elements lines;
+                    lines.push_back(text(group_names[sel_group] + " — META Officers") | bold);
+                    lines.push_back(separator());
+
+                    if (entry && !entry->top_officers.empty()) {
+                        for (size_t oi = 0; oi < entry->top_officers.size(); ++oi) {
+                            const auto& oname = entry->top_officers[oi];
+                            std::string nl = oname;
+                            std::transform(nl.begin(), nl.end(), nl.begin(), ::tolower);
+                            bool is_owned = owned_lower.count(nl) > 0;
+
+                            lines.push_back(hbox({
+                                text("  " + std::to_string(oi + 1) + ". ") | dim,
+                                text(oname) | bold | color(is_owned ? Color::Green : Color::Red),
+                                text(is_owned ? "  [OWNED]" : "  [NOT OWNED]") |
+                                    dim | color(is_owned ? Color::Green : Color::Red),
+                            }));
+                        }
+                        // Summary
+                        if (!entry->meta_summary.empty()) {
+                            lines.push_back(separator());
+                            lines.push_back(text("Summary:") | bold | dim);
+                            auto wrapped = wrap_text(entry->meta_summary, 55, dim);
+                            for (auto& w : wrapped) lines.push_back(std::move(w));
+                        }
+                    } else {
+                        lines.push_back(text("  No META officers for this group.") | dim);
+                    }
+
+                    detail = vbox(lines);
+                }
+
+                // Footer
+                Elements footer;
+                std::string batch_name = stfc::AiCrewEngine::meta_batch_name(state.ai_meta_template_batch);
+                footer.push_back(hbox({
+                    text("  Stage 0: META Review") | bold | color(Color::Cyan),
+                    text("  |  Template batch: ") | dim,
+                    text(batch_name) | bold | color(Color::Yellow),
+                    text(" (" + std::to_string(state.ai_meta_template_batch + 1) + "/" +
+                         std::to_string(stfc::AiCrewEngine::META_BATCH_COUNT) + ")") | dim,
+                    filler(),
+                    text("Cache: " + meta.age_str()) | dim,
+                }));
+                footer.push_back(hbox({
+                    text("  [T] Copy template  [P] Paste response  [B] Next batch  [M] Refresh  [Enter] Prepare") | dim,
+                }));
+
                 content = vbox({
-                    text("Press [Enter] to run group-based AI crew analysis.") | center | dim,
-                    text("") ,
-                    text("Officers are split into focused groups (PvP, PvE, Base, Armada, etc.)") | center | dim,
-                    text("and each group is queried separately for better results.") | center | dim,
-                    text("") ,
-                    text("Rate results with [+] Good / [-] Bad to improve future queries.") | center | dim,
+                    hbox({
+                        vbox(left_rows) | vscroll_indicator | yframe | size(WIDTH, EQUAL, 40),
+                        separator(),
+                        detail | flex | vscroll_indicator | yframe,
+                    }) | flex,
+                    separator(),
+                    vbox(footer),
+                });
+            }
+        } else if (stage == 1) {
+            // -------------------------------------------------------
+            // Stage 1: Planned Prompt — editable officer list per group
+            // Left: group list (with officer counts, query status)
+            // Right: officers in selected group with toggles
+            // -------------------------------------------------------
+            if (state.ai_prepared_groups.empty()) {
+                content = vbox({
+                    text("No groups prepared. Press [Esc] to go back to META Review.") | center | dim,
+                });
+            } else {
+                int sel_group = std::clamp(state.ai_selected_group, 0,
+                    std::max(0, (int)state.ai_prepared_groups.size() - 1));
+                state.ai_selected_group = sel_group;
+
+                // Left panel: prepared groups
+                Elements left_rows;
+                for (size_t i = 0; i < state.ai_prepared_groups.size(); ++i) {
+                    const auto& pg = state.ai_prepared_groups[i];
+                    bool sel = ((int)i == sel_group);
+
+                    // Count enabled officers
+                    int enabled_count = 0;
+                    if (i < state.ai_officer_enabled.size()) {
+                        for (bool b : state.ai_officer_enabled[i]) if (b) ++enabled_count;
+                    }
+
+                    // Check if this group already has results
+                    bool has_result = false;
+                    bool has_error = false;
+                    for (const auto& gr : state.ai_group_result.group_results) {
+                        if (gr.group_name == pg.name) {
+                            has_result = gr.ok();
+                            has_error = !gr.error.empty() && !gr.ok();
+                            break;
+                        }
+                    }
+
+                    Color status_col = has_result ? Color::Green : (has_error ? Color::Red : Color::GrayLight);
+                    std::string status_str = has_result ? "done" : (has_error ? "error" : "ready");
+
+                    // Show not-owned count if any
+                    std::string missing_str;
+                    if (!pg.meta_not_owned.empty()) {
+                        missing_str = " +" + std::to_string(pg.meta_not_owned.size()) + " missing";
+                    }
+
+                    auto row = hbox({
+                        text(sel ? "> " : "  "),
+                        text(pg.name) | bold | color(Color::Cyan),
+                        text(" (" + std::to_string(enabled_count) + "/" +
+                             std::to_string(pg.size()) + ")") | dim,
+                        text(missing_str) | dim | color(Color::RedLight),
+                        filler(),
+                        text(status_str) | color(status_col),
+                    });
+                    if (sel) row = row | inverted | focus;
+                    left_rows.push_back(row);
+                    if (i < state.ai_prepared_groups.size() - 1)
+                        left_rows.push_back(separatorLight());
+                }
+
+                // Right panel: officers in selected group with toggle checkboxes
+                Element detail = text("");
+                if (sel_group >= 0 && sel_group < (int)state.ai_prepared_groups.size()) {
+                    const auto& pg = state.ai_prepared_groups[sel_group];
+                    Elements lines;
+                    lines.push_back(hbox({
+                        text(pg.name + " — Officers") | bold,
+                        filler(),
+                        text("[Space] Toggle  [Enter] Send to AI") | dim,
+                    }));
+                    lines.push_back(separator());
+
+                    // Clamp officer selection
+                    int max_off = std::max(0, pg.size() - 1);
+                    state.ai_selected_officer = std::clamp(state.ai_selected_officer, 0, max_off);
+
+                    const auto& enabled = (sel_group < (int)state.ai_officer_enabled.size())
+                        ? state.ai_officer_enabled[sel_group]
+                        : std::vector<bool>{};
+
+                    for (int oi = 0; oi < pg.size(); ++oi) {
+                        const auto* off = pg.officers[oi];
+                        bool is_enabled = (oi < (int)enabled.size()) ? enabled[oi] : true;
+                        bool is_sel = (oi == state.ai_selected_officer);
+
+                        // Class name
+                        std::string cls_str;
+                        if (off->officer_class == 1) cls_str = "CMD";
+                        else if (off->officer_class == 2) cls_str = "SCI";
+                        else if (off->officer_class == 3) cls_str = "ENG";
+                        else cls_str = "???";
+
+                        // Rarity color
+                        Color rarity_col = Color::GrayLight;
+                        if (off->rarity == 'E') rarity_col = Color::Gold1;
+                        else if (off->rarity == 'R') rarity_col = Color::Blue;
+                        else if (off->rarity == 'U') rarity_col = Color::Green;
+                        else if (off->rarity == 'C') rarity_col = Color::GrayDark;
+
+                        auto row = hbox({
+                            text(is_sel ? "> " : "  "),
+                            text(is_enabled ? "[x] " : "[ ] ") | color(is_enabled ? Color::Green : Color::Red),
+                            text(off->name) | bold | color(is_enabled ? Color::White : Color::GrayDark),
+                            text("  ") ,
+                            text(std::string(1, off->rarity)) | color(rarity_col),
+                            text(" " + cls_str) | dim,
+                            text(" R" + std::to_string(off->rank)) | dim,
+                            text(" L" + std::to_string(off->level)) | dim,
+                        });
+                        if (is_sel) row = row | inverted | focus;
+                        lines.push_back(row);
+                    }
+
+                    // Show not-owned META officers as greyed-out aspirational goals
+                    if (!pg.meta_not_owned.empty()) {
+                        lines.push_back(separator());
+                        lines.push_back(hbox({
+                            text("  Missing META Officers (goals)") | bold | dim | color(Color::Yellow),
+                            filler(),
+                            text(std::to_string(pg.meta_not_owned.size()) + " not owned") | dim,
+                        }));
+                        lines.push_back(separatorLight());
+                        for (size_t ni = 0; ni < pg.meta_not_owned.size(); ++ni) {
+                            lines.push_back(hbox({
+                                text("     ") ,
+                                text(pg.meta_not_owned[ni]) | dim | color(Color::GrayDark),
+                                text("  [NOT OWNED]") | dim | color(Color::RedLight),
+                            }));
+                        }
+                    }
+
+                    // Show ideal META crew descriptions if available
+                    if (!pg.meta_crew_descriptions.empty()) {
+                        lines.push_back(separator());
+                        lines.push_back(text("  Ideal META Crews (from Gemini):") | bold | dim | color(Color::Cyan));
+                        for (size_t ci = 0; ci < pg.meta_crew_descriptions.size(); ++ci) {
+                            lines.push_back(hbox({
+                                text("  " + std::to_string(ci + 1) + ". ") | dim,
+                                text(pg.meta_crew_descriptions[ci]) | dim | color(Color::CyanLight),
+                            }));
+                        }
+                    }
+
+                    // Show prompt preview below officers
+                    lines.push_back(separator());
+                    int en_count = 0;
+                    for (bool b : enabled) if (b) ++en_count;
+                    lines.push_back(text("Prompt will include " +
+                        std::to_string(en_count) + " officers") | dim);
+                    lines.push_back(text("Guidance: " + pg.prompt_guidance) | dim);
+
+                    detail = vbox(lines);
+                }
+
+                // Footer
+                Elements footer;
+                footer.push_back(hbox({
+                    text("  Stage 1: Planned Prompt") | bold | color(Color::Yellow),
+                    filler(),
+                    text(std::to_string(state.ai_prepared_groups.size()) + " groups prepared") | dim,
+                }));
+                footer.push_back(hbox({
+                    text("  [Up/Down] officers  [Tab] switch groups  [Space] toggle  [Enter] send  [Esc] back") | dim,
+                }));
+
+                content = vbox({
+                    hbox({
+                        vbox(left_rows) | vscroll_indicator | yframe | size(WIDTH, EQUAL, 40),
+                        separator(),
+                        detail | flex | vscroll_indicator | yframe,
+                    }) | flex,
+                    separator(),
+                    vbox(footer),
                 });
             }
         } else {
-            // Left panel: group list
-            Elements left_rows;
-            for (size_t i = 0; i < state.ai_group_result.group_results.size(); ++i) {
-                const auto& gr = state.ai_group_result.group_results[i];
-                bool sel = ((int)i == state.ai_selected_group);
-
-                // Rating indicator
-                std::string rating_str;
-                Color rating_color = Color::GrayDark;
-                if (gr.rating == AiRating::Good) { rating_str = " [+]"; rating_color = Color::Green; }
-                else if (gr.rating == AiRating::Bad) { rating_str = " [-]"; rating_color = Color::Red; }
-
-                // Status indicator
-                Color status_color = gr.ok() ? Color::Green : (gr.error.empty() ? Color::GrayLight : Color::Red);
-                std::string crew_count_str = gr.ok() ? std::to_string(gr.crews.size()) + " crews" :
-                    (!gr.error.empty() ? "error" : "pending");
-
-                auto row = hbox({
-                    text(sel ? "> " : "  "),
-                    text(gr.group_name) | bold | color(Color::Cyan),
-                    text(" (" + std::to_string(gr.officer_count) + " officers)") | dim,
-                    filler(),
-                    text(crew_count_str) | color(status_color),
-                    text(rating_str) | bold | color(rating_color),
+            // -------------------------------------------------------
+            // Stage 2: Results — per-group AI crew recs
+            // Left: group list with status/ratings
+            // Right: crew details for selected group
+            // -------------------------------------------------------
+            if (state.ai_group_result.group_results.empty()) {
+                content = vbox({
+                    text("No results yet. Press [Esc] to go back and query groups.") | center | dim,
                 });
-                if (sel) row = row | inverted | focus;
-                left_rows.push_back(row);
-                if (i < state.ai_group_result.group_results.size() - 1)
-                    left_rows.push_back(separatorLight());
-            }
+            } else {
+                // Left panel: group list with results
+                Elements left_rows;
+                for (size_t i = 0; i < state.ai_group_result.group_results.size(); ++i) {
+                    const auto& gr = state.ai_group_result.group_results[i];
+                    bool sel = ((int)i == state.ai_selected_group);
 
-            // Right panel: selected group's crew details
-            Element detail = text("");
-            int sgi = state.ai_selected_group;
-            if (sgi >= 0 && sgi < (int)state.ai_group_result.group_results.size()) {
-                const auto& gr = state.ai_group_result.group_results[sgi];
-                Elements lines;
+                    // Lock indicator
+                    bool is_locked = (i < state.ai_group_locked.size() && state.ai_group_locked[i]);
+                    std::string lock_str = is_locked ? " LOCK" : "";
 
-                if (gr.ok()) {
-                    lines.push_back(text(gr.group_name + " Crews") | bold);
-                    lines.push_back(separator());
+                    // Rating indicator
+                    std::string rating_str;
+                    Color rating_color = Color::GrayDark;
+                    if (gr.rating == AiRating::Good) { rating_str = " [+]"; rating_color = Color::Green; }
+                    else if (gr.rating == AiRating::Bad) { rating_str = " [-]"; rating_color = Color::Red; }
 
-                    for (size_t ci = 0; ci < gr.crews.size(); ++ci) {
-                        const auto& crew = gr.crews[ci];
-                        bool crew_sel = ((int)ci == state.ai_selected_group_crew);
+                    Color status_color = gr.ok() ? Color::Green : (gr.error.empty() ? Color::GrayLight : Color::Red);
+                    std::string crew_count_str = gr.ok() ? std::to_string(gr.crews.size()) + " crews" :
+                        (!gr.error.empty() ? "error" : "pending");
 
-                        lines.push_back(hbox({
-                            text(crew_sel ? "> " : "  "),
-                            text("#" + std::to_string(ci + 1)) | bold |
-                                color(ci == 0 ? Color(Color::Gold1) : Color(Color::GrayLight)),
-                            text("  Captain: "),
-                            text(crew.captain) | bold | color(Color::Yellow),
-                            filler(),
-                            text("Conf: " + std::to_string((int)(crew.confidence * 100)) + "%") | dim,
-                        }));
-                        lines.push_back(hbox({
-                            text("      Bridge: "),
-                            text(crew.bridge.size() > 0 ? crew.bridge[0] : "?") | color(Color::Cyan),
-                            text(" + "),
-                            text(crew.bridge.size() > 1 ? crew.bridge[1] : "?") | color(Color::Cyan),
-                        }));
-
-                        // Show reasoning for selected crew
-                        if (crew_sel && !crew.reasoning.empty()) {
-                            lines.push_back(separator());
-                            auto wrapped = wrap_text(crew.reasoning, 48);
-                            for (auto& w : wrapped) lines.push_back(std::move(w));
-                        }
-
-                        if (!crew.below_decks.empty() && crew_sel) {
-                            lines.push_back(text("    Below Decks:") | bold | color(Color::Magenta));
-                            for (const auto& bd : crew.below_decks) {
-                                lines.push_back(text("      " + bd) | color(Color::Cyan));
-                            }
-                        }
-
-                        if (ci < gr.crews.size() - 1)
-                            lines.push_back(separatorLight());
-                    }
-                } else if (!gr.error.empty()) {
-                    lines.push_back(text(gr.group_name) | bold);
-                    lines.push_back(separator());
-                    lines.push_back(text("Error: " + gr.error) | color(Color::Red));
-                } else {
-                    lines.push_back(text(gr.group_name) | bold);
-                    lines.push_back(separator());
-                    lines.push_back(text("No results yet.") | dim);
+                    auto row = hbox({
+                        text(sel ? "> " : "  "),
+                        text(gr.group_name) | bold | color(Color::Cyan),
+                        text(" (" + std::to_string(gr.officer_count) + " officers)") | dim,
+                        filler(),
+                        text(lock_str) | bold | color(Color::Magenta),
+                        text(crew_count_str) | color(status_color),
+                        text(rating_str) | bold | color(rating_color),
+                    });
+                    if (sel) row = row | inverted | focus;
+                    left_rows.push_back(row);
+                    if (i < state.ai_group_result.group_results.size() - 1)
+                        left_rows.push_back(separatorLight());
                 }
 
-                detail = vbox(lines);
-            }
+                // Right panel: selected group's crew details
+                Element detail = text("");
+                int sgi = state.ai_selected_group;
+                if (sgi >= 0 && sgi < (int)state.ai_group_result.group_results.size()) {
+                    const auto& gr = state.ai_group_result.group_results[sgi];
+                    Elements lines;
 
-            // Pipeline progress footer
-            Elements footer;
-            if (state.ai_group_result.groups_total > 0) {
+                    if (gr.ok()) {
+                        lines.push_back(text(gr.group_name + " Crews") | bold);
+                        lines.push_back(separator());
+
+                        for (size_t ci = 0; ci < gr.crews.size(); ++ci) {
+                            const auto& crew = gr.crews[ci];
+                            bool crew_sel = ((int)ci == state.ai_selected_group_crew);
+
+                            lines.push_back(hbox({
+                                text(crew_sel ? "> " : "  "),
+                                text("#" + std::to_string(ci + 1)) | bold |
+                                    color(ci == 0 ? Color(Color::Gold1) : Color(Color::GrayLight)),
+                                text("  Captain: "),
+                                text(crew.captain) | bold | color(Color::Yellow),
+                                filler(),
+                                text("Conf: " + std::to_string((int)(crew.confidence * 100)) + "%") | dim,
+                            }));
+                            lines.push_back(hbox({
+                                text("      Bridge: "),
+                                text(crew.bridge.size() > 0 ? crew.bridge[0] : "?") | color(Color::Cyan),
+                                text(" + "),
+                                text(crew.bridge.size() > 1 ? crew.bridge[1] : "?") | color(Color::Cyan),
+                            }));
+
+                            // Show reasoning for selected crew
+                            if (crew_sel && !crew.reasoning.empty()) {
+                                lines.push_back(separator());
+                                auto wrapped = wrap_text(crew.reasoning, 48);
+                                for (auto& w : wrapped) lines.push_back(std::move(w));
+                            }
+
+                            if (!crew.below_decks.empty() && crew_sel) {
+                                lines.push_back(text("    Below Decks:") | bold | color(Color::Magenta));
+                                for (const auto& bd : crew.below_decks) {
+                                    lines.push_back(text("      " + bd) | color(Color::Cyan));
+                                }
+                            }
+
+                            if (ci < gr.crews.size() - 1)
+                                lines.push_back(separatorLight());
+                        }
+                    } else if (!gr.error.empty()) {
+                        lines.push_back(text(gr.group_name) | bold);
+                        lines.push_back(separator());
+                        lines.push_back(text("Error: " + gr.error) | color(Color::Red));
+                    } else {
+                        lines.push_back(text(gr.group_name) | bold);
+                        lines.push_back(separator());
+                        lines.push_back(text("No results yet.") | dim);
+                    }
+
+                    detail = vbox(lines);
+                }
+
+                // Footer
+                Elements footer;
+                if (state.ai_group_result.groups_total > 0) {
+                    footer.push_back(hbox({
+                        text("  Stage 2: Results") | bold | color(Color::Green),
+                        filler(),
+                        text("Groups: " + std::to_string(state.ai_group_result.groups_completed) +
+                             "/" + std::to_string(state.ai_group_result.groups_total) +
+                             " queried, " + std::to_string(state.ai_group_result.groups_succeeded) + " OK") | dim,
+                        text(!state.ai_group_result.model_used.empty() ?
+                             "  Model: " + state.ai_group_result.model_used : "") | dim,
+                    }));
+                } else {
+                    footer.push_back(hbox({
+                        text("  Stage 2: Results") | bold | color(Color::Green),
+                        filler(),
+                    }));
+                }
                 footer.push_back(hbox({
-                    text("  Groups: " + std::to_string(state.ai_group_result.groups_completed) +
-                         "/" + std::to_string(state.ai_group_result.groups_total) +
-                         " queried, " + std::to_string(state.ai_group_result.groups_succeeded) + " OK") | dim,
-                    filler(),
-                    text(!state.ai_group_result.model_used.empty() ?
-                         "Model: " + state.ai_group_result.model_used : "") | dim,
+                    text("  [Up/Down] groups  [Left/Right] crews  [+] Good  [-] Bad  [L] Lock  [Enter] re-query  [Esc] back") | dim,
                 }));
-            }
-            footer.push_back(hbox({
-                text("  [Up/Down] groups  [Left/Right] crews  [+] Good  [-] Bad  [Enter] Re-run") | dim,
-            }));
 
-            content = vbox({
-                hbox({
-                    vbox(left_rows) | vscroll_indicator | yframe | size(WIDTH, EQUAL, 45),
+                content = vbox({
+                    hbox({
+                        vbox(left_rows) | vscroll_indicator | yframe | size(WIDTH, EQUAL, 45),
+                        separator(),
+                        detail | flex | vscroll_indicator | yframe,
+                    }) | flex,
                     separator(),
-                    detail | flex | vscroll_indicator | yframe,
-                }) | flex,
-                separator(),
-                vbox(footer),
-            });
+                    vbox(footer),
+                });
+            }
         }
     } else if (safe_mode == 1) {
         // Crew Recommendations
@@ -4450,8 +4858,19 @@ int main() {
                 return true;
             }
 
-            // Rating keys (Groups mode only)
-            if (state->ai_mode == 0 && !state->ai_running) {
+            // Escape: back one stage (Groups mode only, when not running)
+            if (event == Event::Escape && state->ai_mode == 0 && !state->ai_running && !state->ai_meta_refreshing) {
+                if (state->ai_group_stage > 0) {
+                    state->ai_group_stage--;
+                    state->ai_selected_officer = 0;
+                    state->ai_officer_scroll = 0;
+                    state->set_status("Stage " + std::to_string(state->ai_group_stage));
+                    return true;
+                }
+            }
+
+            // Rating keys (Groups mode, stage 2 only)
+            if (state->ai_mode == 0 && state->ai_group_stage == 2 && !state->ai_running) {
                 if (event == Event::Character('+') || event == Event::Character('=') ||
                     event == Event::Character('g') || event == Event::Character('G')) {
                     int sgi = state->ai_selected_group;
@@ -4478,15 +4897,102 @@ int main() {
                     }
                     return true;
                 }
+                // Lock/unlock crew result for a group — locked crews feed into subsequent queries
+                if (event == Event::Character('l') || event == Event::Character('L')) {
+                    int sgi = state->ai_selected_group;
+                    if (sgi >= 0 && sgi < (int)state->ai_group_result.group_results.size()) {
+                        const auto& gr = state->ai_group_result.group_results[sgi];
+                        if (!gr.ok()) {
+                            state->set_status("Cannot lock — no valid crew result for " + gr.group_name);
+                            return true;
+                        }
+
+                        // Ensure locked vector is large enough
+                        if ((int)state->ai_group_locked.size() <= sgi) {
+                            state->ai_group_locked.resize(sgi + 1, false);
+                        }
+
+                        bool was_locked = state->ai_group_locked[sgi];
+                        state->ai_group_locked[sgi] = !was_locked;
+
+                        // Rebuild the locked officer names set from all locked groups
+                        state->ai_locked_officer_names.clear();
+                        for (size_t gi = 0; gi < state->ai_group_locked.size(); ++gi) {
+                            if (!state->ai_group_locked[gi]) continue;
+                            if (gi >= state->ai_group_result.group_results.size()) continue;
+                            const auto& locked_gr = state->ai_group_result.group_results[gi];
+                            for (const auto& crew : locked_gr.crews) {
+                                if (!crew.captain.empty()) state->ai_locked_officer_names.insert(crew.captain);
+                                for (const auto& b : crew.bridge) state->ai_locked_officer_names.insert(b);
+                                for (const auto& bd : crew.below_decks) state->ai_locked_officer_names.insert(bd);
+                            }
+                        }
+
+                        if (!was_locked) {
+                            state->set_status("Locked " + gr.group_name + " (" +
+                                std::to_string(state->ai_locked_officer_names.size()) + " officers locked total)");
+                        } else {
+                            state->set_status("Unlocked " + gr.group_name + " (" +
+                                std::to_string(state->ai_locked_officer_names.size()) + " officers locked total)");
+                        }
+                    }
+                    return true;
+                }
             }
 
-            // Navigate results
+            // Space: toggle officer in Stage 1
+            if (state->ai_mode == 0 && state->ai_group_stage == 1 && !state->ai_running) {
+                if (event == Event::Character(' ')) {
+                    int sg = state->ai_selected_group;
+                    int so = state->ai_selected_officer;
+                    if (sg >= 0 && sg < (int)state->ai_officer_enabled.size() &&
+                        so >= 0 && so < (int)state->ai_officer_enabled[sg].size()) {
+                        state->ai_officer_enabled[sg][so] = !state->ai_officer_enabled[sg][so];
+                        const auto& off = state->ai_prepared_groups[sg].officers[so];
+                        state->set_status(std::string(state->ai_officer_enabled[sg][so] ? "Enabled " : "Disabled ") + off->name);
+                    }
+                    return true;
+                }
+            }
+
+            // Tab: switch groups in Stage 1
+            if (state->ai_mode == 0 && state->ai_group_stage == 1 && !state->ai_running) {
+                if (event == Event::Tab) {
+                    int max = std::max(0, (int)state->ai_prepared_groups.size() - 1);
+                    state->ai_selected_group = std::min(state->ai_selected_group + 1, max);
+                    state->ai_selected_officer = 0;
+                    return true;
+                }
+                if (event == Event::TabReverse) {
+                    state->ai_selected_group = std::max(0, state->ai_selected_group - 1);
+                    state->ai_selected_officer = 0;
+                    return true;
+                }
+            }
+
+            // Navigate results — stage-aware for mode 0
             if (event == Event::ArrowDown) {
                 if (state->ai_mode == 0) {
-                    int max = (int)state->ai_group_result.group_results.size() - 1;
-                    if (state->ai_selected_group < max) {
-                        state->ai_selected_group++;
-                        state->ai_selected_group_crew = 0;
+                    if (state->ai_group_stage == 1) {
+                        // Navigate officers within selected group
+                        int sg = state->ai_selected_group;
+                        if (sg >= 0 && sg < (int)state->ai_prepared_groups.size()) {
+                            int max = state->ai_prepared_groups[sg].size() - 1;
+                            if (state->ai_selected_officer < max) state->ai_selected_officer++;
+                        }
+                    } else {
+                        // Stage 0 and 2: navigate groups
+                        int max_group = -1;
+                        if (state->ai_group_stage == 0) {
+                            // Count META cache groups
+                            max_group = (int)state->ai_engine.meta_cache().groups.size() - 1;
+                        } else {
+                            max_group = (int)state->ai_group_result.group_results.size() - 1;
+                        }
+                        if (state->ai_selected_group < max_group) {
+                            state->ai_selected_group++;
+                            state->ai_selected_group_crew = 0;
+                        }
                     }
                 } else if (state->ai_mode == 1) {
                     int max = (int)state->ai_crew_result.recommendations.size() - 1;
@@ -4502,9 +5008,13 @@ int main() {
             }
             if (event == Event::ArrowUp) {
                 if (state->ai_mode == 0) {
-                    if (state->ai_selected_group > 0) {
-                        state->ai_selected_group--;
-                        state->ai_selected_group_crew = 0;
+                    if (state->ai_group_stage == 1) {
+                        if (state->ai_selected_officer > 0) state->ai_selected_officer--;
+                    } else {
+                        if (state->ai_selected_group > 0) {
+                            state->ai_selected_group--;
+                            state->ai_selected_group_crew = 0;
+                        }
                     }
                 } else if (state->ai_mode == 1) {
                     if (state->ai_selected_rec > 0) state->ai_selected_rec--;
@@ -4515,8 +5025,8 @@ int main() {
                 }
                 return true;
             }
-            // Left/Right navigate crews within a group (Groups mode)
-            if (state->ai_mode == 0) {
+            // Left/Right navigate crews within a group (Groups mode, stage 2)
+            if (state->ai_mode == 0 && state->ai_group_stage == 2) {
                 if (event == Event::ArrowRight) {
                     int sgi = state->ai_selected_group;
                     if (sgi >= 0 && sgi < (int)state->ai_group_result.group_results.size()) {
@@ -4589,6 +5099,14 @@ int main() {
                             known_names.push_back(off.name);
                         }
 
+                        // Build player context for level-aware/ship-aware META queries
+                        stfc::MetaPlayerContext player_ctx;
+                        player_ctx.ops_level = state->player_data.ops_level;
+                        for (const auto& ship : state->player_data.ships) {
+                            player_ctx.ship_names.push_back(ship.name);
+                            player_ctx.ship_tiers.push_back(ship.tier);
+                        }
+
                         auto stream_cb = [state](const std::string& chunk) {
                             std::lock_guard<std::mutex> lk(state->status_mutex);
                             state->ai_stream_text += chunk;
@@ -4604,7 +5122,7 @@ int main() {
                         };
 
                         auto err = state->ai_engine.refresh_meta_cache(
-                            known_names, stream_cb, progress_cb, &state->ai_cancel_groups);
+                            known_names, player_ctx, stream_cb, progress_cb, &state->ai_cancel_groups);
 
                         {
                             std::lock_guard<std::mutex> lk(state->status_mutex);
@@ -4612,6 +5130,14 @@ int main() {
                         }
                         state->ai_meta_progress.clear();
                         state->ai_meta_refreshing = false;
+
+                        // Reset to stage 0 so user can review updated META
+                        state->ai_group_stage = 0;
+                        state->ai_prepared_groups.clear();
+                        state->ai_officer_enabled.clear();
+                        state->ai_group_locked.clear();
+                        state->ai_locked_officer_names.clear();
+                        state->ai_selected_group = 0;
 
                         if (err.empty()) {
                             auto age = state->ai_engine.meta_cache().age_str();
@@ -4632,6 +5158,114 @@ int main() {
                 return true;
             }
 
+            // [T] Generate META template → copy to clipboard
+            if (event == Event::Character('t') || event == Event::Character('T')) {
+                if (state->ai_group_stage == 0 && !state->ai_running && !state->ai_meta_refreshing) {
+                    int batch = state->ai_meta_template_batch;
+                    if (batch < 0 || batch >= stfc::AiCrewEngine::META_BATCH_COUNT) {
+                        state->set_status("Invalid batch index: " + std::to_string(batch));
+                        return true;
+                    }
+
+                    // Build player context
+                    stfc::MetaPlayerContext player_ctx;
+                    player_ctx.ops_level = state->player_data.ops_level;
+                    for (const auto& ship : state->player_data.ships) {
+                        player_ctx.ship_names.push_back(ship.name);
+                        player_ctx.ship_tiers.push_back(ship.tier);
+                    }
+
+                    std::string prompt = state->ai_engine.generate_meta_template(batch, player_ctx);
+                    if (prompt.empty()) {
+                        state->set_status("Failed to generate template for batch " + std::to_string(batch));
+                        return true;
+                    }
+
+                    std::string batch_name = stfc::AiCrewEngine::meta_batch_name(batch);
+                    if (clipboard_copy(prompt)) {
+                        state->set_status("Copied " + batch_name + " template to clipboard (batch " +
+                            std::to_string(batch + 1) + "/" +
+                            std::to_string(stfc::AiCrewEngine::META_BATCH_COUNT) +
+                            "). Paste into web AI, then press [P].");
+                    } else {
+                        state->set_status("Clipboard copy failed! Is wl-copy/xclip available?");
+                    }
+                }
+                return true;
+            }
+
+            // [P] Paste META response from clipboard → import
+            if (event == Event::Character('p') || event == Event::Character('P')) {
+                if (state->ai_group_stage == 0 && !state->ai_running && !state->ai_meta_refreshing) {
+                    int batch = state->ai_meta_template_batch;
+                    if (batch < 0 || batch >= stfc::AiCrewEngine::META_BATCH_COUNT) {
+                        state->set_status("Invalid batch index: " + std::to_string(batch));
+                        return true;
+                    }
+
+                    std::string response = clipboard_paste();
+                    if (response.empty()) {
+                        state->set_status("Clipboard is empty! Copy the AI response first.");
+                        return true;
+                    }
+
+                    // Build known officer name list
+                    std::vector<std::string> known_names;
+                    if (state->optimizer) {
+                        const auto& officers = state->optimizer->officers();
+                        known_names.reserve(officers.size());
+                        for (const auto& off : officers) {
+                            known_names.push_back(off.name);
+                        }
+                    }
+
+                    int imported = state->ai_engine.import_meta_response(batch, response, known_names);
+                    std::string batch_name = stfc::AiCrewEngine::meta_batch_name(batch);
+
+                    if (imported > 0) {
+                        state->set_status("Imported " + std::to_string(imported) + " " +
+                            batch_name + " group(s) from clipboard.");
+
+                        // Auto-advance to next batch
+                        if (batch + 1 < stfc::AiCrewEngine::META_BATCH_COUNT) {
+                            state->ai_meta_template_batch = batch + 1;
+                            std::string next_name = stfc::AiCrewEngine::meta_batch_name(batch + 1);
+                            state->set_status("Imported " + std::to_string(imported) + " " +
+                                batch_name + " group(s). Next: " + next_name +
+                                " (batch " + std::to_string(batch + 2) + "/" +
+                                std::to_string(stfc::AiCrewEngine::META_BATCH_COUNT) +
+                                "). Press [T] to copy template.");
+                        } else {
+                            state->set_status("All " +
+                                std::to_string(stfc::AiCrewEngine::META_BATCH_COUNT) +
+                                " batches imported! Press [Enter] to prepare groups.");
+                        }
+                    } else if (imported == 0) {
+                        state->set_status(batch_name +
+                            " paste: no officer names matched. Try a different AI or re-paste.");
+                    } else {
+                        state->set_status(batch_name + " paste: parse error. Check clipboard content.");
+                    }
+
+                    auto screen = ScreenInteractive::Active();
+                    if (screen) screen->PostEvent(Event::Custom);
+                }
+                return true;
+            }
+
+            // [B] Cycle META template batch (next batch)
+            if (event == Event::Character('b') || event == Event::Character('B')) {
+                if (state->ai_group_stage == 0 && !state->ai_running && !state->ai_meta_refreshing) {
+                    state->ai_meta_template_batch =
+                        (state->ai_meta_template_batch + 1) % stfc::AiCrewEngine::META_BATCH_COUNT;
+                    std::string batch_name = stfc::AiCrewEngine::meta_batch_name(state->ai_meta_template_batch);
+                    state->set_status("Template batch: " + batch_name +
+                        " (" + std::to_string(state->ai_meta_template_batch + 1) + "/" +
+                        std::to_string(stfc::AiCrewEngine::META_BATCH_COUNT) + ")");
+                }
+                return true;
+            }
+
             // Cancel META refresh
             if (event == Event::Escape && state->ai_meta_refreshing) {
                 state->ai_cancel_groups = true;
@@ -4639,8 +5273,200 @@ int main() {
                 return true;
             }
 
-            // Run AI query
+            // Run AI query — stage-aware for mode 0
             if (event == Event::Return && !state->ai_running && !state->ai_meta_refreshing) {
+                // Mode 0 has staged workflow
+                if (state->ai_mode == 0) {
+                    if (!state->optimizer) {
+                        state->set_status("No roster loaded — AI needs officer data.");
+                        return true;
+                    }
+
+                    int stage = state->ai_group_stage;
+
+                    if (stage == 0) {
+                        // Stage 0 → Stage 1: prepare groups from META cache
+                        const auto& officers = state->optimizer->officers();
+                        auto groups = state->ai_engine.prepare_groups(officers);
+                        if (groups.empty()) {
+                            state->set_status("No groups could be prepared. Refresh META cache first [M].");
+                            return true;
+                        }
+                        state->ai_prepared_groups = std::move(groups);
+                        // Initialize toggle state: all officers enabled by default
+                        state->ai_officer_enabled.clear();
+                        for (const auto& pg : state->ai_prepared_groups) {
+                            state->ai_officer_enabled.push_back(std::vector<bool>(pg.size(), true));
+                        }
+                        state->ai_selected_group = 0;
+                        state->ai_selected_officer = 0;
+                        state->ai_group_stage = 1;
+                        state->set_status("Groups prepared. Review officers and press [Enter] to query.");
+                        return true;
+
+                    } else if (stage == 1) {
+                        // Stage 1 → Query the selected group via AI
+                        if (!state->ai_engine.is_available()) {
+                            state->set_status("AI not available. Press [I] to re-initialize.");
+                            return true;
+                        }
+                        int sg = state->ai_selected_group;
+                        if (sg < 0 || sg >= (int)state->ai_prepared_groups.size()) {
+                            state->set_status("No group selected.");
+                            return true;
+                        }
+
+                        // Build a filtered copy of the group with only enabled officers
+                        OfficerGroup query_group = state->ai_prepared_groups[sg];
+                        if (sg < (int)state->ai_officer_enabled.size()) {
+                            std::vector<const ClassifiedOfficer*> filtered;
+                            const auto& enabled = state->ai_officer_enabled[sg];
+                            for (int oi = 0; oi < (int)query_group.officers.size(); ++oi) {
+                                if (oi < (int)enabled.size() && enabled[oi]) {
+                                    filtered.push_back(query_group.officers[oi]);
+                                }
+                            }
+                            query_group.officers = std::move(filtered);
+                        }
+
+                        if (query_group.empty() && !query_group.has_meta()) {
+                            state->set_status("No officers or META data for " + query_group.name + ".");
+                            return true;
+                        }
+
+                        // Inject locked crew context into prompt guidance
+                        // so the AI doesn't reuse officers from locked crews
+                        if (!state->ai_locked_officer_names.empty()) {
+                            std::string locked_ctx = "\n\nIMPORTANT: The following officers are ALREADY ASSIGNED to locked crews. "
+                                "Do NOT use them in your recommendations:\n";
+                            for (const auto& name : state->ai_locked_officer_names) {
+                                locked_ctx += "- " + name + "\n";
+                            }
+                            locked_ctx += "Build complementary crews using ONLY the remaining officers.\n";
+                            query_group.prompt_guidance += locked_ctx;
+                        }
+
+                        state->ai_running = true;
+                        {
+                            std::lock_guard<std::mutex> lk(state->status_mutex);
+                            state->ai_stream_text.clear();
+                        }
+                        state->ai_group_progress = "Querying " + query_group.name + "...";
+                        state->set_status("Querying " + query_group.name + " (" +
+                            std::to_string(query_group.size()) + " officers)...");
+
+                        std::thread([state, query_group]() {
+                          try {
+                            auto stream_cb = [state](const std::string& chunk) {
+                                std::lock_guard<std::mutex> lk(state->status_mutex);
+                                state->ai_stream_text += chunk;
+                                auto screen = ScreenInteractive::Active();
+                                if (screen) screen->PostEvent(Event::Custom);
+                            };
+
+                            auto result = state->ai_engine.query_single_group(query_group, stream_cb);
+
+                            // Merge result into group_results (lock to prevent data race with UI thread)
+                            {
+                                std::lock_guard<std::mutex> lk(state->status_mutex);
+
+                                // Find or create entry for this group
+                                bool found = false;
+                                for (auto& gr : state->ai_group_result.group_results) {
+                                    if (gr.group_name == result.group_name) {
+                                        gr = std::move(result);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    state->ai_group_result.group_results.push_back(std::move(result));
+                                    state->ai_group_result.groups_total = (int)state->ai_group_result.group_results.size();
+                                }
+
+                                // Update counters
+                                int completed = 0, succeeded = 0;
+                                for (const auto& gr : state->ai_group_result.group_results) {
+                                    if (gr.ok() || !gr.error.empty()) ++completed;
+                                    if (gr.ok()) ++succeeded;
+                                }
+                                state->ai_group_result.groups_completed = completed;
+                                state->ai_group_result.groups_succeeded = succeeded;
+                                if (state->ai_group_result.model_used.empty()) {
+                                    auto s = state->ai_engine.status();
+                                    state->ai_group_result.model_used = s.model;
+                                }
+
+                                state->ai_stream_text.clear();
+                                state->ai_group_progress.clear();
+                                state->ai_running = false;
+
+                                // Move to stage 2 (results)
+                                state->ai_group_stage = 2;
+                                // Find the index of the group we just queried in the results
+                                for (int i = 0; i < (int)state->ai_group_result.group_results.size(); ++i) {
+                                    if (state->ai_group_result.group_results[i].group_name == query_group.name) {
+                                        state->ai_selected_group = i;
+                                        break;
+                                    }
+                                }
+                                state->ai_selected_group_crew = 0;
+                            }
+
+                            // Status update (set_status has its own lock)
+                            {
+                                std::lock_guard<std::mutex> lk(state->status_mutex);
+                                const auto& last = state->ai_group_result.group_results.back();
+                                if (last.ok()) {
+                                    state->status_message = query_group.name + ": " +
+                                        std::to_string(last.crews.size()) + " crews recommended.";
+                                } else {
+                                    state->status_message = query_group.name + " error: " + last.error;
+                                }
+                            }
+
+                            auto screen = ScreenInteractive::Active();
+                            if (screen) screen->PostEvent(Event::Custom);
+                          } catch (const std::exception& e) {
+                            state->ai_running = false;
+                            state->ai_group_progress.clear();
+                            state->set_status(std::string("AI query crashed: ") + e.what());
+                            auto screen = ScreenInteractive::Active();
+                            if (screen) screen->PostEvent(Event::Custom);
+                          } catch (...) {
+                            state->ai_running = false;
+                            state->ai_group_progress.clear();
+                            state->set_status("AI query crashed with unknown exception");
+                            auto screen = ScreenInteractive::Active();
+                            if (screen) screen->PostEvent(Event::Custom);
+                          }
+                        }).detach();
+
+                        return true;
+
+                    } else {
+                        // Stage 2 → Re-query: go back to stage 1 for the selected group
+                        // Find which prepared group matches the selected result
+                        if (!state->ai_group_result.group_results.empty()) {
+                            int sgi = state->ai_selected_group;
+                            if (sgi >= 0 && sgi < (int)state->ai_group_result.group_results.size()) {
+                                const auto& gr_name = state->ai_group_result.group_results[sgi].group_name;
+                                for (int i = 0; i < (int)state->ai_prepared_groups.size(); ++i) {
+                                    if (state->ai_prepared_groups[i].name == gr_name) {
+                                        state->ai_selected_group = i;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        state->ai_group_stage = 1;
+                        state->ai_selected_officer = 0;
+                        state->set_status("Back to Stage 1 — edit and re-query.");
+                        return true;
+                    }
+                }
+
+                // Modes 1-4: original behavior
                 if (!state->ai_engine.is_available()) {
                     state->set_status("AI not available. Press [I] to re-initialize.");
                     return true;
@@ -4675,34 +5501,13 @@ int main() {
 
                 std::string question_copy = state->ai_question;
 
-                state->set_status("AI query running (" + std::string(mode == 0 ? "groups" : mode == 1 ? "crew" : mode == 2 ? "progression" : mode == 3 ? "META" : "ask") + ")...");
+                state->set_status("AI query running (" + std::string(mode == 1 ? "crew" : mode == 2 ? "progression" : mode == 3 ? "META" : "ask") + ")...");
 
                 std::thread([state, mode, safe_scenario, st, stream_cb, question_copy]() {
                     const auto& scenarios = all_dock_scenarios();
                     const auto& officers = state->optimizer->officers();
 
-                    if (mode == 0) {
-                        // Group-based pipeline
-                        state->ai_cancel_groups = false;
-                        state->ai_group_progress = "Starting group pipeline...";
-                        auto progress_cb = [state](int current, int total, const std::string& group_name) {
-                            state->ai_group_progress = "Querying " + group_name + " (" +
-                                std::to_string(current + 1) + "/" + std::to_string(total) + ")...";
-                            auto screen = ScreenInteractive::Active();
-                            if (screen) screen->PostEvent(Event::Custom);
-                        };
-                        state->ai_group_result = state->ai_engine.query_by_groups(
-                            officers, stream_cb, progress_cb, &state->ai_cancel_groups);
-                        state->ai_selected_group = 0;
-                        state->ai_selected_group_crew = 0;
-                        state->ai_group_progress.clear();
-                        if (state->ai_group_result.ok()) {
-                            state->set_status("AI: " + std::to_string(state->ai_group_result.groups_succeeded) +
-                                "/" + std::to_string(state->ai_group_result.groups_total) + " groups succeeded.");
-                        } else {
-                            state->set_status("AI error: " + state->ai_group_result.error);
-                        }
-                    } else if (mode == 1) {
+                    if (mode == 1) {
                         state->ai_crew_result = state->ai_engine.recommend_crews(
                             state->player_data, state->game_data, officers,
                             scenarios[safe_scenario], st, 3, {}, stream_cb);
@@ -4749,8 +5554,7 @@ int main() {
                         }
                     }
 
-                    // Clear streaming text before marking as done —
-                    // prevents flash of raw text between streaming and parsed display
+                    // Clear streaming text before marking as done
                     {
                         std::lock_guard<std::mutex> lk(state->status_mutex);
                         state->ai_stream_text.clear();

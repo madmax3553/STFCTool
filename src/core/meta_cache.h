@@ -67,16 +67,33 @@ MetaCache load_meta_cache(const std::string& path = "data/meta_cache.json");
 bool save_meta_cache(const MetaCache& cache, const std::string& path = "data/meta_cache.json");
 
 // ---------------------------------------------------------------------------
+// Player context for META queries — enables level-aware and ship-aware prompts
+// ---------------------------------------------------------------------------
+
+struct MetaPlayerContext {
+    int ops_level = 0;                          // Player's operations center level
+    std::vector<std::string> ship_names;        // Player's ship names (e.g., "Enterprise", "NX-01")
+    std::vector<int> ship_tiers;                // Ship tiers (parallel to ship_names)
+
+    bool has_context() const { return ops_level > 0; }
+
+    // Compact summary for prompt injection
+    std::string summary() const;
+};
+
+// ---------------------------------------------------------------------------
 // Build the Gemini prompt for a specific group's META query
 //
-// Returns a prompt like:
-//   "List the top 15 officers for PvP combat in Star Trek Fleet Command.
-//    Include both captains and bridge officers. For each, state their role
-//    (captain vs bridge) and why they're META."
+// New version includes:
+// - Current date for up-to-date META info
+// - Source citation instructions (Discord, Reddit, stfc.space)
+// - Player context (ops level, ships) for level-aware PvE queries
+// - Ship-type-specific focus for PvP sub-groups
 // ---------------------------------------------------------------------------
 
 std::string build_meta_query_prompt(const std::string& group_name,
-                                     const std::string& group_description);
+                                     const std::string& group_description,
+                                     const MetaPlayerContext& player_ctx = {});
 
 // ---------------------------------------------------------------------------
 // Parse Gemini's META response into a list of officer names

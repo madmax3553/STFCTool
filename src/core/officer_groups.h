@@ -23,30 +23,48 @@ namespace stfc {
 
 // Group identity — determines the prompt template and query focus
 enum class OfficerGroupId {
-    PvP_Combat,       // PvP-specific + dual-use combat officers
-    PvE_Hostile,      // PvE hostile grinders
-    Base_Attack,      // Base cracker specialists
-    Base_Defend,      // Station defense specialists
-    Armada,           // Armada combat officers
-    Mining,           // Mining crew (skipped by AI — handled by local optimizer)
-    Loot_Cargo,       // Loot multipliers and cargo officers
-    State_Chain,      // Officers involved in state chains (burning, morale, etc.)
-    Apex_Isolytic,    // Apex barrier/shred + isolytic cascade/defense
-    Support,          // Stat boosters, ability amplifiers, miscellaneous
+    // PvP — granular by ship type
+    PvP_General,          // Universal PvP officers, good on any ship
+    PvP_On_Explorer,      // Best crews when YOU fly an Explorer
+    PvP_On_Battleship,    // Best crews when YOU fly a Battleship
+    PvP_On_Interceptor,   // Best crews when YOU fly an Interceptor
+    PvP_Vs_Explorer,      // Crews optimized for killing Explorers
+    PvP_Vs_Battleship,    // Crews optimized for killing Battleships
+    PvP_Vs_Interceptor,   // Crews optimized for killing Interceptors
+
+    // PvE — level-aware, only relevant content queried
+    PvE_General,          // General hostile grinding (swarm, dailies)
+    PvE_Specialized,      // Level-appropriate specialized hostiles (borg, eclipse, etc.)
+
+    // Other scenarios
+    Base_Attack,          // Base cracker specialists
+    Base_Defend,          // Station defense specialists
+    Armada,               // Armada combat officers
+    Mining,               // Mining crew (skipped by AI — handled by local optimizer)
+    Loot_Cargo,           // Loot multipliers and cargo officers
+    State_Chain,          // Officers involved in state chains (burning, morale, etc.)
+    Apex_Isolytic,        // Apex barrier/shred + isolytic cascade/defense
+    Support,              // Stat boosters, ability amplifiers, miscellaneous
 };
 
 // A single officer group ready for LLM query
 struct OfficerGroup {
     OfficerGroupId id;
-    std::string name;                          // Human-readable: "PvP Combat"
+    std::string name;                          // Human-readable: "PvP General"
     std::string description;                   // One-line: "Officers specializing in..."
-    std::vector<const ClassifiedOfficer*> officers;  // Pointers into the master list
+    std::vector<const ClassifiedOfficer*> officers;  // OWNED officers (pointers into master list)
+
+    // META context — full Gemini knowledge for this group
+    std::vector<std::string> meta_not_owned;   // META officer names the player does NOT own (aspirational)
+    std::vector<std::string> meta_crew_descriptions; // Gemini's ideal crew descriptions (if available)
+    std::string meta_summary;                  // Gemini's META overview text
 
     // For prompt building
     std::string prompt_guidance;               // Scenario-specific LLM guidance
 
     int size() const { return static_cast<int>(officers.size()); }
     bool empty() const { return officers.empty(); }
+    bool has_meta() const { return !meta_not_owned.empty() || !officers.empty() || !meta_summary.empty(); }
 };
 
 // ---------------------------------------------------------------------------
@@ -66,9 +84,12 @@ std::vector<OfficerGroup> group_officers(
 // ---------------------------------------------------------------------------
 // Get a focused system prompt for a specific group
 // (Shorter and more targeted than the monolithic CREW_SYSTEM_PROMPT)
+// Accepts optional officer names to build a realistic JSON example
+// (prevents 1B models from copying example names like "Kirk" verbatim)
 // ---------------------------------------------------------------------------
 
-std::string group_system_prompt(OfficerGroupId group_id);
+std::string group_system_prompt(OfficerGroupId group_id,
+                                const std::vector<std::string>& example_names = {});
 
 // ---------------------------------------------------------------------------
 // Serialize a group's officers to compact JSON for prompt injection

@@ -1,6 +1,7 @@
 #include "data/llm_client.h"
 #include "data/ollama_provider.h"
 #include "data/gemini_provider.h"
+#include "data/claude_provider.h"
 #include "data/ssh_tunnel.h"
 
 #include <fstream>
@@ -146,9 +147,10 @@ std::unique_ptr<LlmClient> create_provider(const std::string& provider,
         return std::make_unique<GeminiProvider>(api_key, model);
     }
 
-    // Future providers: claude, openai, etc.
-    // if (provider == "claude") { ... }
-    // if (provider == "openai") { ... }
+    if (provider == "claude" || provider == "anthropic") {
+        std::string api_key = resolve_api_key(api_key_env);
+        return std::make_unique<ClaudeProvider>(api_key, model);
+    }
 
     return nullptr;  // Unknown provider
 }

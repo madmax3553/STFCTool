@@ -35,3 +35,6 @@ stfc_crew_recommendations.html
 # User data (generated at runtime, not committed)
 .stfc_loadout.json
 .stfc_last_results.json
+
+# API keys
+.env

@@ -6,7 +6,9 @@
 #include <cstring>
 #include <cctype>
 #include <chrono>
+#include <thread>
 #include <set>
+#include <regex>
 
 #include "json.hpp"
 
@@ -227,6 +229,57 @@ static json extract_json_from_text(const std::string& text) {
                 return wrapper;
             }
         } catch (...) {}
+    }
+
+    // -----------------------------------------------------------------------
+    // Regex-based crew extraction fallback.
+    // Small models (1B-3B) often produce structurally invalid JSON with nested
+    // "crews" keys or mismatched brackets. This extracts individual crew objects
+    // by finding {"captain":"...","bridge":[...]} patterns via regex.
+    // -----------------------------------------------------------------------
+    {
+        // Match individual crew-like objects:
+        //   {"captain":"NAME","bridge":["NAME","NAME"],"reasoning":"TEXT"}
+        // We find each "captain":"..." then grab the enclosing {} block.
+        json crews_arr = json::array();
+        std::regex captain_re(R"re("captain"\s*:\s*"([^"]+)")re");
+        auto it = std::sregex_iterator(text.begin(), text.end(), captain_re);
+        auto end = std::sregex_iterator();
+
+        for (; it != end; ++it) {
+            // Walk backwards from match to find opening {
+            size_t match_pos = static_cast<size_t>(it->position());
+            size_t obj_start = text.rfind('{', match_pos);
+            if (obj_start == std::string::npos) continue;
+
+            // Walk forward to find matching closing }
+            int depth = 0;
+            size_t obj_end = std::string::npos;
+            for (size_t i = obj_start; i < text.size(); ++i) {
+                if (text[i] == '{') depth++;
+                else if (text[i] == '}') {
+                    depth--;
+                    if (depth == 0) { obj_end = i; break; }
+                }
+            }
+            if (obj_end == std::string::npos) continue;
+
+            std::string obj_text = text.substr(obj_start, obj_end - obj_start + 1);
+            try {
+                json crew_obj = json::parse(obj_text);
+                // Must have captain as string and bridge as array
+                if (crew_obj.contains("captain") && crew_obj["captain"].is_string() &&
+                    crew_obj.contains("bridge") && crew_obj["bridge"].is_array()) {
+                    crews_arr.push_back(crew_obj);
+                }
+            } catch (...) {}
+        }
+
+        if (!crews_arr.empty()) {
+            json wrapper;
+            wrapper["crews"] = crews_arr;
+            return wrapper;
+        }
     }
 
     return json();
@@ -483,6 +536,7 @@ std::vector<AiCrewRecommendation> AiCrewEngine::parse_group_response(const std::
 
 std::string AiCrewEngine::refresh_meta_cache(
     const std::vector<std::string>& known_officers,
+    const MetaPlayerContext& player_ctx,
     AiStreamCallback stream_cb,
     MetaRefreshCallback progress_cb,
     std::atomic<bool>* cancel_flag)
@@ -491,21 +545,46 @@ std::string AiCrewEngine::refresh_meta_cache(
         return "No Gemini client available. Check GEMINI_API_KEY env var and fallback config.";
     }
 
-    // Groups to query META for (skip Mining — handled locally)
+    // Groups to query META for — now 15 groups (skip Mining — handled locally)
+    // PvP: 7 groups (general + 3 ship types you fly + 3 ship types you fight)
+    // PvE: 2 groups (general + specialized)
+    // Other: 6 groups
     struct MetaGroupDef {
         OfficerGroupId id;
         std::string name;
         std::string description;
     };
     static const MetaGroupDef meta_groups[] = {
-        {OfficerGroupId::PvP_Combat,    "PvP Combat",       "Player-vs-player combat in Star Trek Fleet Command"},
-        {OfficerGroupId::PvE_Hostile,   "PvE Hostile",      "Hostile NPC grinding (swarm, borg, eclipse, etc.)"},
-        {OfficerGroupId::Base_Attack,   "Base Attack",      "Attacking player starbases"},
-        {OfficerGroupId::Base_Defend,   "Base Defend",      "Defending your starbase"},
-        {OfficerGroupId::Armada,        "Armada",           "Armada battles (coordinated multi-player)"},
-        {OfficerGroupId::Loot_Cargo,    "Loot & Cargo",     "Loot multipliers, cargo, farming efficiency"},
-        {OfficerGroupId::State_Chain,   "State Chain",      "State chain crews (burning, morale, breach, isolytic)"},
-        {OfficerGroupId::Apex_Isolytic, "Apex & Isolytic",  "Apex barrier/shred and isolytic cascade/defense META"},
+        // PvP granular by ship type
+        {OfficerGroupId::PvP_General,        "PvP General",
+            "Universal PvP officers that are strong on any ship type in STFC"},
+        {OfficerGroupId::PvP_On_Explorer,    "PvP on Explorer",
+            "Best PvP crew when the player flies an EXPLORER — officers that synergize with Explorer shield/balanced stats"},
+        {OfficerGroupId::PvP_On_Battleship,  "PvP on Battleship",
+            "Best PvP crew when the player flies a BATTLESHIP — officers that synergize with Battleship armor/weapon stats"},
+        {OfficerGroupId::PvP_On_Interceptor, "PvP on Interceptor",
+            "Best PvP crew when the player flies an INTERCEPTOR — officers that synergize with Interceptor speed/crit stats"},
+        {OfficerGroupId::PvP_Vs_Explorer,    "PvP vs Explorer",
+            "Best crew for KILLING EXPLORERS — officers with shield piercing, shield drain, anti-Explorer abilities"},
+        {OfficerGroupId::PvP_Vs_Battleship,  "PvP vs Battleship",
+            "Best crew for KILLING BATTLESHIPS — officers with armor piercing, hull damage, anti-armor abilities"},
+        {OfficerGroupId::PvP_Vs_Interceptor, "PvP vs Interceptor",
+            "Best crew for KILLING INTERCEPTORS — officers with anti-crit, accuracy, front-loaded damage"},
+
+        // PvE level-aware
+        {OfficerGroupId::PvE_General,        "PvE General",
+            "General PvE hostile grinding in STFC — swarm, daily hostiles, regular hostile farming"},
+        {OfficerGroupId::PvE_Specialized,    "PvE Specialized",
+            "Specialized PvE hostiles in STFC — borg, eclipse, gorn, xindi, silent enemy, species 8472. "
+            "Include officers for each hostile type that is relevant at the player's level."},
+
+        // Other scenarios
+        {OfficerGroupId::Base_Attack,   "Base Attack",      "Attacking player starbases in STFC"},
+        {OfficerGroupId::Base_Defend,   "Base Defend",      "Defending your starbase in STFC"},
+        {OfficerGroupId::Armada,        "Armada",           "Armada battles (coordinated multi-player) in STFC"},
+        {OfficerGroupId::Loot_Cargo,    "Loot & Cargo",     "Loot multipliers, cargo, farming efficiency in STFC"},
+        {OfficerGroupId::State_Chain,   "State Chain",      "State chain crews (burning, morale, breach, isolytic) in STFC"},
+        {OfficerGroupId::Apex_Isolytic, "Apex & Isolytic",  "Apex barrier/shred and isolytic cascade/defense META in STFC"},
     };
 
     int total = static_cast<int>(std::size(meta_groups));
@@ -527,8 +606,8 @@ std::string AiCrewEngine::refresh_meta_cache(
             stream_cb("\n--- META: " + mg.name + " (" + std::to_string(i + 1) + "/" + std::to_string(total) + ") ---\n");
         }
 
-        // Build prompt
-        std::string prompt = build_meta_query_prompt(mg.name, mg.description);
+        // Build prompt — now includes date, sources, and player context
+        std::string prompt = build_meta_query_prompt(mg.name, mg.description, player_ctx);
 
         LlmRequest req;
         req.system_prompt = "You are an expert at Star Trek Fleet Command (STFC), a mobile game by Scopely. "
@@ -564,7 +643,11 @@ std::string AiCrewEngine::refresh_meta_cache(
 
         if (resp.ok()) {
             entry.top_officers = parse_meta_officer_names(resp.content, known_officers);
-            entry.meta_summary = resp.content.substr(0, 500);  // Keep summary for display
+            // Store full Gemini response — this is the META knowledge that gets
+            // injected into Ollama prompts. Truncating it was losing the synergy
+            // explanations that make Ollama actually pick meta-correct crews.
+            // Cap at 4000 chars to keep cache file reasonable.
+            entry.meta_summary = resp.content.substr(0, 4000);
 
             // Try to extract crew descriptions from JSON
             try {
@@ -593,6 +676,33 @@ std::string AiCrewEngine::refresh_meta_cache(
         }
 
         new_cache.groups[mg.name] = std::move(entry);
+
+        // Rate-limit protection: space out Gemini requests to avoid burning
+        // the 20 req/day free tier limit. Skip delay after the last request.
+        if (i < total - 1) {
+            // Check if we got a rate-limit error — back off harder
+            bool rate_limited = !resp.ok() && (
+                resp.error.find("429") != std::string::npos ||
+                resp.error.find("rate") != std::string::npos ||
+                resp.error.find("Rate") != std::string::npos ||
+                resp.error.find("quota") != std::string::npos ||
+                resp.error.find("Quota") != std::string::npos ||
+                resp.error.find("RESOURCE_EXHAUSTED") != std::string::npos);
+
+            int delay_secs = rate_limited ? 15 : 4;
+
+            if (rate_limited && stream_cb) {
+                stream_cb("\n[Rate limited — waiting " + std::to_string(delay_secs) + "s before next request...]\n");
+            }
+
+            // Sleep in 1-second increments so we can check cancel flag
+            for (int s = 0; s < delay_secs; ++s) {
+                if (cancel_flag && cancel_flag->load()) {
+                    return "Cancelled by user";
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
     }
 
     new_cache.last_refresh = now_epoch;
@@ -605,9 +715,13 @@ std::string AiCrewEngine::refresh_meta_cache(
 // ===========================================================================
 // Build META-filtered officer groups
 //
-// If META cache exists and is populated, intersect each group's META officer
-// list with the player's owned roster. This produces naturally small groups
-// (~5-15 officers per group) that the 1B model handles well.
+// Non-exclusive: officers can appear in MULTIPLE groups (same officer can be
+// META for PvP General AND PvP on Explorer). Crew locking at Stage 2 handles
+// preventing double-use in final results.
+//
+// Groups are created even with ZERO owned officers, as long as META data
+// exists — they serve as aspirational goals. Not-owned META officers are
+// stored in group.meta_not_owned for display and Ollama prompt context.
 //
 // Falls back to tag-based grouping if no META cache.
 // ===========================================================================
@@ -628,28 +742,52 @@ std::vector<OfficerGroup> AiCrewEngine::build_meta_filtered_groups(
         owned_lookup[name_lower] = &off;
     }
 
-    // For each META cache group, intersect with owned roster
     std::vector<OfficerGroup> result;
-    std::set<std::string> assigned_officers;  // Track assigned officers (exclusive assignment)
 
-    // Groups to process in order
+    // No exclusive assignment — officers can appear in multiple groups.
+    // Crew locking (Stage 2) prevents double-use in final results.
+
+    // Groups to process in order — all 15 non-Mining groups
     struct GroupDef {
         OfficerGroupId id;
         std::string name;
         std::string description;
         std::string guidance;
     };
-    // Reuse the same descriptions/guidance from officer_groups.cpp
     static const GroupDef group_defs[] = {
-        {OfficerGroupId::PvP_Combat, "PvP Combat",
-         "Officers specializing in player-vs-player combat",
-         "Focus on: armor/shield piercing, critical hits, damage bursts, "
-         "stat boosters, ability amplifiers. Captain CM should deliver a powerful opening "
-         "strike or critical debuff. Bridge OA should sustain damage output or defensive advantage."},
-        {OfficerGroupId::PvE_Hostile, "PvE Hostile",
-         "Officers effective against hostile NPCs",
-         "Focus on: sustained damage, survivability, crit damage, extra shots, "
-         "hull repair/shield regen. Captain CM should be a big damage opener."},
+        // PvP granular
+        {OfficerGroupId::PvP_General, "PvP General",
+         "Universal PvP officers, good on any ship",
+         "Focus on: armor/shield piercing, critical hits, damage bursts, stat boosters. "
+         "Captain CM should deliver a powerful opening strike or critical debuff."},
+        {OfficerGroupId::PvP_On_Explorer, "PvP on Explorer",
+         "Best crews when YOU fly an Explorer",
+         "Focus on: shield synergy, sustained damage, shield repair. Exploit Explorer defensive strengths."},
+        {OfficerGroupId::PvP_On_Battleship, "PvP on Battleship",
+         "Best crews when YOU fly a Battleship",
+         "Focus on: raw damage output, armor piercing, hull-based survivability."},
+        {OfficerGroupId::PvP_On_Interceptor, "PvP on Interceptor",
+         "Best crews when YOU fly an Interceptor",
+         "Focus on: devastating opening strikes, crit multipliers, speed advantages. End fights quickly."},
+        {OfficerGroupId::PvP_Vs_Explorer, "PvP vs Explorer",
+         "Crews optimized for killing Explorers",
+         "Focus on: shield piercing, shield drain, bypass/strip shields."},
+        {OfficerGroupId::PvP_Vs_Battleship, "PvP vs Battleship",
+         "Crews optimized for killing Battleships",
+         "Focus on: armor piercing, hull damage, abilities that reduce armor effectiveness."},
+        {OfficerGroupId::PvP_Vs_Interceptor, "PvP vs Interceptor",
+         "Crews optimized for killing Interceptors",
+         "Focus on: anti-crit, accuracy vs fast targets, front-loaded damage to destroy them quickly."},
+
+        // PvE
+        {OfficerGroupId::PvE_General, "PvE General",
+         "General hostile grinding (swarm, dailies)",
+         "Focus on: sustained damage, survivability, crit, extra shots, hull/shield regen."},
+        {OfficerGroupId::PvE_Specialized, "PvE Specialized",
+         "Specialized hostiles (borg, eclipse, gorn, xindi, etc.)",
+         "Focus on: hostile-type-specific abilities. Build per-hostile-type crews."},
+
+        // Other
         {OfficerGroupId::Base_Attack, "Base Attack",
          "Officers for attacking player starbases",
          "Focus on: maximum burst damage, armor piercing, shield piercing."},
@@ -658,15 +796,13 @@ std::vector<OfficerGroup> AiCrewEngine::build_meta_filtered_groups(
          "Focus on: damage mitigation, shield repair, hull repair."},
         {OfficerGroupId::Armada, "Armada",
          "Officers for armada battles",
-         "Focus on: officers tagged 'armada' get bonuses in armadas. "
-         "Sustained damage and survivability are key."},
+         "Focus on: armada-tagged officers get bonuses. Sustained DPS + survivability."},
         {OfficerGroupId::Loot_Cargo, "Loot & Cargo",
          "Officers that increase loot drops and cargo",
          "Focus on: loot multipliers, cargo capacity, rep boosts, XP boosts."},
         {OfficerGroupId::State_Chain, "State Chain",
-         "Officers that form state chains (burning, morale, breach, assimilate, isolytic)",
-         "Focus on: state application and state benefit combos. "
-         "Captain should APPLY the state via CM, bridge should BENEFIT from it via OA."},
+         "Officers that form state chains (burning, morale, breach, isolytic)",
+         "Focus on: state application and benefit combos. Captain APPLY, bridge BENEFIT."},
         {OfficerGroupId::Apex_Isolytic, "Apex & Isolytic",
          "Officers with apex barrier/shred or isolytic cascade/defense",
          "Focus on: the Rock-Paper-Scissors META."},
@@ -675,7 +811,7 @@ std::vector<OfficerGroup> AiCrewEngine::build_meta_filtered_groups(
     for (const auto& gd : group_defs) {
         const auto* meta_entry = meta_cache_.get_group(gd.name);
         if (!meta_entry || meta_entry->top_officers.empty()) {
-            continue;  // No META data for this group
+            continue;  // No META data for this group at all
         }
 
         OfficerGroup group;
@@ -684,34 +820,44 @@ std::vector<OfficerGroup> AiCrewEngine::build_meta_filtered_groups(
         group.description = gd.description;
         group.prompt_guidance = gd.guidance;
 
-        // Intersect META officer names with owned roster
+        // Copy META context from Gemini cache
+        group.meta_summary = meta_entry->meta_summary;
+        group.meta_crew_descriptions = meta_entry->top_crews_desc;
+
+        // Classify each META officer as owned or not-owned
         for (const auto& meta_name : meta_entry->top_officers) {
             std::string meta_lower = meta_name;
             std::transform(meta_lower.begin(), meta_lower.end(), meta_lower.begin(), ::tolower);
 
             auto it = owned_lookup.find(meta_lower);
-            if (it == owned_lookup.end()) continue;
+            if (it == owned_lookup.end()) {
+                // Not owned — store as aspirational goal
+                group.meta_not_owned.push_back(meta_name);
+                continue;
+            }
 
             const ClassifiedOfficer* off = it->second;
 
-            // Exclusive assignment: skip if already assigned to another group
-            if (assigned_officers.count(off->name)) continue;
-
             // Filter: skip very low-rank officers (rank < 2 = barely leveled)
-            if (off->rank < 2) continue;
+            // but still keep them as not-owned-equivalent (too weak to use)
+            if (off->rank < 2) {
+                group.meta_not_owned.push_back(meta_name + " (owned but rank <2)");
+                continue;
+            }
 
             group.officers.push_back(off);
-            assigned_officers.insert(off->name);
         }
 
-        // Sort by rank desc, then rarity desc
+        // Sort owned officers by rank desc, then rarity desc
         std::sort(group.officers.begin(), group.officers.end(),
             [](const ClassifiedOfficer* a, const ClassifiedOfficer* b) {
                 if (a->rank != b->rank) return a->rank > b->rank;
                 return a->rarity > b->rarity;
             });
 
-        if (!group.empty()) {
+        // Include group even if zero owned officers — it has META data
+        // that serves as aspirational goals and Ollama context
+        if (group.has_meta()) {
             result.push_back(std::move(group));
         }
     }
@@ -723,6 +869,16 @@ std::vector<OfficerGroup> AiCrewEngine::build_meta_filtered_groups(
     }
 
     return result;
+}
+
+// ===========================================================================
+// Prepare groups (public, for staged TUI workflow)
+// ===========================================================================
+
+std::vector<OfficerGroup> AiCrewEngine::prepare_groups(
+    const std::vector<ClassifiedOfficer>& officers) const
+{
+    return build_meta_filtered_groups(officers);
 }
 
 // ===========================================================================
@@ -744,7 +900,27 @@ GroupQueryResult AiCrewEngine::query_single_group(
     }
 
     // Build the focused prompt for this group
-    std::string sys_prompt = group_system_prompt(group.id);
+    // Pass real officer names so the example uses actual names (prevents 1B model hallucination)
+    std::vector<std::string> example_names;
+    for (const auto* off : group.officers) {
+        example_names.push_back(off->name);
+        if (example_names.size() >= 3) break;
+    }
+    std::string sys_prompt = group_system_prompt(group.id, example_names);
+
+    // Inject Gemini META knowledge into system prompt when available.
+    // This transforms Ollama from "guess based on tags" to "arrange officers
+    // according to the known 2026 meta synergies". Zero additional API cost —
+    // uses cached data from the M-key refresh.
+    if (!group.meta_summary.empty() &&
+        group.meta_summary.find("Error:") == std::string::npos &&
+        group.meta_summary.find("rate limit") == std::string::npos) {
+        sys_prompt += "\n--- CURRENT META KNOWLEDGE (from game experts) ---\n";
+        sys_prompt += group.meta_summary;
+        sys_prompt += "\n--- END META KNOWLEDGE ---\n";
+        sys_prompt += "Use the meta knowledge above to guide your crew choices. "
+                      "Prioritize synergies and captain choices that match the current meta.\n";
+    }
 
     // Inject good-rated prior responses as context
     std::string history_context = build_history_context(history_, group.name);
@@ -752,13 +928,68 @@ GroupQueryResult AiCrewEngine::query_single_group(
         sys_prompt += history_context;
     }
 
-    // Build user prompt with group officers
+    // Build user prompt with group officers + META context
+    // IMPORTANT: Keep this as simple as possible for 1B models.
+    // They hallucinate when given too much text or complex instructions.
     std::ostringstream user;
-    user << "Recommend the best 2-3 crew combinations from these "
-         << group.size() << " officers (" << group.name << " group).\n\n";
-    user << group.prompt_guidance << "\n\n";
-    user << "Officers:\n" << group_officers_to_json(group) << "\n\n";
-    user << "Return 2-3 crew combinations as JSON. Each crew must use DIFFERENT officers.";
+
+    // Plain-text officer name list (1B models handle this better than JSON)
+    if (group.size() > 0) {
+        user << "Pick crews from ONLY these " << group.size() << " officers:\n";
+        for (const auto* off : group.officers) {
+            // Class label
+            std::string cls;
+            if (off->officer_class == 1) cls = "CMD";
+            else if (off->officer_class == 2) cls = "SCI";
+            else if (off->officer_class == 3) cls = "ENG";
+            else cls = "???";
+
+            user << "- " << off->name << " (" << cls << " R" << off->rank << ")";
+
+            // Add key tags inline — just the most important ones
+            std::vector<std::string> key_tags;
+            if (off->shield_piercing) key_tags.push_back("shield_pierce");
+            if (off->armor_piercing) key_tags.push_back("armor_pierce");
+            if (off->crit_related) key_tags.push_back("crit");
+            if (off->shield_related) key_tags.push_back("shield");
+            if (off->mitigation_related) key_tags.push_back("mitigation");
+            if (off->shots_related) key_tags.push_back("extra_shots");
+            if (off->stat_booster) key_tags.push_back("stat_boost");
+            if (off->apex_barrier) key_tags.push_back("apex_barrier");
+            if (off->apex_shred) key_tags.push_back("apex_shred");
+            if (off->isolytic_cascade) key_tags.push_back("isolytic");
+            for (const auto& s : off->states_applied)
+                key_tags.push_back("applies:" + s);
+            for (const auto& s : off->states_benefit)
+                key_tags.push_back("benefits:" + s);
+            if (!key_tags.empty()) {
+                user << " [";
+                for (size_t ti = 0; ti < key_tags.size(); ++ti) {
+                    if (ti > 0) user << ",";
+                    user << key_tags[ti];
+                }
+                user << "]";
+            }
+            user << "\n";
+        }
+    } else {
+        user << "The player owns NONE of the META officers for " << group.name << ".\n";
+    }
+
+    user << "\n" << group.prompt_guidance << "\n\n";
+
+    // NOT-OWNED officers are intentionally excluded from the Ollama prompt.
+    // They caused hallucination — the 3b model would pick names from "Upgrades to get"
+    // and use them in crews even though the player doesn't own them.
+    // The not-owned list is displayed in the TUI (Stage 1) as aspirational goals instead.
+
+    if (group.size() > 0) {
+        user << "Build 2-3 crews. Each crew = 1 captain + 2 bridge officers.\n";
+        user << "You may ONLY use names from the numbered list above. Do NOT use any other names.\n";
+        user << "Return JSON: {\"crews\":[{\"captain\":\"NAME\",\"bridge\":[\"NAME\",\"NAME\"],\"reasoning\":\"why\"}]}";
+    } else {
+        user << "Suggest which officers to acquire first. Return JSON with reasoning.";
+    }
 
     LlmRequest req;
     req.system_prompt = sys_prompt;
@@ -774,7 +1005,9 @@ GroupQueryResult AiCrewEngine::query_single_group(
             dbg << "=== GROUP QUERY: " << group.name << " (" << group.size() << " officers) ===\n";
             dbg << "sys_prompt length: " << sys_prompt.size() << "\n";
             dbg << "user_prompt length: " << req.user_prompt.size() << "\n";
-            dbg << "total prompt: " << (sys_prompt.size() + req.user_prompt.size()) << " chars\n\n";
+            dbg << "total prompt: " << (sys_prompt.size() + req.user_prompt.size()) << " chars\n";
+            dbg << "--- SYSTEM PROMPT ---\n" << sys_prompt << "\n";
+            dbg << "--- USER PROMPT ---\n" << req.user_prompt << "\n\n";
         }
     }
 
@@ -1011,6 +1244,286 @@ LlmResponse AiCrewEngine::ask_question(
                                    Scenario::PvP, ShipType::Explorer);
 
     return advisor_->ask(snapshot, question, stream_cb);
+}
+
+// ===========================================================================
+// META Template Batch System — manual copy-paste workflow
+// ===========================================================================
+
+// Batch → group mapping (must match the 4-batch spec)
+struct BatchGroupDef {
+    OfficerGroupId id;
+    std::string name;
+    std::string description;
+};
+
+static const std::vector<std::vector<BatchGroupDef>>& get_batch_groups() {
+    static const std::vector<std::vector<BatchGroupDef>> batches = {
+        // Batch 0: PvP (7 groups)
+        {
+            {OfficerGroupId::PvP_General,        "PvP General",
+                "Universal PvP officers that are strong on any ship type in STFC"},
+            {OfficerGroupId::PvP_On_Explorer,    "PvP on Explorer",
+                "Best PvP crew when the player flies an EXPLORER — officers that synergize with Explorer shield/balanced stats"},
+            {OfficerGroupId::PvP_On_Battleship,  "PvP on Battleship",
+                "Best PvP crew when the player flies a BATTLESHIP — officers that synergize with Battleship armor/weapon stats"},
+            {OfficerGroupId::PvP_On_Interceptor, "PvP on Interceptor",
+                "Best PvP crew when the player flies an INTERCEPTOR — officers that synergize with Interceptor speed/crit stats"},
+            {OfficerGroupId::PvP_Vs_Explorer,    "PvP vs Explorer",
+                "Best crew for KILLING EXPLORERS — officers with shield piercing, shield drain, anti-Explorer abilities"},
+            {OfficerGroupId::PvP_Vs_Battleship,  "PvP vs Battleship",
+                "Best crew for KILLING BATTLESHIPS — officers with armor piercing, hull damage, anti-armor abilities"},
+            {OfficerGroupId::PvP_Vs_Interceptor, "PvP vs Interceptor",
+                "Best crew for KILLING INTERCEPTORS — officers with anti-crit, accuracy, front-loaded damage"},
+        },
+        // Batch 1: PvE (2 groups)
+        {
+            {OfficerGroupId::PvE_General,        "PvE General",
+                "General PvE hostile grinding in STFC — swarm, daily hostiles, regular hostile farming"},
+            {OfficerGroupId::PvE_Specialized,    "PvE Specialized",
+                "Specialized PvE hostiles in STFC — borg, eclipse, gorn, xindi, silent enemy, species 8472"},
+        },
+        // Batch 2: Strategy (4 groups)
+        {
+            {OfficerGroupId::Base_Attack,   "Base Attack",
+                "Attacking player starbases in STFC"},
+            {OfficerGroupId::Base_Defend,   "Base Defend",
+                "Defending your starbase in STFC"},
+            {OfficerGroupId::Armada,        "Armada",
+                "Armada battles (coordinated multi-player) in STFC"},
+            {OfficerGroupId::State_Chain,   "State Chain",
+                "State chain crews (burning, morale, breach, isolytic) in STFC"},
+        },
+        // Batch 3: Utility (2 groups)
+        {
+            {OfficerGroupId::Loot_Cargo,    "Loot & Cargo",
+                "Loot multipliers, cargo, farming efficiency in STFC"},
+            {OfficerGroupId::Apex_Isolytic, "Apex & Isolytic",
+                "Apex barrier/shred and isolytic cascade/defense META in STFC"},
+        },
+    };
+    return batches;
+}
+
+std::string AiCrewEngine::meta_batch_name(int batch_index) {
+    switch (batch_index) {
+        case 0: return "PvP";
+        case 1: return "PvE";
+        case 2: return "Strategy";
+        case 3: return "Utility";
+        default: return "Unknown";
+    }
+}
+
+std::string AiCrewEngine::generate_meta_template(
+    int batch_index,
+    const MetaPlayerContext& player_ctx) const
+{
+    if (batch_index < 0 || batch_index >= META_BATCH_COUNT) return "";
+
+    const auto& batches = get_batch_groups();
+    const auto& groups = batches[batch_index];
+    std::string batch_name = meta_batch_name(batch_index);
+
+    std::ostringstream ss;
+
+    // Header with instructions
+    ss << "You are an expert at Star Trek Fleet Command (STFC), a MOBILE GAME by Scopely.\n\n";
+
+    ss << "I need the current META (best / most popular) officers and crews for "
+       << groups.size() << " categories in the '" << batch_name << "' category.\n\n";
+
+    if (player_ctx.has_context()) {
+        ss << "PLAYER CONTEXT:\n"
+           << "- " << player_ctx.summary() << "\n"
+           << "- Focus on officers relevant at this level.\n\n";
+    }
+
+    ss << "INSTRUCTIONS:\n"
+       << "- Use EXACT in-game officer names (e.g., 'PIC Worf' not 'Worf', "
+       << "'SNW La\\'an' not 'La\\'an', 'Five of Eleven' not '5 of 11')\n"
+       << "- Include officers from ALL eras/factions (TOS, TNG, DS9, SNW, PIC, Discovery, etc.)\n"
+       << "- For EACH group below, provide your answer in this format:\n\n"
+       << "--- GROUP: <Group Name> ---\n"
+       << "{\"officers\":[\"name1\",\"name2\",...],\"crews\":[{\"captain\":\"name\","
+       << "\"bridge\":[\"name\",\"name\"],\"why\":\"reason\"}],\"summary\":\"brief META overview\"}\n\n"
+       << "Respond with ALL " << groups.size() << " groups, each starting with the "
+       << "exact '--- GROUP: <name> ---' header line.\n\n";
+
+    // Per-group sections
+    ss << "=== GROUPS ===\n\n";
+    for (const auto& g : groups) {
+        ss << "--- GROUP: " << g.name << " ---\n"
+           << "Context: " << g.description << "\n"
+           << "List 15-20 top META officers and 3-5 best crew combos (captain + 2 bridge).\n\n";
+    }
+
+    return ss.str();
+}
+
+int AiCrewEngine::import_meta_response(
+    int batch_index,
+    const std::string& response,
+    const std::vector<std::string>& known_officers)
+{
+    if (batch_index < 0 || batch_index >= META_BATCH_COUNT) return -1;
+    if (response.empty()) return -1;
+
+    const auto& batches = get_batch_groups();
+    const auto& groups = batches[batch_index];
+
+    auto now_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+
+    // Split the response by "--- GROUP: <name> ---" headers
+    // Extract the text between each group header as that group's response
+    struct GroupSection {
+        std::string group_name;
+        std::string content;
+    };
+    std::vector<GroupSection> sections;
+
+    // Find all group header positions
+    const std::string header_prefix = "--- GROUP: ";
+    const std::string header_suffix = " ---";
+    size_t pos = 0;
+    while (pos < response.size()) {
+        size_t hdr_start = response.find(header_prefix, pos);
+        if (hdr_start == std::string::npos) break;
+
+        size_t name_start = hdr_start + header_prefix.size();
+        size_t hdr_end = response.find(header_suffix, name_start);
+        if (hdr_end == std::string::npos) break;
+
+        std::string group_name = response.substr(name_start, hdr_end - name_start);
+        size_t content_start = hdr_end + header_suffix.size();
+
+        // Content runs until the next group header or end of string
+        size_t next_hdr = response.find(header_prefix, content_start);
+        std::string content;
+        if (next_hdr == std::string::npos) {
+            content = response.substr(content_start);
+        } else {
+            content = response.substr(content_start, next_hdr - content_start);
+        }
+
+        sections.push_back({group_name, content});
+        pos = (next_hdr == std::string::npos) ? response.size() : next_hdr;
+    }
+
+    // If no section headers found, try to use entire response for the first group
+    // (handles case where AI ignores format instructions)
+    if (sections.empty() && groups.size() == 1) {
+        sections.push_back({groups[0].name, response});
+    }
+
+    // If still no sections and multiple groups, try to split by group names
+    // appearing as natural headers in the text
+    if (sections.empty() && groups.size() > 1) {
+        // Fallback: assign entire response to all groups
+        // (each group's parser will extract what it can)
+        for (const auto& g : groups) {
+            sections.push_back({g.name, response});
+        }
+    }
+
+    int imported_count = 0;
+
+    for (const auto& section : sections) {
+        // Find matching group definition
+        const BatchGroupDef* matched_group = nullptr;
+        for (const auto& g : groups) {
+            if (g.name == section.group_name) {
+                matched_group = &g;
+                break;
+            }
+        }
+        if (!matched_group) {
+            // Try fuzzy match — find closest group name
+            std::string sec_lower = section.group_name;
+            std::transform(sec_lower.begin(), sec_lower.end(), sec_lower.begin(), ::tolower);
+            for (const auto& g : groups) {
+                std::string g_lower = g.name;
+                std::transform(g_lower.begin(), g_lower.end(), g_lower.begin(), ::tolower);
+                if (sec_lower.find(g_lower) != std::string::npos ||
+                    g_lower.find(sec_lower) != std::string::npos) {
+                    matched_group = &g;
+                    break;
+                }
+            }
+        }
+        if (!matched_group) continue;
+
+        // Parse officer names from section content
+        auto officers = parse_meta_officer_names(section.content, known_officers);
+
+        // Try to extract crews and summary from JSON in the section
+        std::vector<std::string> crew_descs;
+        std::string summary;
+
+        // Find JSON object in the section content
+        size_t json_start = section.content.find('{');
+        size_t json_end = section.content.rfind('}');
+        if (json_start != std::string::npos && json_end != std::string::npos && json_end > json_start) {
+            try {
+                auto j = json::parse(section.content.substr(json_start, json_end - json_start + 1));
+                // Extract crews
+                for (const auto& key : {"crews", "top_crews"}) {
+                    if (j.contains(key) && j[key].is_array()) {
+                        for (const auto& crew : j[key]) {
+                            if (!crew.is_object()) continue;
+                            std::string desc;
+                            if (crew.contains("captain") && crew["captain"].is_string())
+                                desc = crew["captain"].get<std::string>();
+                            if (crew.contains("bridge") && crew["bridge"].is_array()) {
+                                for (const auto& b : crew["bridge"]) {
+                                    if (b.is_string()) {
+                                        if (!desc.empty()) desc += " + ";
+                                        desc += b.get<std::string>();
+                                    }
+                                }
+                            }
+                            if (crew.contains("why") && crew["why"].is_string()) {
+                                if (!desc.empty()) desc += " — ";
+                                desc += crew["why"].get<std::string>();
+                            }
+                            if (!desc.empty()) crew_descs.push_back(desc);
+                        }
+                        break;
+                    }
+                }
+                // Extract summary
+                if (j.contains("summary") && j["summary"].is_string()) {
+                    summary = j["summary"].get<std::string>();
+                }
+            } catch (...) {}
+        }
+
+        // Build MetaGroupEntry and store in cache
+        MetaGroupEntry entry;
+        entry.group = matched_group->name;
+        entry.top_officers = officers;
+        entry.top_crews_desc = crew_descs;
+        entry.meta_summary = summary.empty()
+            ? ("Manual import — " + std::to_string(officers.size()) + " officers matched")
+            : summary;
+        entry.timestamp = now_epoch;
+        entry.model_used = "manual-template";
+
+        // Only count as imported if we got at least some officers
+        if (!officers.empty()) {
+            meta_cache_.groups[matched_group->name] = std::move(entry);
+            ++imported_count;
+        }
+    }
+
+    // Save updated cache
+    if (imported_count > 0) {
+        meta_cache_.last_refresh = now_epoch;
+        save_meta_cache(meta_cache_);
+    }
+
+    return imported_count;
 }
 
 } // namespace stfc

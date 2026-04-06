@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cctype>
 #include <set>
+#include <ctime>
+#include <iomanip>
 
 #include "json.hpp"
 
@@ -103,25 +105,81 @@ bool save_meta_cache(const MetaCache& cache, const std::string& path) {
 }
 
 // ===========================================================================
+// MetaPlayerContext
+// ===========================================================================
+
+std::string MetaPlayerContext::summary() const {
+    if (!has_context()) return "";
+    std::ostringstream ss;
+    ss << "Ops level " << ops_level;
+    if (!ship_names.empty()) {
+        ss << ", ships: ";
+        int shown = 0;
+        for (size_t i = 0; i < ship_names.size() && shown < 15; ++i) {
+            if (shown > 0) ss << ", ";
+            ss << ship_names[i];
+            if (i < ship_tiers.size() && ship_tiers[i] > 0) {
+                ss << " (T" << ship_tiers[i] << ")";
+            }
+            ++shown;
+        }
+        if ((int)ship_names.size() > shown) {
+            ss << " (+" << (ship_names.size() - shown) << " more)";
+        }
+    }
+    return ss.str();
+}
+
+// ===========================================================================
 // Build Gemini META query prompt
 // ===========================================================================
 
+static std::string current_date_str() {
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    struct tm tm_buf;
+    localtime_r(&time, &tm_buf);
+    char buf[64];
+    std::strftime(buf, sizeof(buf), "%B %d, %Y", &tm_buf);
+    return buf;
+}
+
 std::string build_meta_query_prompt(const std::string& group_name,
-                                     const std::string& group_description) {
+                                     const std::string& group_description,
+                                     const MetaPlayerContext& player_ctx) {
     std::ostringstream ss;
-    ss << "You are an expert at Star Trek Fleet Command (STFC), a MOBILE GAME by Scopely.\n\n"
-       << "List the current META top 15-20 officers for: " << group_name << "\n"
-       << "Context: " << group_description << "\n\n"
-       << "For EACH officer, provide:\n"
+    ss << "You are an expert at Star Trek Fleet Command (STFC), a MOBILE GAME by Scopely.\n"
+       << "Today's date is: " << current_date_str() << ".\n\n";
+
+    ss << "TASK: List the current META top 15-20 officers for: " << group_name << "\n"
+       << "Context: " << group_description << "\n\n";
+
+    // Player context for level-aware queries
+    if (player_ctx.has_context()) {
+        ss << "PLAYER CONTEXT:\n"
+           << "- " << player_ctx.summary() << "\n"
+           << "- Focus on officers and strategies that are relevant and EFFICIENT for this player's level.\n"
+           << "- Don't recommend officers that require content the player can't access yet.\n"
+           << "- If the player has high-tier ships for specific content, note that the officers for that "
+           << "content may be less of a priority (already farmed).\n\n";
+    }
+
+    ss << "SOURCES:\n"
+       << "- Review the latest community META discussions from STFC Discord servers, r/STFC on Reddit, "
+       << "and stfc.space officer tool.\n"
+       << "- Prioritize information from the most recent game updates and balance changes.\n"
+       << "- When officers are commonly recommended together as a crew, note those synergies.\n\n";
+
+    ss << "For EACH officer, provide:\n"
        << "1. Their EXACT in-game name (as it appears in STFC)\n"
        << "2. Whether they are best as Captain (CM) or Bridge (OA)\n"
        << "3. One sentence on why they're META for this role\n\n"
        << "Also list the top 3-5 crew combinations (captain + 2 bridge) for " << group_name << ".\n\n"
        << "IMPORTANT:\n"
        << "- Use EXACT in-game officer names (e.g., 'PIC Worf' not just 'Worf', "
-       << "'SNW La'an' not just 'La'an', 'Five of Eleven' not '5 of 11')\n"
+       << "'SNW La\\'an' not just 'La\\'an', 'Five of Eleven' not '5 of 11')\n"
        << "- Include officers from ALL eras and factions (TOS, TNG, DS9, SNW, PIC, Discovery, etc.)\n"
-       << "- Focus on the CURRENT META (2024-2025 updates)\n\n"
+       << "- Focus on the CURRENT META (latest game updates as of " << current_date_str() << ")\n\n"
        << "Return as JSON:\n"
        << R"({"officers":["exact name 1","exact name 2",...],"crews":[{"captain":"name","bridge":["name","name"],"why":"brief reason"}],"summary":"1-2 sentence META overview"})";
     return ss.str();
