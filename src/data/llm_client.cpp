@@ -121,10 +121,66 @@ bool save_ai_config(const AiConfig& config, const std::string& path) {
 }
 
 // ---------------------------------------------------------------------------
+// Load .env file — sets environment variables for API keys
+// Parses lines like: export KEY='value' or KEY=value
+// Only sets variables that are not already set in the environment.
+// ---------------------------------------------------------------------------
+
+static void load_dotenv() {
+    static bool loaded = false;
+    if (loaded) return;
+    loaded = true;
+
+    // Try .env in current dir, then project root
+    const char* paths[] = { ".env", "data/../.env" };
+    std::ifstream f;
+    for (auto p : paths) {
+        f.open(p);
+        if (f) break;
+    }
+    if (!f) return;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        // Skip comments and blank lines
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos || line[start] == '#') continue;
+
+        // Strip optional "export " prefix
+        std::string trimmed = line.substr(start);
+        if (trimmed.substr(0, 7) == "export ") {
+            trimmed = trimmed.substr(7);
+            start = trimmed.find_first_not_of(" \t");
+            if (start != std::string::npos) trimmed = trimmed.substr(start);
+        }
+
+        // Split on first '='
+        auto eq = trimmed.find('=');
+        if (eq == std::string::npos) continue;
+
+        std::string key = trimmed.substr(0, eq);
+        std::string val = trimmed.substr(eq + 1);
+
+        // Strip surrounding quotes from value
+        if (val.size() >= 2 &&
+            ((val.front() == '\'' && val.back() == '\'') ||
+             (val.front() == '"'  && val.back() == '"'))) {
+            val = val.substr(1, val.size() - 2);
+        }
+
+        // Only set if not already in environment (don't override explicit exports)
+        if (!std::getenv(key.c_str())) {
+            setenv(key.c_str(), val.c_str(), 0);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Resolve API key from environment variable name
 // ---------------------------------------------------------------------------
 
 static std::string resolve_api_key(const std::string& env_var_name) {
+    load_dotenv();  // Ensure .env is loaded before checking
     if (env_var_name.empty()) return "";
     const char* val = std::getenv(env_var_name.c_str());
     return val ? std::string(val) : "";

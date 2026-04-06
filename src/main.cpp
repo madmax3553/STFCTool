@@ -5209,7 +5209,7 @@ int main() {
                         const auto& officers = state->optimizer->officers();
                         auto groups = state->ai_engine.prepare_groups(officers);
                         if (groups.empty()) {
-                            state->set_status("No groups could be prepared. Refresh META cache first [M].");
+                            state->set_status("No groups could be prepared. Import META data with [T]/[P] first.");
                             return true;
                         }
                         state->ai_prepared_groups = std::move(groups);
@@ -5225,129 +5225,170 @@ int main() {
                         return true;
 
                     } else if (stage == 1) {
-                        // Stage 1 → Query the selected group via AI
+                        // Stage 1 → Query ALL prepared groups via AI sequentially
                         if (!state->ai_engine.is_available()) {
                             state->set_status("AI not available. Press [I] to re-initialize.");
                             return true;
                         }
-                        int sg = state->ai_selected_group;
-                        if (sg < 0 || sg >= (int)state->ai_prepared_groups.size()) {
-                            state->set_status("No group selected.");
+                        if (state->ai_prepared_groups.empty()) {
+                            state->set_status("No groups prepared.");
                             return true;
-                        }
-
-                        // Build a filtered copy of the group with only enabled officers
-                        OfficerGroup query_group = state->ai_prepared_groups[sg];
-                        if (sg < (int)state->ai_officer_enabled.size()) {
-                            std::vector<const ClassifiedOfficer*> filtered;
-                            const auto& enabled = state->ai_officer_enabled[sg];
-                            for (int oi = 0; oi < (int)query_group.officers.size(); ++oi) {
-                                if (oi < (int)enabled.size() && enabled[oi]) {
-                                    filtered.push_back(query_group.officers[oi]);
-                                }
-                            }
-                            query_group.officers = std::move(filtered);
-                        }
-
-                        if (query_group.empty() && !query_group.has_meta()) {
-                            state->set_status("No officers or META data for " + query_group.name + ".");
-                            return true;
-                        }
-
-                        // Inject locked crew context into prompt guidance
-                        // so the AI doesn't reuse officers from locked crews
-                        if (!state->ai_locked_officer_names.empty()) {
-                            std::string locked_ctx = "\n\nIMPORTANT: The following officers are ALREADY ASSIGNED to locked crews. "
-                                "Do NOT use them in your recommendations:\n";
-                            for (const auto& name : state->ai_locked_officer_names) {
-                                locked_ctx += "- " + name + "\n";
-                            }
-                            locked_ctx += "Build complementary crews using ONLY the remaining officers.\n";
-                            query_group.prompt_guidance += locked_ctx;
                         }
 
                         state->ai_running = true;
+                        state->ai_cancel_groups = false;
                         {
                             std::lock_guard<std::mutex> lk(state->status_mutex);
                             state->ai_stream_text.clear();
                         }
-                        state->ai_group_progress = "Querying " + query_group.name + "...";
-                        state->set_status("Querying " + query_group.name + " (" +
-                            std::to_string(query_group.size()) + " officers)...");
 
-                        std::thread([state, query_group]() {
+                        // Snapshot the prepared groups and toggle state for the thread
+                        auto prepared = state->ai_prepared_groups;
+                        auto enabled  = state->ai_officer_enabled;
+
+                        int total_groups = (int)prepared.size();
+                        state->ai_group_progress = "Querying " + prepared[0].name +
+                            " (1/" + std::to_string(total_groups) + ")...";
+                        state->set_status("Querying all " + std::to_string(total_groups) + " groups...");
+
+                        std::thread([state, prepared, enabled, total_groups]() {
                           try {
-                            auto stream_cb = [state](const std::string& chunk) {
-                                std::lock_guard<std::mutex> lk(state->status_mutex);
-                                state->ai_stream_text += chunk;
+                            // Track which officers are used across groups (auto-locking)
+                            std::set<std::string> locked_names;
+
+                            // Preserve any existing locked officer names from prior sessions
+                            locked_names = state->ai_locked_officer_names;
+
+                            int succeeded = 0;
+                            int completed = 0;
+
+                            for (int gi = 0; gi < total_groups; ++gi) {
+                                // Check for cancellation
+                                if (state->ai_cancel_groups) {
+                                    state->ai_group_progress = "Cancelled after " +
+                                        std::to_string(completed) + "/" + std::to_string(total_groups) + " groups.";
+                                    break;
+                                }
+
+                                // Build filtered group with only enabled officers
+                                OfficerGroup query_group = prepared[gi];
+                                if (gi < (int)enabled.size()) {
+                                    std::vector<const ClassifiedOfficer*> filtered;
+                                    const auto& en = enabled[gi];
+                                    for (int oi = 0; oi < (int)query_group.officers.size(); ++oi) {
+                                        if (oi < (int)en.size() && en[oi]) {
+                                            filtered.push_back(query_group.officers[oi]);
+                                        }
+                                    }
+                                    query_group.officers = std::move(filtered);
+                                }
+
+                                if (query_group.empty() && !query_group.has_meta()) {
+                                    ++completed;
+                                    continue;  // Skip empty groups
+                                }
+
+                                // Inject locked crew context so AI avoids reusing officers
+                                if (!locked_names.empty()) {
+                                    std::string locked_ctx = "\n\nIMPORTANT: The following officers are ALREADY ASSIGNED to locked crews. "
+                                        "Do NOT use them in your recommendations:\n";
+                                    for (const auto& name : locked_names) {
+                                        locked_ctx += "- " + name + "\n";
+                                    }
+                                    locked_ctx += "Build complementary crews using ONLY the remaining officers.\n";
+                                    query_group.prompt_guidance += locked_ctx;
+                                }
+
+                                // Update progress
+                                state->ai_group_progress = "Querying " + query_group.name +
+                                    " (" + std::to_string(gi + 1) + "/" + std::to_string(total_groups) + ")...";
+                                {
+                                    std::lock_guard<std::mutex> lk(state->status_mutex);
+                                    state->ai_stream_text.clear();
+                                }
                                 auto screen = ScreenInteractive::Active();
                                 if (screen) screen->PostEvent(Event::Custom);
-                            };
 
-                            auto result = state->ai_engine.query_single_group(query_group, stream_cb);
+                                auto stream_cb = [state](const std::string& chunk) {
+                                    std::lock_guard<std::mutex> lk(state->status_mutex);
+                                    state->ai_stream_text += chunk;
+                                    auto screen = ScreenInteractive::Active();
+                                    if (screen) screen->PostEvent(Event::Custom);
+                                };
 
-                            // Merge result into group_results (lock to prevent data race with UI thread)
-                            {
-                                std::lock_guard<std::mutex> lk(state->status_mutex);
+                                auto result = state->ai_engine.query_single_group(query_group, stream_cb);
 
-                                // Find or create entry for this group
-                                bool found = false;
-                                for (auto& gr : state->ai_group_result.group_results) {
-                                    if (gr.group_name == result.group_name) {
-                                        gr = std::move(result);
-                                        found = true;
-                                        break;
+                                // Merge result into pipeline results
+                                {
+                                    std::lock_guard<std::mutex> lk(state->status_mutex);
+
+                                    bool found = false;
+                                    for (auto& gr : state->ai_group_result.group_results) {
+                                        if (gr.group_name == result.group_name) {
+                                            gr = std::move(result);
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!found) {
+                                        state->ai_group_result.group_results.push_back(std::move(result));
+                                    }
+
+                                    state->ai_stream_text.clear();
+                                }
+
+                                // Get reference to the just-added result
+                                const auto& last = state->ai_group_result.group_results.back();
+                                ++completed;
+                                if (last.ok()) {
+                                    ++succeeded;
+                                    // Auto-lock: add all officers from the first crew to locked set
+                                    // so subsequent groups get complementary recommendations
+                                    if (!last.crews.empty()) {
+                                        const auto& crew = last.crews[0];
+                                        locked_names.insert(crew.captain);
+                                        for (const auto& b : crew.bridge) locked_names.insert(b);
                                     }
                                 }
-                                if (!found) {
-                                    state->ai_group_result.group_results.push_back(std::move(result));
-                                    state->ai_group_result.groups_total = (int)state->ai_group_result.group_results.size();
-                                }
 
-                                // Update counters
-                                int completed = 0, succeeded = 0;
-                                for (const auto& gr : state->ai_group_result.group_results) {
-                                    if (gr.ok() || !gr.error.empty()) ++completed;
-                                    if (gr.ok()) ++succeeded;
-                                }
+                                // Update pipeline counters
+                                state->ai_group_result.groups_total = total_groups;
                                 state->ai_group_result.groups_completed = completed;
                                 state->ai_group_result.groups_succeeded = succeeded;
                                 if (state->ai_group_result.model_used.empty()) {
                                     auto s = state->ai_engine.status();
                                     state->ai_group_result.model_used = s.model;
                                 }
+                            }
 
+                            // All groups done — update state
+                            {
+                                std::lock_guard<std::mutex> lk(state->status_mutex);
                                 state->ai_stream_text.clear();
                                 state->ai_group_progress.clear();
                                 state->ai_running = false;
-
-                                // Move to stage 2 (results)
                                 state->ai_group_stage = 2;
-                                // Find the index of the group we just queried in the results
+                                state->ai_selected_group = 0;
+                                state->ai_selected_group_crew = 0;
+
+                                // Mark all successful groups as locked
+                                state->ai_group_locked.resize(state->ai_group_result.group_results.size(), false);
+                                state->ai_locked_officer_names = locked_names;
                                 for (int i = 0; i < (int)state->ai_group_result.group_results.size(); ++i) {
-                                    if (state->ai_group_result.group_results[i].group_name == query_group.name) {
-                                        state->ai_selected_group = i;
-                                        break;
+                                    if (state->ai_group_result.group_results[i].ok()) {
+                                        state->ai_group_locked[i] = true;
                                     }
                                 }
-                                state->ai_selected_group_crew = 0;
                             }
 
                             // Save results to disk
                             stfc::save_group_results(state->ai_group_result,
                                 state->ai_group_locked, state->ai_locked_officer_names);
 
-                            // Status update (set_status has its own lock)
-                            {
-                                std::lock_guard<std::mutex> lk(state->status_mutex);
-                                const auto& last = state->ai_group_result.group_results.back();
-                                if (last.ok()) {
-                                    state->status_message = query_group.name + ": " +
-                                        std::to_string(last.crews.size()) + " crews recommended.";
-                                } else {
-                                    state->status_message = query_group.name + " error: " + last.error;
-                                }
-                            }
+                            int s_count = state->ai_group_result.groups_succeeded;
+                            int t_count = state->ai_group_result.groups_completed;
+                            state->set_status("Done: " + std::to_string(s_count) + "/" +
+                                std::to_string(t_count) + " groups succeeded.");
 
                             auto screen = ScreenInteractive::Active();
                             if (screen) screen->PostEvent(Event::Custom);
