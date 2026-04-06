@@ -1143,6 +1143,11 @@ void CrewOptimizer::classify_officers() {
                 off.cm_description = sj["captain_maneuver"].get<std::string>();
             }
 
+            // OA description from bootstrap — fallback when CSV oa_text is empty
+            if (off.oa_text.empty() && sj.contains("officer_ability") && sj["officer_ability"].is_string()) {
+                off.oa_text = sj["officer_ability"].get<std::string>();
+            }
+
             // State data from bootstrap — enrich the tag-based classification
             // with structured data when the text-matching missed something
             if (sj.contains("states") && sj["states"].is_object()) {

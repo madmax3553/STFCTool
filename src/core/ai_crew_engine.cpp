@@ -953,10 +953,8 @@ GroupQueryResult AiCrewEngine::query_single_group(
     }
     std::string sys_prompt = group_system_prompt(group.id, example_names);
 
-    // Inject Gemini META knowledge into system prompt when available.
-    // This transforms Ollama from "guess based on tags" to "arrange officers
-    // according to the known 2026 meta synergies". Zero additional API cost —
-    // uses cached data from the M-key refresh.
+    // Inject META knowledge into system prompt when available.
+    // Cached data from template workflow or prior sessions.
     if (!group.meta_summary.empty() &&
         group.meta_summary.find("Error:") == std::string::npos &&
         group.meta_summary.find("rate limit") == std::string::npos) {
@@ -973,12 +971,12 @@ GroupQueryResult AiCrewEngine::query_single_group(
         sys_prompt += history_context;
     }
 
-    // Build user prompt with group officers + META context
-    // IMPORTANT: Keep this as simple as possible for 1B models.
-    // They hallucinate when given too much text or complex instructions.
+    // Build user prompt with officer roster including ability data.
+    // Claude Sonnet handles rich context well — include CM/OA/BDA descriptions,
+    // numeric values, synergy data, and classification tags for best quality.
     std::ostringstream user;
 
-    // Plain-text officer name list (1B models handle this better than JSON)
+    // Rich officer roster with ability descriptions for high-quality crew reasoning
     if (group.size() > 0) {
         user << "Pick crews from ONLY these " << group.size() << " officers:\n";
         for (const auto* off : group.officers) {
@@ -989,9 +987,79 @@ GroupQueryResult AiCrewEngine::query_single_group(
             else if (off->officer_class == 3) cls = "ENG";
             else cls = "???";
 
-            user << "- " << off->name << " (" << cls << " R" << off->rank << ")";
+            // Header line: name, class, rank, group, synergy, BDA flag
+            user << "- " << off->name << " (" << cls << " R" << off->rank;
+            if (!off->group.empty()) {
+                user << ", " << off->group;
+            }
+            if (off->synergy_full > 0.0 || off->synergy_half > 0.0) {
+                user << ", synergy: "
+                     << static_cast<int>(off->synergy_full * 100) << "%/"
+                     << static_cast<int>(off->synergy_half * 100) << "%";
+            }
+            user << ")";
+            if (off->is_bda()) user << " [BDA]";
+            user << "\n";
 
-            // Add key tags inline — just the most important ones
+            // Captain's Maneuver line
+            if (off->is_bda()) {
+                user << "  CM: (Below Decks — no captain maneuver)\n";
+            } else {
+                // Prefer cm_description (from JSON), fall back to cm_text (from CSV)
+                std::string cm_desc = off->cm_description;
+                if (cm_desc.empty()) cm_desc = off->cm_text;
+                if (!cm_desc.empty()) {
+                    user << "  CM: " << cm_desc;
+                    if (off->cm_value > 0.0) {
+                        // Format as percentage if value < 10 (likely a ratio), else raw
+                        if (off->cm_value < 10.0)
+                            user << " | " << static_cast<int>(off->cm_value * 100) << "%";
+                        else
+                            user << " | " << static_cast<int>(off->cm_value);
+                    }
+                    user << "\n";
+                }
+            }
+
+            // Officer Ability line
+            {
+                std::string oa_desc = off->oa_text;
+                // oa_text is populated from CSV description or JSON officer_ability fallback
+                if (!oa_desc.empty() || off->oa_value > 0.0) {
+                    user << "  OA: ";
+                    if (!oa_desc.empty()) user << oa_desc;
+                    if (off->oa_value > 0.0) {
+                        // Format: percentage if < 10, raw number otherwise (e.g. apex barrier values)
+                        if (off->oa_value < 10.0)
+                            user << " | " << static_cast<int>(off->oa_value * 100) << "% at R" << off->rank;
+                        else
+                            user << " | " << static_cast<int>(off->oa_value) << " at R" << off->rank;
+                    }
+                    if (off->oa_chance > 0.0 && off->oa_chance < 1.0) {
+                        user << " | " << static_cast<int>(off->oa_chance * 100) << "% chance";
+                    }
+                    user << "\n";
+                }
+            }
+
+            // Below Decks Ability line (only for BDA officers)
+            if (off->is_bda()) {
+                std::string bda_desc = off->bda_description;
+                if (bda_desc.empty()) bda_desc = off->bda_text;
+                if (!bda_desc.empty() || off->bda_value > 0.0) {
+                    user << "  BDA: ";
+                    if (!bda_desc.empty()) user << bda_desc;
+                    if (off->bda_value > 0.0) {
+                        if (off->bda_value < 10.0)
+                            user << " | " << static_cast<int>(off->bda_value * 100) << "% at R" << off->rank;
+                        else
+                            user << " | " << static_cast<int>(off->bda_value) << " at R" << off->rank;
+                    }
+                    user << "\n";
+                }
+            }
+
+            // Tags line — classification tags for quick filtering
             std::vector<std::string> key_tags;
             if (off->shield_piercing) key_tags.push_back("shield_pierce");
             if (off->armor_piercing) key_tags.push_back("armor_pierce");
@@ -1003,19 +1071,19 @@ GroupQueryResult AiCrewEngine::query_single_group(
             if (off->apex_barrier) key_tags.push_back("apex_barrier");
             if (off->apex_shred) key_tags.push_back("apex_shred");
             if (off->isolytic_cascade) key_tags.push_back("isolytic");
+            if (off->cumulative_stacking) key_tags.push_back("cumulative");
             for (const auto& s : off->states_applied)
                 key_tags.push_back("applies:" + s);
             for (const auto& s : off->states_benefit)
                 key_tags.push_back("benefits:" + s);
             if (!key_tags.empty()) {
-                user << " [";
+                user << "  Tags: [";
                 for (size_t ti = 0; ti < key_tags.size(); ++ti) {
-                    if (ti > 0) user << ",";
+                    if (ti > 0) user << ", ";
                     user << key_tags[ti];
                 }
-                user << "]";
+                user << "]\n";
             }
-            user << "\n";
         }
     } else {
         user << "The player owns NONE of the META officers for " << group.name << ".\n";
@@ -1023,10 +1091,10 @@ GroupQueryResult AiCrewEngine::query_single_group(
 
     user << "\n" << group.prompt_guidance << "\n\n";
 
-    // NOT-OWNED officers are intentionally excluded from the Ollama prompt.
-    // They caused hallucination — the 3b model would pick names from "Upgrades to get"
-    // and use them in crews even though the player doesn't own them.
-    // The not-owned list is displayed in the TUI (Stage 1) as aspirational goals instead.
+    // NOT-OWNED officers are excluded from the prompt.
+    // Including them caused hallucination in smaller models — the model would
+    // pick names from an aspirational list and use them in crews.
+    // The not-owned list is displayed in the TUI (Stage 1) as upgrade goals instead.
 
     if (group.size() > 0) {
         user << "Build 2-3 crews. Each crew = 1 captain + 2 bridge officers.\n";
