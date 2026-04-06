@@ -906,14 +906,14 @@ struct AppState {
     std::string ai_group_progress;              // "Querying PvP Combat (3/8)..."
     std::atomic<bool> ai_cancel_groups{false};  // Cancel flag for group pipeline
 
-    // META cache refresh state
-    std::atomic<bool> ai_meta_refreshing{false};  // true while Gemini META refresh is running
-    std::string ai_meta_progress;                  // "Refreshing PvP Combat (2/8)..."
+    // META cache refresh state (unused — kept for potential future use)
+    std::atomic<bool> ai_meta_refreshing{false};
+    std::string ai_meta_progress;
 
     // ---------------------------------------------------------------
     // Staged workflow state (Groups mode sub-stages)
     //
-    // Stage 0: META Review — show Gemini's META officer list per group
+    // Stage 0: META Review — show META officer list per group
     //          + which officers you own vs. don't own
     // Stage 1: Planned Prompt — show editable officer list for selected group
     //          User can toggle officers on/off with Space, see the prompt
@@ -3580,7 +3580,6 @@ static Element render_ai_advisor(AppState& state) {
             filler(),
             text("  META: "),
             text(state.ai_engine.meta_cache().age_str()) | dim | color(state.ai_engine.meta_cache().empty() ? Color::Yellow : Color::Green),
-            text("  [M] Refresh") | dim,
         }),
         hbox({
             filler(),
@@ -3588,7 +3587,7 @@ static Element render_ai_advisor(AppState& state) {
             [&]() -> Element {
                 if (safe_mode == 0 && !state.ai_running) {
                     static const char* stage_hints[] = {
-                        "  [T] Copy template  [P] Paste response  [B] Batch  [M] Refresh  [Enter] Prepare",
+                        "  [T] Copy template  [P] Paste response  [B] Batch  [Enter] Prepare",
                         "  [Enter] Send to AI  [Space] Toggle  [Esc] Back",
                         "  [Enter] Re-query  [+/-] Rate  [Esc] Back",
                     };
@@ -3602,7 +3601,7 @@ static Element render_ai_advisor(AppState& state) {
     });
 
     // --- Loading state ---
-    if (state.ai_running || state.ai_meta_refreshing) {
+    if (state.ai_running) {
         Elements stream_lines;
         std::string stream_copy;
         {
@@ -3610,21 +3609,7 @@ static Element render_ai_advisor(AppState& state) {
             stream_copy = state.ai_stream_text;
         }
 
-        if (state.ai_meta_refreshing) {
-            // META cache refresh in progress
-            stream_lines.push_back(text("Refreshing META cache from Gemini...") | bold | center | color(Color::Cyan));
-            if (!state.ai_meta_progress.empty()) {
-                stream_lines.push_back(text(state.ai_meta_progress) | center);
-            }
-            stream_lines.push_back(text("(Press Escape to cancel)") | dim | center);
-            if (!stream_copy.empty()) {
-                stream_lines.push_back(text("") );
-                std::string preview = stream_copy.substr(0, std::min(stream_copy.size(), size_t(500)));
-                if (stream_copy.size() > 500) preview += "...";
-                auto plines = wrap_text(preview, 90, dim);
-                for (auto& l : plines) stream_lines.push_back(std::move(l));
-            }
-        } else if (stream_copy.empty()) {
+        if (stream_copy.empty()) {
             if (safe_mode == 0 && !state.ai_group_progress.empty()) {
                 // Groups mode — show per-group progress
                 stream_lines.push_back(text(state.ai_group_progress) | bold | center);
@@ -3671,7 +3656,7 @@ static Element render_ai_advisor(AppState& state) {
         // ===============================================================
         // Groups mode — 3-stage workflow
         //
-        // Stage 0: META Review — show Gemini's META cache per group
+        // Stage 0: META Review — show META cache per group
         // Stage 1: Planned Prompt — editable officer list for selected group
         // Stage 2: Results — AI crew recs per group
         // ===============================================================
@@ -3691,8 +3676,6 @@ static Element render_ai_advisor(AppState& state) {
                     text("Option 1: Press [T] to copy a META template to clipboard,") | center | dim,
                     text("paste into a web AI (ChatGPT/Gemini/Claude), copy the response,") | center | dim,
                     text("then press [P] to import. Press [B] to cycle batches.") | center | dim,
-                    text("") ,
-                    text("Option 2: Press [M] to auto-refresh META from Gemini API.") | center | dim,
                     text("") ,
                     text("Once cached, press [Enter] to prepare groups for AI.") | center | dim,
                 });
@@ -3809,7 +3792,7 @@ static Element render_ai_advisor(AppState& state) {
                     text("Cache: " + meta.age_str()) | dim,
                 }));
                 footer.push_back(hbox({
-                    text("  [T] Copy template  [P] Paste response  [B] Next batch  [M] Refresh  [Enter] Prepare") | dim,
+                    text("  [T] Copy template  [P] Paste response  [B] Next batch  [Enter] Prepare") | dim,
                 }));
 
                 content = vbox({
@@ -3958,7 +3941,7 @@ static Element render_ai_advisor(AppState& state) {
                     // Show ideal META crew descriptions if available
                     if (!pg.meta_crew_descriptions.empty()) {
                         lines.push_back(separator());
-                        lines.push_back(text("  Ideal META Crews (from Gemini):") | bold | dim | color(Color::Cyan));
+                        lines.push_back(text("  Ideal META Crews:") | bold | dim | color(Color::Cyan));
                         for (size_t ci = 0; ci < pg.meta_crew_descriptions.size(); ++ci) {
                             lines.push_back(hbox({
                                 text("  " + std::to_string(ci + 1) + ". ") | dim,
@@ -4872,7 +4855,7 @@ int main() {
             }
 
             // Escape: back one stage (Groups mode only, when not running)
-            if (event == Event::Escape && state->ai_mode == 0 && !state->ai_running && !state->ai_meta_refreshing) {
+            if (event == Event::Escape && state->ai_mode == 0 && !state->ai_running) {
                 if (state->ai_group_stage > 0) {
                     // When going from Stage 2 → Stage 1, remap ai_selected_group
                     // from results-array index to prepared-groups index (they may differ)
@@ -5102,98 +5085,9 @@ int main() {
                 return true;
             }
 
-            // Refresh META cache (Gemini web-search-grounded)
-            if (event == Event::Character('m') || event == Event::Character('M')) {
-                if (!state->ai_running && !state->ai_meta_refreshing) {
-                    if (!state->ai_engine.is_available()) {
-                        state->set_status("AI not available. Press [I] to re-initialize.");
-                        return true;
-                    }
-                    if (!state->optimizer) {
-                        state->set_status("No roster loaded — need officer names for META matching.");
-                        return true;
-                    }
-
-                    state->ai_meta_refreshing = true;
-                    state->ai_meta_progress = "Starting META refresh...";
-                    {
-                        std::lock_guard<std::mutex> lk(state->status_mutex);
-                        state->ai_stream_text.clear();
-                    }
-                    state->ai_cancel_groups = false;
-                    state->set_status("Refreshing META cache from Gemini...");
-
-                    std::thread([state]() {
-                        // Build known officer name list
-                        const auto& officers = state->optimizer->officers();
-                        std::vector<std::string> known_names;
-                        known_names.reserve(officers.size());
-                        for (const auto& off : officers) {
-                            known_names.push_back(off.name);
-                        }
-
-                        // Build player context for level-aware/ship-aware META queries
-                        stfc::MetaPlayerContext player_ctx;
-                        player_ctx.ops_level = state->player_data.ops_level;
-                        for (const auto& ship : state->player_data.ships) {
-                            player_ctx.ship_names.push_back(ship.name);
-                            player_ctx.ship_tiers.push_back(ship.tier);
-                        }
-
-                        auto stream_cb = [state](const std::string& chunk) {
-                            std::lock_guard<std::mutex> lk(state->status_mutex);
-                            state->ai_stream_text += chunk;
-                            auto screen = ScreenInteractive::Active();
-                            if (screen) screen->PostEvent(Event::Custom);
-                        };
-
-                        auto progress_cb = [state](int current, int total, const std::string& group_name) {
-                            state->ai_meta_progress = "Refreshing " + group_name + " (" +
-                                std::to_string(current) + "/" + std::to_string(total) + ")...";
-                            auto screen = ScreenInteractive::Active();
-                            if (screen) screen->PostEvent(Event::Custom);
-                        };
-
-                        auto err = state->ai_engine.refresh_meta_cache(
-                            known_names, player_ctx, stream_cb, progress_cb, &state->ai_cancel_groups);
-
-                        {
-                            std::lock_guard<std::mutex> lk(state->status_mutex);
-                            state->ai_stream_text.clear();
-                        }
-                        state->ai_meta_progress.clear();
-                        state->ai_meta_refreshing = false;
-
-                        // Reset to stage 0 so user can review updated META
-                        state->ai_group_stage = 0;
-                        state->ai_prepared_groups.clear();
-                        state->ai_officer_enabled.clear();
-                        state->ai_group_locked.clear();
-                        state->ai_locked_officer_names.clear();
-                        state->ai_selected_group = 0;
-
-                        if (err.empty()) {
-                            auto age = state->ai_engine.meta_cache().age_str();
-                            int total_officers = 0;
-                            for (const auto& [k, v] : state->ai_engine.meta_cache().groups) {
-                                total_officers += static_cast<int>(v.top_officers.size());
-                            }
-                            state->set_status("META cache refreshed (" + age + ", " +
-                                std::to_string(total_officers) + " META officers matched)");
-                        } else {
-                            state->set_status("META refresh error: " + err);
-                        }
-
-                        auto screen = ScreenInteractive::Active();
-                        if (screen) screen->PostEvent(Event::Custom);
-                    }).detach();
-                }
-                return true;
-            }
-
             // [T] Generate META template → copy to clipboard
             if (event == Event::Character('t') || event == Event::Character('T')) {
-                if (state->ai_group_stage == 0 && !state->ai_running && !state->ai_meta_refreshing) {
+                if (state->ai_group_stage == 0 && !state->ai_running) {
                     int batch = state->ai_meta_template_batch;
                     if (batch < 0 || batch >= stfc::AiCrewEngine::META_BATCH_COUNT) {
                         state->set_status("Invalid batch index: " + std::to_string(batch));
@@ -5229,7 +5123,7 @@ int main() {
 
             // [P] Paste META response from clipboard → import
             if (event == Event::Character('p') || event == Event::Character('P')) {
-                if (state->ai_group_stage == 0 && !state->ai_running && !state->ai_meta_refreshing) {
+                if (state->ai_group_stage == 0 && !state->ai_running) {
                     int batch = state->ai_meta_template_batch;
                     if (batch < 0 || batch >= stfc::AiCrewEngine::META_BATCH_COUNT) {
                         state->set_status("Invalid batch index: " + std::to_string(batch));
@@ -5288,7 +5182,7 @@ int main() {
 
             // [B] Cycle META template batch (next batch)
             if (event == Event::Character('b') || event == Event::Character('B')) {
-                if (state->ai_group_stage == 0 && !state->ai_running && !state->ai_meta_refreshing) {
+                if (state->ai_group_stage == 0 && !state->ai_running) {
                     state->ai_meta_template_batch =
                         (state->ai_meta_template_batch + 1) % stfc::AiCrewEngine::META_BATCH_COUNT;
                     std::string batch_name = stfc::AiCrewEngine::meta_batch_name(state->ai_meta_template_batch);
@@ -5299,15 +5193,8 @@ int main() {
                 return true;
             }
 
-            // Cancel META refresh
-            if (event == Event::Escape && state->ai_meta_refreshing) {
-                state->ai_cancel_groups = true;
-                state->set_status("Cancelling META refresh...");
-                return true;
-            }
-
             // Run AI query — stage-aware for mode 0
-            if (event == Event::Return && !state->ai_running && !state->ai_meta_refreshing) {
+            if (event == Event::Return && !state->ai_running) {
                 // Mode 0 has staged workflow
                 if (state->ai_mode == 0) {
                     if (!state->optimizer) {

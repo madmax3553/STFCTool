@@ -54,10 +54,10 @@ struct OfficerGroup {
     std::string description;                   // One-line: "Officers specializing in..."
     std::vector<const ClassifiedOfficer*> officers;  // OWNED officers (pointers into master list)
 
-    // META context — full Gemini knowledge for this group
+    // META context — external META knowledge for this group
     std::vector<std::string> meta_not_owned;   // META officer names the player does NOT own (aspirational)
-    std::vector<std::string> meta_crew_descriptions; // Gemini's ideal crew descriptions (if available)
-    std::string meta_summary;                  // Gemini's META overview text
+    std::vector<std::string> meta_crew_descriptions; // Ideal crew descriptions from META source (if available)
+    std::string meta_summary;                  // META overview text
 
     // For prompt building
     std::string prompt_guidance;               // Scenario-specific LLM guidance
