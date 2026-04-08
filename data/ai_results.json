@@ -1,0 +1,748 @@
+{
+  "error": "",
+  "group_results": [
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Carol Freeman",
+            "Mirror Kira"
+          ],
+          "captain": "Mirror Picard",
+          "confidence": 0.5,
+          "reasoning": "This crew is built around the current PvP meta of Isolytic Damage and Apex Barriers. Mirror Picard as Captain delivers an opening strike of Isolytic Damage and applies Apex Barrier, directly countering enemy mitigation. Carol Freeman amplifies damage with additional Isolytic Damage and extra shots, significantly boosting the ship's offensive output. Mirror Kira provides massive Apex Barrier stacking (1500 per round for 5 rounds) and true damage mitigation, creating an impenetrable defense while the isolytic damage overwhelms opponents.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "LORCA",
+            "Damar"
+          ],
+          "captain": "Gorkon",
+          "confidence": 0.5,
+          "reasoning": "This crew focuses on critical hit chains and hull breach exploitation. Gorkon as Captain increases critical hit chances for the first 2 rounds and has a 90% chance to apply hull breach on crits. LORCA reduces opponent damage when they have hull breach and boosts captain maneuver effectiveness by 12%. Damar benefits from hull breach by increasing critical hit chance when scoring crits, creating a devastating feedback loop of crits leading to more crits and sustained hull breach damage.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Yuki Sulu",
+            "Weyoun"
+          ],
+          "captain": "Alexander Marcus",
+          "confidence": 0.5,
+          "reasoning": "This crew combines shield piercing with morale exploitation and extra shots. Alexander Marcus as Captain applies morale when opponent's hull drops below 80% and provides massive shield piercing (400% of defense bonus). Yuki Sulu strips enemy shields each round (10% reduction), weakening their primary defense. Weyoun provides extra shots (100% increase) when the ship has morale, creating a powerful burst damage combination that bypasses shields and overwhelms opponents with volume of fire.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 0,
+      "group_name": "PvP General",
+      "history_id": "1775449311-7204",
+      "locked": true,
+      "officer_count": 13,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Mirror Picard\",\n      \"bridge\": [\n        \"Carol Freeman\",\n        \"Mirror Kira\"\n      ],\n      \"reasoning\": \"This crew is built around the current PvP meta of Isolytic Damage and Apex Barriers. Mirror Picard as Captain delivers an opening strike of Isolytic Damage and applies Apex Barrier, directly countering enemy mitigation. Carol Freeman amplifies damage with additional Isolytic Damage and extra shots, significantly boosting the ship's offensive output. Mirror Kira provides massive Apex Barrier stacking (1500 per round for 5 rounds) and true damage mitigation, creating an impenetrable defense while the isolytic damage overwhelms opponents.\"\n    },\n    {\n      \"captain\": \"Gorkon\",\n      \"bridge\": [\n        \"LORCA\",\n        \"Damar\"\n      ],\n      \"reasoning\": \"This crew focuses on critical hit chains and hull breach exploitation. Gorkon as Captain increases critical hit chances for the first 2 rounds and has a 90% chance to apply hull breach on crits. LORCA reduces opponent damage when they have hull breach and boosts captain maneuver effectiveness by 12%. Damar benefits from hull breach by increasing critical hit chance when scoring crits, creating a devastating feedback loop of crits leading to more crits and sustained hull breach damage.\"\n    },\n    {\n      \"captain\": \"Alexander Marcus\",\n      \"bridge\": [\n        \"Yuki Sulu\",\n        \"Weyoun\"\n      ],\n      \"reasoning\": \"This crew combines shield piercing with morale exploitation and extra shots. Alexander Marcus as Captain applies morale when opponent's hull drops below 80% and provides massive shield piercing (400% of defense bonus). Yuki Sulu strips enemy shields each round (10% reduction), weakening their primary defense. Weyoun provides extra shots (100% increase) when the ship has morale, creating a powerful burst damage combination that bypasses shields and overwhelms opponents with volume of fire.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Mirror Picard",
+            "Carol Freeman"
+          ],
+          "captain": "Mirror Kira",
+          "confidence": 0.5,
+          "reasoning": "Mirror Kira captain provides cumulative Apex Barrier each round for sustained defense. Mirror Picard bridge adds isolytic damage and more apex barrier against assimilated enemies. Carol Freeman bridge provides isolytic cascade scaling when enemies have any state, plus extra shots for more damage output. This crew maximizes Explorer's defensive strengths with apex barrier stacking while adding strong isolytic damage.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Yuki Sulu",
+            "Gorkon"
+          ],
+          "captain": "Alexander Marcus",
+          "confidence": 0.5,
+          "reasoning": "Alexander Marcus captain applies morale when enemy health drops below 80%, triggering shield piercing damage. Yuki Sulu bridge reduces enemy shields each round and provides massive damage bonus against Romulans. Gorkon bridge increases crit chance early and applies hull breach on crits. This crew focuses on shield manipulation and sustained damage through states and crits.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "LORCA",
+            "Jean-Luc Picard"
+          ],
+          "captain": "James T. Kirk",
+          "confidence": 0.5,
+          "reasoning": "Kirk captain provides 40% stat boost when ship has morale, which Kirk's OA can apply with 80% chance each round. LORCA reduces enemy damage when they have hull breach and boosts captain maneuver effectiveness by 12%. Jean-Luc Picard increases all officer ability effectiveness by 20% and adds crit damage. This crew creates a morale-based stat boost engine with ability enhancement.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 1,
+      "group_name": "PvP on Explorer",
+      "history_id": "1775449321-1964",
+      "locked": false,
+      "officer_count": 12,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Mirror Kira\",\n      \"bridge\": [\"Mirror Picard\", \"Carol Freeman\"],\n      \"reasoning\": \"Mirror Kira captain provides cumulative Apex Barrier each round for sustained defense. Mirror Picard bridge adds isolytic damage and more apex barrier against assimilated enemies. Carol Freeman bridge provides isolytic cascade scaling when enemies have any state, plus extra shots for more damage output. This crew maximizes Explorer's defensive strengths with apex barrier stacking while adding strong isolytic damage.\"\n    },\n    {\n      \"captain\": \"Alexander Marcus\",\n      \"bridge\": [\"Yuki Sulu\", \"Gorkon\"],\n      \"reasoning\": \"Alexander Marcus captain applies morale when enemy health drops below 80%, triggering shield piercing damage. Yuki Sulu bridge reduces enemy shields each round and provides massive damage bonus against Romulans. Gorkon bridge increases crit chance early and applies hull breach on crits. This crew focuses on shield manipulation and sustained damage through states and crits.\"\n    },\n    {\n      \"captain\": \"James T. Kirk\",\n      \"bridge\": [\"LORCA\", \"Jean-Luc Picard\"],\n      \"reasoning\": \"Kirk captain provides 40% stat boost when ship has morale, which Kirk's OA can apply with 80% chance each round. LORCA reduces enemy damage when they have hull breach and boosts captain maneuver effectiveness by 12%. Jean-Luc Picard increases all officer ability effectiveness by 20% and adds crit damage. This crew creates a morale-based stat boost engine with ability enhancement.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Gorkon",
+            "Alexander Marcus"
+          ],
+          "captain": "Carol Freeman",
+          "confidence": 0.5,
+          "reasoning": "Carol Freeman's CM provides +100% shots against players, maximizing battleship damage output. Gorkon's OA gives 90% chance for hull breach on crits, while his synergy with Klingon Patriots boosts stats. Alexander Marcus provides 400% shield piercing from defense bonus, cutting through enemy defenses. Freeman's OA synergizes with breach states for +90% isolytic cascade damage.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Mirror Picard",
+            "Yuki Sulu"
+          ],
+          "captain": "Mirror Kira",
+          "confidence": 0.5,
+          "reasoning": "Mirror Kira provides massive cumulative apex barrier (+1500 per round for 5 rounds), giving exceptional hull-based survivability. Her OA converts apex barrier to true damage mitigation. Mirror Picard adds +50% isolytic cascade and synergizes with Mirror Universe group (50%/25%). Yuki Sulu's OA provides 500% crew health bonus as damage against Romulans, while his CM reduces enemy shields by 10% each round.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "LORCA",
+            "Worf"
+          ],
+          "captain": "Strike Team SNW Ortegas",
+          "confidence": 0.5,
+          "reasoning": "Ortegas' battleship-specific CM delays enemy weapons by 1 round and applies burning to player explorers, controlling engagement tempo. LORCA reduces opponent damage by 10% when they have hull breach and his OA boosts captain maneuver effectiveness by 12%. Worf provides 60% mitigation against non-players and his synergy with TNG Crew (15%/10%) enhances survivability for mixed combat scenarios.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 2,
+      "group_name": "PvP on Battleship",
+      "history_id": "1775449331-3745",
+      "locked": false,
+      "officer_count": 13,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Carol Freeman\",\n      \"bridge\": [\"Gorkon\", \"Alexander Marcus\"],\n      \"reasoning\": \"Carol Freeman's CM provides +100% shots against players, maximizing battleship damage output. Gorkon's OA gives 90% chance for hull breach on crits, while his synergy with Klingon Patriots boosts stats. Alexander Marcus provides 400% shield piercing from defense bonus, cutting through enemy defenses. Freeman's OA synergizes with breach states for +90% isolytic cascade damage.\"\n    },\n    {\n      \"captain\": \"Mirror Kira\",\n      \"bridge\": [\"Mirror Picard\", \"Yuki Sulu\"],\n      \"reasoning\": \"Mirror Kira provides massive cumulative apex barrier (+1500 per round for 5 rounds), giving exceptional hull-based survivability. Her OA converts apex barrier to true damage mitigation. Mirror Picard adds +50% isolytic cascade and synergizes with Mirror Universe group (50%/25%). Yuki Sulu's OA provides 500% crew health bonus as damage against Romulans, while his CM reduces enemy shields by 10% each round.\"\n    },\n    {\n      \"captain\": \"Strike Team SNW Ortegas\",\n      \"bridge\": [\"LORCA\", \"Worf\"],\n      \"reasoning\": \"Ortegas' battleship-specific CM delays enemy weapons by 1 round and applies burning to player explorers, controlling engagement tempo. LORCA reduces opponent damage by 10% when they have hull breach and his OA boosts captain maneuver effectiveness by 12%. Worf provides 60% mitigation against non-players and his synergy with TNG Crew (15%/10%) enhances survivability for mixed combat scenarios.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Gorkon",
+            "Carol Freeman"
+          ],
+          "captain": "Mirror Picard",
+          "confidence": 0.5,
+          "reasoning": "Mirror Picard's CM boosts Isolytic Cascade by 50% at round start against players - perfect for devastating opening strikes. Gorkon provides +10% crit chance for first 2 rounds and 90% chance to apply hull breach on crits. Carol Freeman adds extra shots on combat start and gets +90% isolytic cascade damage when enemy has any state (like Gorkon's breach), creating a powerful synergy for massive opening damage.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Damar",
+            "LORCA"
+          ],
+          "captain": "Gorkon",
+          "confidence": 0.5,
+          "reasoning": "Gorkon as captain provides +10% crit chance for first 2 rounds and applies hull breach on 90% of crits. Damar synergizes perfectly - when on Interceptor fighting players with hull breach, scoring crits increases crit chance by 2% (stacking effect). LORCA reduces opponent damage by 10% when they have hull breach and boosts captain maneuver effectiveness by 12%, making Gorkon's crit boost even stronger.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Mirror Kira",
+            "Alexander Marcus"
+          ],
+          "captain": "Carol Freeman",
+          "confidence": 0.5,
+          "reasoning": "Carol Freeman provides 100% extra shots on combat start against players for overwhelming firepower. Mirror Kira gives massive cumulative apex barrier (+1500 per round for 5 rounds) providing survivability while the Interceptor delivers damage. Alexander Marcus has 100% chance to inspire morale when opponent drops below 80% health, and provides shield piercing damage, helping punch through defenses for the killing blow.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 3,
+      "group_name": "PvP on Interceptor",
+      "history_id": "1775449340-8350",
+      "locked": false,
+      "officer_count": 12,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Mirror Picard\",\n      \"bridge\": [\"Gorkon\", \"Carol Freeman\"],\n      \"reasoning\": \"Mirror Picard's CM boosts Isolytic Cascade by 50% at round start against players - perfect for devastating opening strikes. Gorkon provides +10% crit chance for first 2 rounds and 90% chance to apply hull breach on crits. Carol Freeman adds extra shots on combat start and gets +90% isolytic cascade damage when enemy has any state (like Gorkon's breach), creating a powerful synergy for massive opening damage.\"\n    },\n    {\n      \"captain\": \"Gorkon\",\n      \"bridge\": [\"Damar\", \"LORCA\"],\n      \"reasoning\": \"Gorkon as captain provides +10% crit chance for first 2 rounds and applies hull breach on 90% of crits. Damar synergizes perfectly - when on Interceptor fighting players with hull breach, scoring crits increases crit chance by 2% (stacking effect). LORCA reduces opponent damage by 10% when they have hull breach and boosts captain maneuver effectiveness by 12%, making Gorkon's crit boost even stronger.\"\n    },\n    {\n      \"captain\": \"Carol Freeman\",\n      \"bridge\": [\"Mirror Kira\", \"Alexander Marcus\"],\n      \"reasoning\": \"Carol Freeman provides 100% extra shots on combat start against players for overwhelming firepower. Mirror Kira gives massive cumulative apex barrier (+1500 per round for 5 rounds) providing survivability while the Interceptor delivers damage. Alexander Marcus has 100% chance to inspire morale when opponent drops below 80% health, and provides shield piercing damage, helping punch through defenses for the killing blow.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Alexander Marcus",
+            "Carol Freeman"
+          ],
+          "captain": "Yuki Sulu",
+          "confidence": 0.5,
+          "reasoning": "Yuki Sulu as captain strips 10% shield health each round, directly countering Explorer shields. Alexander Marcus provides 400% shield piercing from defense bonus, bypassing remaining shields. Carol Freeman adds extra shots and 90% isolytic cascade damage when enemy has any state, creating devastating damage once shields are compromised.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Gorkon",
+            "Carol Freeman"
+          ],
+          "captain": "Gul Dukat",
+          "confidence": 0.5,
+          "reasoning": "Gul Dukat applies Hull Breach at round start when on Interceptor vs players, exploiting the triangle advantage. Gorkon increases crit chance first 2 rounds and has 90% chance to cause Hull Breach on crits. Carol Freeman provides extra shots and massive isolytic damage bonus when enemy has Hull Breach state, creating a devastating breach-focused combo.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Alexander Marcus",
+            "Mirror Kira"
+          ],
+          "captain": "Mirror Picard",
+          "confidence": 0.5,
+          "reasoning": "Mirror Picard increases isolytic cascade 50% on round start vs players, providing consistent damage. Alexander Marcus delivers 400% shield piercing to bypass Explorer shields. Mirror Kira provides apex barrier for survivability and true damage mitigation, ensuring the crew survives long enough to deliver the killing blow through shields.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 4,
+      "group_name": "PvP vs Explorer",
+      "history_id": "1775449348-3880",
+      "locked": false,
+      "officer_count": 13,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Yuki Sulu\",\n      \"bridge\": [\"Alexander Marcus\", \"Carol Freeman\"],\n      \"reasoning\": \"Yuki Sulu as captain strips 10% shield health each round, directly countering Explorer shields. Alexander Marcus provides 400% shield piercing from defense bonus, bypassing remaining shields. Carol Freeman adds extra shots and 90% isolytic cascade damage when enemy has any state, creating devastating damage once shields are compromised.\"\n    },\n    {\n      \"captain\": \"Gul Dukat\",\n      \"bridge\": [\"Gorkon\", \"Carol Freeman\"],\n      \"reasoning\": \"Gul Dukat applies Hull Breach at round start when on Interceptor vs players, exploiting the triangle advantage. Gorkon increases crit chance first 2 rounds and has 90% chance to cause Hull Breach on crits. Carol Freeman provides extra shots and massive isolytic damage bonus when enemy has Hull Breach state, creating a devastating breach-focused combo.\"\n    },\n    {\n      \"captain\": \"Mirror Picard\",\n      \"bridge\": [\"Alexander Marcus\", \"Mirror Kira\"],\n      \"reasoning\": \"Mirror Picard increases isolytic cascade 50% on round start vs players, providing consistent damage. Alexander Marcus delivers 400% shield piercing to bypass Explorer shields. Mirror Kira provides apex barrier for survivability and true damage mitigation, ensuring the crew survives long enough to deliver the killing blow through shields.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Gul Dukat",
+            "LORCA"
+          ],
+          "captain": "Gorkon",
+          "confidence": 0.5,
+          "reasoning": "Gorkon's CM increases critical hit chances for first 2 rounds, which synergizes perfectly with his OA that has 90% chance to cause hull breach on critical hits. Gul Dukat's OA provides additional hull breach application chance, while LORCA's OA boosts captain maneuver effectiveness by 12%, making Gorkon's critical hit bonus even stronger. This creates a powerful hull breach application engine essential for killing battleships.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Carol Freeman",
+            "Mirror Kira"
+          ],
+          "captain": "Mirror Picard",
+          "confidence": 0.5,
+          "reasoning": "Mirror Picard's CM increases Isolytic Cascade damage by 50% against players, which bypasses armor entirely. Carol Freeman's CM provides extra shots (100% increase) for more damage output, and her OA boosts isolytic cascade damage by 90% when enemy has any state. Mirror Kira's OA provides apex barrier true damage mitigation, keeping the crew alive longer to deal sustained damage to heavily armored battleships.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Yuki Sulu",
+            "Spock"
+          ],
+          "captain": "Alexander Marcus",
+          "confidence": 0.5,
+          "reasoning": "Alexander Marcus applies morale when opponent's hull is under 80%, and his OA provides 400% shield piercing to bypass battleship defenses. Yuki Sulu's CM decreases opponent shield health by 10% each round, weakening their defenses. Spock's OA restores 750% of defense to shields when having morale, creating sustainability while Marcus's morale application keeps the crew fighting longer against tough battleship targets.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 5,
+      "group_name": "PvP vs Battleship",
+      "history_id": "1775449357-3071",
+      "locked": false,
+      "officer_count": 12,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Gorkon\",\n      \"bridge\": [\"Gul Dukat\", \"LORCA\"],\n      \"reasoning\": \"Gorkon's CM increases critical hit chances for first 2 rounds, which synergizes perfectly with his OA that has 90% chance to cause hull breach on critical hits. Gul Dukat's OA provides additional hull breach application chance, while LORCA's OA boosts captain maneuver effectiveness by 12%, making Gorkon's critical hit bonus even stronger. This creates a powerful hull breach application engine essential for killing battleships.\"\n    },\n    {\n      \"captain\": \"Mirror Picard\",\n      \"bridge\": [\"Carol Freeman\", \"Mirror Kira\"],\n      \"reasoning\": \"Mirror Picard's CM increases Isolytic Cascade damage by 50% against players, which bypasses armor entirely. Carol Freeman's CM provides extra shots (100% increase) for more damage output, and her OA boosts isolytic cascade damage by 90% when enemy has any state. Mirror Kira's OA provides apex barrier true damage mitigation, keeping the crew alive longer to deal sustained damage to heavily armored battleships.\"\n    },\n    {\n      \"captain\": \"Alexander Marcus\",\n      \"bridge\": [\"Yuki Sulu\", \"Spock\"],\n      \"reasoning\": \"Alexander Marcus applies morale when opponent's hull is under 80%, and his OA provides 400% shield piercing to bypass battleship defenses. Yuki Sulu's CM decreases opponent shield health by 10% each round, weakening their defenses. Spock's OA restores 750% of defense to shields when having morale, creating sustainability while Marcus's morale application keeps the crew fighting longer against tough battleship targets.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Gorkon",
+            "LORCA"
+          ],
+          "captain": "Mirror Kira",
+          "confidence": 0.5,
+          "reasoning": "Mirror Kira provides massive Apex Barrier (1500 per round, cumulative) for true damage mitigation against Interceptor crits. Gorkon increases crit chance and applies Hull Breach on crits. LORCA reduces opponent damage when they have Hull Breach and boosts captain maneuver effectiveness by 12%, making Mirror Kira's barrier even stronger. This creates a defensive wall while setting up breach damage.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Mirror Picard",
+            "Alexander Marcus"
+          ],
+          "captain": "Carol Freeman",
+          "confidence": 0.5,
+          "reasoning": "Carol Freeman gives 100% extra shots against players for front-loaded damage to quickly destroy fragile Interceptors. Mirror Picard provides Apex Barrier against assimilated targets and boosts Isolytic Cascade damage. Alexander Marcus adds shield piercing and can apply morale when enemy is under 80% health. Freeman also benefits from enemy states with +90% isolytic cascade damage, synergizing with breach/morale applications.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "James T. Kirk",
+            "Weyoun"
+          ],
+          "captain": "Gul Dukat",
+          "confidence": 0.5,
+          "reasoning": "Gul Dukat applies Hull Breach at round start when on Interceptor vs players (100% chance). James T. Kirk provides 40% stat boost when ship has morale and 80% chance to inspire morale each round. Weyoun applies morale on round start when on Explorer, but his officer ability gives +88% weapon shots for 2 rounds when on Explorer with morale, providing sustained damage output against fast Interceptor targets.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 6,
+      "group_name": "PvP vs Interceptor",
+      "history_id": "1775449367-3131",
+      "locked": false,
+      "officer_count": 11,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Mirror Kira\",\n      \"bridge\": [\"Gorkon\", \"LORCA\"],\n      \"reasoning\": \"Mirror Kira provides massive Apex Barrier (1500 per round, cumulative) for true damage mitigation against Interceptor crits. Gorkon increases crit chance and applies Hull Breach on crits. LORCA reduces opponent damage when they have Hull Breach and boosts captain maneuver effectiveness by 12%, making Mirror Kira's barrier even stronger. This creates a defensive wall while setting up breach damage.\"\n    },\n    {\n      \"captain\": \"Carol Freeman\",\n      \"bridge\": [\"Mirror Picard\", \"Alexander Marcus\"],\n      \"reasoning\": \"Carol Freeman gives 100% extra shots against players for front-loaded damage to quickly destroy fragile Interceptors. Mirror Picard provides Apex Barrier against assimilated targets and boosts Isolytic Cascade damage. Alexander Marcus adds shield piercing and can apply morale when enemy is under 80% health. Freeman also benefits from enemy states with +90% isolytic cascade damage, synergizing with breach/morale applications.\"\n    },\n    {\n      \"captain\": \"Gul Dukat\",\n      \"bridge\": [\"James T. Kirk\", \"Weyoun\"],\n      \"reasoning\": \"Gul Dukat applies Hull Breach at round start when on Interceptor vs players (100% chance). James T. Kirk provides 40% stat boost when ship has morale and 80% chance to inspire morale each round. Weyoun applies morale on round start when on Explorer, but his officer ability gives +88% weapon shots for 2 rounds when on Explorer with morale, providing sustained damage output against fast Interceptor targets.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Marlena Moreau",
+            "Grace Chen"
+          ],
+          "captain": "Christopher Pike",
+          "confidence": 0.5,
+          "reasoning": "Pike's CM boosts all officer abilities by 40%, amplifying Moreau's -70% hostile piercing/accuracy reduction and Grace Chen's -30% energy damage reduction. This creates exceptional mitigation scaling perfect for daily hostile grinding. Pike/Moreau is meta for low-level dailies due to massive damage reduction.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Enterprise-E Picard",
+            "Suder"
+          ],
+          "captain": "Kathryn Janeway",
+          "confidence": 0.5,
+          "reasoning": "Janeway's CM provides cumulative shield mitigation when taking hull damage, synergizing with Picard's isolytic cascade damage scaling (+10% per hit for 3 rounds) and Suder's hull repair (18% previous round damage). This crew excels at high-level G5/G6 grinding with isolytic damage ramping and sustain.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Seven of Eleven",
+            "The Doctor"
+          ],
+          "captain": "Five of Eleven",
+          "confidence": 0.5,
+          "reasoning": "Five's CM provides 200% mitigation scaling from officer health, massively boosted by Seven's +100% health to all officers. The Doctor adds cumulative defensive scaling (+2000% of health to armor/deflection/dodge for 2 rounds). Unimatrix synergy between Five and Seven provides 400%/200% stat bonuses for incredible survivability.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 7,
+      "group_name": "PvE General",
+      "history_id": "1775449477-5326",
+      "locked": false,
+      "officer_count": 16,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Christopher Pike\",\n      \"bridge\": [\"Marlena Moreau\", \"Grace Chen\"],\n      \"reasoning\": \"Pike's CM boosts all officer abilities by 40%, amplifying Moreau's -70% hostile piercing/accuracy reduction and Grace Chen's -30% energy damage reduction. This creates exceptional mitigation scaling perfect for daily hostile grinding. Pike/Moreau is meta for low-level dailies due to massive damage reduction.\"\n    },\n    {\n      \"captain\": \"Kathryn Janeway\",\n      \"bridge\": [\"Enterprise-E Picard\", \"Suder\"],\n      \"reasoning\": \"Janeway's CM provides cumulative shield mitigation when taking hull damage, synergizing with Picard's isolytic cascade damage scaling (+10% per hit for 3 rounds) and Suder's hull repair (18% previous round damage). This crew excels at high-level G5/G6 grinding with isolytic damage ramping and sustain.\"\n    },\n    {\n      \"captain\": \"Five of Eleven\",\n      \"bridge\": [\"Seven of Eleven\", \"The Doctor\"],\n      \"reasoning\": \"Five's CM provides 200% mitigation scaling from officer health, massively boosted by Seven's +100% health to all officers. The Doctor adds cumulative defensive scaling (+2000% of health to armor/deflection/dodge for 2 rounds). Unimatrix synergy between Five and Seven provides 400%/200% stat bonuses for incredible survivability.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Trip Tucker",
+            "Phlox"
+          ],
+          "captain": "Jonathan Archer",
+          "confidence": 0.5,
+          "reasoning": "Specialized Xindi crew. Archer's CM provides 300% increased resources from Xindi hostiles, making him the optimal captain for Xindi farming. Trip Tucker's OA reduces opponent critical damage when taking damage from hostiles, providing crucial survivability. Phlox's OA reduces opponent critical hit chance by 60% for 8 rounds against hostiles, creating a defensive synergy that mitigates Xindi burst damage. All three are Enterprise NX-01 officers with strong synergy bonuses.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Tom Paris",
+            "The Doctor"
+          ],
+          "captain": "Enterprise-E Picard",
+          "confidence": 0.5,
+          "reasoning": "General hostile farming crew with isolytic scaling. Picard's CM increases rewards from all hostiles and armadas by 60%. His OA builds isolytic cascade damage (+10% for 3 rounds per hit), which scales throughout combat. Tom Paris provides critical hit damage scaling (+25% per damage taken, cumulative) and defensive BDA (500% of Defense to Armor/Shield Deflection/Dodge). The Doctor offers massive defensive scaling (2000% of Health to defensive stats for 2 rounds, cumulative) plus resource bonus BDA.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Kathryn Janeway",
+            "Marlena Moreau"
+          ],
+          "captain": "Five of Eleven",
+          "confidence": 0.5,
+          "reasoning": "Borg-specialized defensive crew. Five of Eleven's CM provides mitigation scaling based on Officer Health (200%), perfect against Borg assimilation mechanics. His OA doubles hostile resource drops. Janeway provides shield mitigation scaling when taking hull damage from hostiles (cumulative), essential for surviving Borg encounters. Marlena Moreau's OA reduces hostile accuracy, armor piercing, and shield piercing by 70%, directly countering Borg offensive capabilities.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 8,
+      "group_name": "PvE Specialized",
+      "history_id": "1775449388-9178",
+      "locked": false,
+      "officer_count": 17,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Jonathan Archer\",\n      \"bridge\": [\"Trip Tucker\", \"Phlox\"],\n      \"reasoning\": \"Specialized Xindi crew. Archer's CM provides 300% increased resources from Xindi hostiles, making him the optimal captain for Xindi farming. Trip Tucker's OA reduces opponent critical damage when taking damage from hostiles, providing crucial survivability. Phlox's OA reduces opponent critical hit chance by 60% for 8 rounds against hostiles, creating a defensive synergy that mitigates Xindi burst damage. All three are Enterprise NX-01 officers with strong synergy bonuses.\"\n    },\n    {\n      \"captain\": \"Enterprise-E Picard\",\n      \"bridge\": [\"Tom Paris\", \"The Doctor\"],\n      \"reasoning\": \"General hostile farming crew with isolytic scaling. Picard's CM increases rewards from all hostiles and armadas by 60%. His OA builds isolytic cascade damage (+10% for 3 rounds per hit), which scales throughout combat. Tom Paris provides critical hit damage scaling (+25% per damage taken, cumulative) and defensive BDA (500% of Defense to Armor/Shield Deflection/Dodge). The Doctor offers massive defensive scaling (2000% of Health to defensive stats for 2 rounds, cumulative) plus resource bonus BDA.\"\n    },\n    {\n      \"captain\": \"Five of Eleven\",\n      \"bridge\": [\"Kathryn Janeway\", \"Marlena Moreau\"],\n      \"reasoning\": \"Borg-specialized defensive crew. Five of Eleven's CM provides mitigation scaling based on Officer Health (200%), perfect against Borg assimilation mechanics. His OA doubles hostile resource drops. Janeway provides shield mitigation scaling when taking hull damage from hostiles (cumulative), essential for surviving Borg encounters. Marlena Moreau's OA reduces hostile accuracy, armor piercing, and shield piercing by 70%, directly countering Borg offensive capabilities.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Gorkon",
+            "Khan Noonien Singh"
+          ],
+          "captain": "Carol Freeman",
+          "confidence": 0.5,
+          "reasoning": "Carol Freeman's CM provides +100% shots against players for maximum burst damage. Gorkon's OA gives 90% chance for hull breach on crits, which Khan's OA benefits from by gaining +5% crit chance when hit. Khan's mitigation reduction CM helps armor piercing. This creates a devastating burst combo with extra shots, high crit chance, and breach application.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Alexander Marcus",
+            "John Harrison"
+          ],
+          "captain": "Mirror Picard",
+          "confidence": 0.5,
+          "reasoning": "Mirror Picard's CM provides +50% Isolytic Cascade damage against players for armor piercing. Alexander Marcus OA gives 400% shield piercing from defense bonus. John Harrison OA ignores 70% of opponent's shield for first round. This crew maximizes both isolytic damage and shield penetration for overwhelming burst damage through defenses.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Damar",
+            "Yuki Sulu"
+          ],
+          "captain": "Gul Dukat",
+          "confidence": 0.5,
+          "reasoning": "Gul Dukat's CM applies hull breach at round start when on Interceptor. Damar's OA benefits from hull breach by increasing crit chance when scoring crits on Interceptor. Yuki Sulu's CM reduces opponent shield health each round and OA provides massive damage bonus against Romulans. This Interceptor crew focuses on breach application and crit synergy for burst damage.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 9,
+      "group_name": "Base Attack",
+      "history_id": "1775449397-2000",
+      "locked": false,
+      "officer_count": 15,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Carol Freeman\",\n      \"bridge\": [\"Gorkon\", \"Khan Noonien Singh\"],\n      \"reasoning\": \"Carol Freeman's CM provides +100% shots against players for maximum burst damage. Gorkon's OA gives 90% chance for hull breach on crits, which Khan's OA benefits from by gaining +5% crit chance when hit. Khan's mitigation reduction CM helps armor piercing. This creates a devastating burst combo with extra shots, high crit chance, and breach application.\"\n    },\n    {\n      \"captain\": \"Mirror Picard\",\n      \"bridge\": [\"Alexander Marcus\", \"John Harrison\"],\n      \"reasoning\": \"Mirror Picard's CM provides +50% Isolytic Cascade damage against players for armor piercing. Alexander Marcus OA gives 400% shield piercing from defense bonus. John Harrison OA ignores 70% of opponent's shield for first round. This crew maximizes both isolytic damage and shield penetration for overwhelming burst damage through defenses.\"\n    },\n    {\n      \"captain\": \"Gul Dukat\",\n      \"bridge\": [\"Damar\", \"Yuki Sulu\"],\n      \"reasoning\": \"Gul Dukat's CM applies hull breach at round start when on Interceptor. Damar's OA benefits from hull breach by increasing crit chance when scoring crits on Interceptor. Yuki Sulu's CM reduces opponent shield health each round and OA provides massive damage bonus against Romulans. This Interceptor crew focuses on breach application and crit synergy for burst damage.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Mirror Picard",
+            "Spock"
+          ],
+          "captain": "Mirror Kira",
+          "confidence": 0.5,
+          "reasoning": "Mirror Kira captain provides cumulative Apex Barrier (+1500 per round for 5 rounds) which is the core of current station defense meta. Mirror Picard bridge adds more Apex Barrier (+17000) against assimilated enemies and Isolytic damage. Spock bridge restores 750% of officer defense to shields when having morale, providing crucial shield sustainability. Mirror Universe synergy between Kira and Picard maximizes defensive effectiveness.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Nyota Uhura",
+            "Alexander Marcus"
+          ],
+          "captain": "James T. Kirk",
+          "confidence": 0.5,
+          "reasoning": "Kirk captain applies morale (+40% all officer stats when morale active) which enables powerful defensive synergies. Uhura bridge delays opponent fire by 1 round when shields drop (100% chance), buying critical time for repairs. Marcus bridge provides shield piercing and can apply morale when opponent drops below 80% hull. Enterprise Crew synergy between Kirk and Uhura provides additional stat bonuses for sustained defense.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Gorkon",
+            "Carol Freeman"
+          ],
+          "captain": "LORCA",
+          "confidence": 0.5,
+          "reasoning": "LORCA captain reduces opponent damage by 10% when they have Hull Breach, focusing on damage mitigation. Gorkon bridge applies Hull Breach via critical hits (90% chance for 3 rounds), enabling LORCA's damage reduction. Freeman bridge increases Isolytic damage by 110% when enemy has any state, and provides extra shots against players. This crew focuses on applying debuffs and mitigating incoming damage through breach-based synergies.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 10,
+      "group_name": "Base Defend",
+      "history_id": "1775449408-1556",
+      "locked": false,
+      "officer_count": 14,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Mirror Kira\",\n      \"bridge\": [\"Mirror Picard\", \"Spock\"],\n      \"reasoning\": \"Mirror Kira captain provides cumulative Apex Barrier (+1500 per round for 5 rounds) which is the core of current station defense meta. Mirror Picard bridge adds more Apex Barrier (+17000) against assimilated enemies and Isolytic damage. Spock bridge restores 750% of officer defense to shields when having morale, providing crucial shield sustainability. Mirror Universe synergy between Kira and Picard maximizes defensive effectiveness.\"\n    },\n    {\n      \"captain\": \"James T. Kirk\",\n      \"bridge\": [\"Nyota Uhura\", \"Alexander Marcus\"],\n      \"reasoning\": \"Kirk captain applies morale (+40% all officer stats when morale active) which enables powerful defensive synergies. Uhura bridge delays opponent fire by 1 round when shields drop (100% chance), buying critical time for repairs. Marcus bridge provides shield piercing and can apply morale when opponent drops below 80% hull. Enterprise Crew synergy between Kirk and Uhura provides additional stat bonuses for sustained defense.\"\n    },\n    {\n      \"captain\": \"LORCA\",\n      \"bridge\": [\"Gorkon\", \"Carol Freeman\"],\n      \"reasoning\": \"LORCA captain reduces opponent damage by 10% when they have Hull Breach, focusing on damage mitigation. Gorkon bridge applies Hull Breach via critical hits (90% chance for 3 rounds), enabling LORCA's damage reduction. Freeman bridge increases Isolytic damage by 110% when enemy has any state, and provides extra shots against players. This crew focuses on applying debuffs and mitigating incoming damage through breach-based synergies.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Sela",
+            "B'Elanna Torres"
+          ],
+          "captain": "Khan Noonien Singh",
+          "confidence": 0.5,
+          "reasoning": "Khan's CM dramatically decreases opponent mitigation for 2 rounds while his OA builds critical hit chance (+5% per hit taken). Sela provides massive critical hit damage while cloaked (+50%), creating a devastating crit-focused combo. B'Elanna Torres as BDA applies Hull Breach (100% chance) and her OA provides massive cumulative damage bonuses (+1500% of attack to armor/shield piercing and accuracy) when taking damage from armadas, perfect for sustained armada fights.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Beverly Crusher",
+            "Enterprise-E Picard"
+          ],
+          "captain": "William T. Riker",
+          "confidence": 0.5,
+          "reasoning": "Riker's CM provides cumulative weapon damage against armada targets (+100%), scaling throughout long armada fights. Beverly Crusher offers incredible survivability with shield restoration (200% of crew health) and massive mitigation bonuses (+250% of officer defense to all mitigation stats). Enterprise-E Picard adds isolytic cascade damage (+7% for 3 rounds per hit), which is crucial for breaking through armada health pools in the current meta.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Nine of Eleven",
+            "Seven of Eleven"
+          ],
+          "captain": "Five of Eleven",
+          "confidence": 0.5,
+          "reasoning": "Full Unimatrix Twelve synergy crew maximizing Borg bonuses. Five of Eleven's CM increases mitigation by officer health (200%), providing massive survivability. Nine of Eleven adds +85% defense to all officers, while Seven of Eleven boosts health by +100%. This creates an incredibly tanky crew perfect for surviving long armada encounters while benefiting from the 400%/200% synergy bonuses from Five of Eleven.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 11,
+      "group_name": "Armada",
+      "history_id": "1775449418-6215",
+      "locked": false,
+      "officer_count": 19,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Khan Noonien Singh\",\n      \"bridge\": [\"Sela\", \"B'Elanna Torres\"],\n      \"reasoning\": \"Khan's CM dramatically decreases opponent mitigation for 2 rounds while his OA builds critical hit chance (+5% per hit taken). Sela provides massive critical hit damage while cloaked (+50%), creating a devastating crit-focused combo. B'Elanna Torres as BDA applies Hull Breach (100% chance) and her OA provides massive cumulative damage bonuses (+1500% of attack to armor/shield piercing and accuracy) when taking damage from armadas, perfect for sustained armada fights.\"\n    },\n    {\n      \"captain\": \"William T. Riker\",\n      \"bridge\": [\"Beverly Crusher\", \"Enterprise-E Picard\"],\n      \"reasoning\": \"Riker's CM provides cumulative weapon damage against armada targets (+100%), scaling throughout long armada fights. Beverly Crusher offers incredible survivability with shield restoration (200% of crew health) and massive mitigation bonuses (+250% of officer defense to all mitigation stats). Enterprise-E Picard adds isolytic cascade damage (+7% for 3 rounds per hit), which is crucial for breaking through armada health pools in the current meta.\"\n    },\n    {\n      \"captain\": \"Five of Eleven\",\n      \"bridge\": [\"Nine of Eleven\", \"Seven of Eleven\"],\n      \"reasoning\": \"Full Unimatrix Twelve synergy crew maximizing Borg bonuses. Five of Eleven's CM increases mitigation by officer health (200%), providing massive survivability. Nine of Eleven adds +85% defense to all officers, while Seven of Eleven boosts health by +100%. This creates an incredibly tanky crew perfect for surviving long armada encounters while benefiting from the 400%/200% synergy bonuses from Five of Eleven.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Enterprise-E Picard",
+            "The Doctor"
+          ],
+          "captain": "Five of Eleven",
+          "confidence": 0.5,
+          "reasoning": "Five of Eleven captain provides +100% resources from hostiles (meta loot multiplier). Enterprise-E Picard adds +60% rewards from hostiles/armadas. The Doctor BDA gives +35% to all hostile drops. This crew maximizes hostile farming rewards with triple loot bonuses.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Stonn",
+            "Four of Eleven"
+          ],
+          "captain": "T'Pring",
+          "confidence": 0.5,
+          "reasoning": "T'Pring captain gives +300% protected cargo (meta cargo protection). Stonn adds +40% cargo size, Four of Eleven adds +55% cargo size. All three have SURVEYORS & MINERS synergy (30%/20%). Perfect for safe resource transport and storage.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Ghrush",
+            "Raphaël DuPont"
+          ],
+          "captain": "Enterprise-E Picard",
+          "confidence": 0.5,
+          "reasoning": "Alternative loot crew with Enterprise-E Picard captain for +60% hostile/armada rewards. Ghrush provides +100% protected cargo, Raphaël DuPont adds +200% protected cargo. Combines loot multiplication with cargo protection for balanced farming.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 13,
+      "group_name": "Loot & Cargo",
+      "history_id": "1775449426-9690",
+      "locked": true,
+      "officer_count": 16,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Five of Eleven\",\n      \"bridge\": [\"Enterprise-E Picard\", \"The Doctor\"],\n      \"reasoning\": \"Five of Eleven captain provides +100% resources from hostiles (meta loot multiplier). Enterprise-E Picard adds +60% rewards from hostiles/armadas. The Doctor BDA gives +35% to all hostile drops. This crew maximizes hostile farming rewards with triple loot bonuses.\"\n    },\n    {\n      \"captain\": \"T'Pring\",\n      \"bridge\": [\"Stonn\", \"Four of Eleven\"],\n      \"reasoning\": \"T'Pring captain gives +300% protected cargo (meta cargo protection). Stonn adds +40% cargo size, Four of Eleven adds +55% cargo size. All three have SURVEYORS & MINERS synergy (30%/20%). Perfect for safe resource transport and storage.\"\n    },\n    {\n      \"captain\": \"Enterprise-E Picard\",\n      \"bridge\": [\"Ghrush\", \"Raphaël DuPont\"],\n      \"reasoning\": \"Alternative loot crew with Enterprise-E Picard captain for +60% hostile/armada rewards. Ghrush provides +100% protected cargo, Raphaël DuPont adds +200% protected cargo. Combines loot multiplication with cargo protection for balanced farming.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Severus",
+            "Carol Freeman"
+          ],
+          "captain": "Liviana Charvanek",
+          "confidence": 0.5,
+          "reasoning": "Perfect burning state chain: Liviana applies burning when hull drops below 80%, Severus benefits with 60% exploit overheat damage bonus when burning, and Carol Freeman gets 90% isolytic cascade damage boost when enemy has any state (burning). This creates a devastating damage amplification combo.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "LORCA",
+            "Enterprise-E Troi"
+          ],
+          "captain": "Gorkon",
+          "confidence": 0.5,
+          "reasoning": "Breach state chain: Gorkon applies hull breach with 90% chance on critical hits (boosted by his 10% crit chance increase), LORCA benefits by reducing opponent damage when they have breach, and Enterprise-E Troi provides shield reduction and critical damage boost for sustained pressure.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Mirror Picard",
+            "Mirror Kira"
+          ],
+          "captain": "Alexander Marcus",
+          "confidence": 0.5,
+          "reasoning": "Morale/assimilate defensive combo: Alexander Marcus applies morale when opponent hull drops below 80%, Mirror Picard benefits from assimilate states with apex barrier boost, and Mirror Kira provides cumulative apex barrier stacking for maximum damage mitigation against player targets.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 14,
+      "group_name": "State Chain",
+      "history_id": "1775449434-2167",
+      "locked": false,
+      "officer_count": 16,
+      "rating": 0,
+      "raw_response": "Looking at the officers for state chain opportunities, I can identify several powerful combinations where captains apply states and bridge officers benefit from them.\n\n```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Liviana Charvanek\",\n      \"bridge\": [\"Severus\", \"Carol Freeman\"],\n      \"reasoning\": \"Perfect burning state chain: Liviana applies burning when hull drops below 80%, Severus benefits with 60% exploit overheat damage bonus when burning, and Carol Freeman gets 90% isolytic cascade damage boost when enemy has any state (burning). This creates a devastating damage amplification combo.\"\n    },\n    {\n      \"captain\": \"Gorkon\",\n      \"bridge\": [\"LORCA\", \"Enterprise-E Troi\"],\n      \"reasoning\": \"Breach state chain: Gorkon applies hull breach with 90% chance on critical hits (boosted by his 10% crit chance increase), LORCA benefits by reducing opponent damage when they have breach, and Enterprise-E Troi provides shield reduction and critical damage boost for sustained pressure.\"\n    },\n    {\n      \"captain\": \"Alexander Marcus\",\n      \"bridge\": [\"Mirror Picard\", \"Mirror Kira\"],\n      \"reasoning\": \"Morale/assimilate defensive combo: Alexander Marcus applies morale when opponent hull drops below 80%, Mirror Picard benefits from assimilate states with apex barrier boost, and Mirror Kira provides cumulative apex barrier stacking for maximum damage mitigation against player targets.\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "crews": [
+        {
+          "below_decks": [],
+          "bridge": [
+            "Enterprise-E Picard",
+            "Gul Dukat"
+          ],
+          "captain": "Carol Freeman",
+          "confidence": 0.5,
+          "reasoning": "Isolytic Cascade offense crew. Carol Freeman's CM gives +100% shots against players, and her OA boosts isolytic cascade damage by +90% when enemy has any state. Enterprise-E Picard's OA increases isolytic cascade damage by +7% for 3 rounds per hit. Gul Dukat applies Hull Breach states that trigger Carol's isolytic boost, creating a powerful state-chain synergy for maximum isolytic damage output.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Mirror Picard",
+            "Borg Queen"
+          ],
+          "captain": "Mirror Kira",
+          "confidence": 0.5,
+          "reasoning": "Apex Barrier defense crew. Mirror Kira's CM provides +1500 apex barrier per round (cumulative) and her OA gives true damage mitigation - every 100 apex barrier = 1% damage reduction. Mirror Picard's OA adds +17000 apex barrier against players with assimilate. Borg Queen's OA provides +7% crit chance when taking hull damage, and her BDA boosts armor/shield piercing against assimilate ships, creating a defensive wall that counters isolytic cascade.",
+          "ship_advice": "",
+          "warnings": []
+        },
+        {
+          "below_decks": [],
+          "bridge": [
+            "Weyoun",
+            "Worf"
+          ],
+          "captain": "Alexander Marcus",
+          "confidence": 0.5,
+          "reasoning": "Utility/support crew. Alexander Marcus applies morale when opponent is under 80% health, and his OA converts defense to shield piercing. Weyoun applies morale on Explorers and gets +88% weapon shots with morale active. Worf provides +60% mitigation against non-players. This crew focuses on morale state application and extra shots for sustained combat effectiveness.",
+          "ship_advice": "",
+          "warnings": []
+        }
+      ],
+      "error": "",
+      "group_id": 15,
+      "group_name": "Apex & Isolytic",
+      "history_id": "1775449444-4443",
+      "locked": false,
+      "officer_count": 13,
+      "rating": 0,
+      "raw_response": "```json\n{\n  \"crews\": [\n    {\n      \"captain\": \"Carol Freeman\",\n      \"bridge\": [\"Enterprise-E Picard\", \"Gul Dukat\"],\n      \"reasoning\": \"Isolytic Cascade offense crew. Carol Freeman's CM gives +100% shots against players, and her OA boosts isolytic cascade damage by +90% when enemy has any state. Enterprise-E Picard's OA increases isolytic cascade damage by +7% for 3 rounds per hit. Gul Dukat applies Hull Breach states that trigger Carol's isolytic boost, creating a powerful state-chain synergy for maximum isolytic damage output.\"\n    },\n    {\n      \"captain\": \"Mirror Kira\",\n      \"bridge\": [\"Mirror Picard\", \"Borg Queen\"],\n      \"reasoning\": \"Apex Barrier defense crew. Mirror Kira's CM provides +1500 apex barrier per round (cumulative) and her OA gives true damage mitigation - every 100 apex barrier = 1% damage reduction. Mirror Picard's OA adds +17000 apex barrier against players with assimilate. Borg Queen's OA provides +7% crit chance when taking hull damage, and her BDA boosts armor/shield piercing against assimilate ships, creating a defensive wall that counters isolytic cascade.\"\n    },\n    {\n      \"captain\": \"Alexander Marcus\",\n      \"bridge\": [\"Weyoun\", \"Worf\"],\n      \"reasoning\": \"Utility/support crew. Alexander Marcus applies morale when opponent is under 80% health, and his OA converts defense to shield piercing. Weyoun applies morale on Explorers and gets +88% weapon shots with morale active. Worf provides +60% mitigation against non-players. This crew focuses on morale state application and extra shots for sustained combat effectiveness.\"\n    }\n  ]\n}\n```"
+    }
+  ],
+  "groups_completed": 15,
+  "groups_succeeded": 15,
+  "groups_total": 15,
+  "locked_officer_names": [
+    "Alexander Marcus",
+    "Carol Freeman",
+    "Damar",
+    "Enterprise-E Picard",
+    "Five of Eleven",
+    "Four of Eleven",
+    "Ghrush",
+    "Gorkon",
+    "LORCA",
+    "Mirror Kira",
+    "Mirror Picard",
+    "Raphaël DuPont",
+    "Stonn",
+    "T'Pring",
+    "The Doctor",
+    "Weyoun",
+    "Yuki Sulu"
+  ],
+  "model_used": "gemini-2.5-flash"
+}
