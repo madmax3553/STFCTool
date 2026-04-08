@@ -436,6 +436,17 @@ void IngressServer::stop() {
 void IngressServer::save_player_data() {
     // Called under data_mutex_ lock from the POST handler
     auto path = fs::path(data_dir_) / "player_data.json";
+
+    // Derive ops_level from Operations Center (building_id 0) if not already set
+    if (player_data_.ops_level <= 0) {
+        for (const auto& b : player_data_.buildings) {
+            if (b.building_id == 0 && b.level > 0) {
+                player_data_.ops_level = b.level;
+                break;
+            }
+        }
+    }
+
     try {
         json j;
         j["ops_level"] = player_data_.ops_level;
@@ -684,6 +695,17 @@ void IngressServer::load_player_data() {
         }
     } catch (...) {
         // Best effort
+    }
+
+    // Derive ops_level from Operations Center (building_id 0) if not already set
+    // (the JSON may have ops_level=0 if it was saved before this derivation existed)
+    if (player_data_.ops_level <= 0) {
+        for (const auto& b : player_data_.buildings) {
+            if (b.building_id == 0 && b.level > 0) {
+                player_data_.ops_level = b.level;
+                break;
+            }
+        }
     }
 }
 

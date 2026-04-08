@@ -1340,6 +1340,76 @@ MetaAnalysis AiCrewEngine::analyze_meta(
     return advisor_->analyze_meta(scenario, snapshot, local_crews, stream_cb);
 }
 
+// ---------------------------------------------------------------------------
+// Detect scenario from free-form question text
+//
+// Simple keyword matching — we just need to route to the right pre-filter
+// bucket so the LLM sees the relevant officers. If no scenario is detected,
+// we use Hybrid (broadest combat filter) rather than PvP, because a generic
+// question is more likely to be multi-purpose than strictly PvP.
+// ---------------------------------------------------------------------------
+
+static Scenario detect_scenario_from_question(const std::string& question) {
+    // Build a lowercase copy for case-insensitive matching
+    std::string q = question;
+    std::transform(q.begin(), q.end(), q.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    // Armada keywords (check first — armada is a very specific scenario)
+    if (q.find("armada") != std::string::npos ||
+        q.find("fkr") != std::string::npos ||
+        q.find("faction credit") != std::string::npos ||
+        q.find("faction armada") != std::string::npos)
+        return Scenario::Armada;
+
+    // Mining keywords
+    if (q.find("mining") != std::string::npos ||
+        q.find("mine ") != std::string::npos ||
+        q.find("miner") != std::string::npos) {
+        if (q.find("speed") != std::string::npos)     return Scenario::MiningSpeed;
+        if (q.find("protected") != std::string::npos)  return Scenario::MiningProtected;
+        if (q.find("crystal") != std::string::npos)    return Scenario::MiningCrystal;
+        if (q.find("gas") != std::string::npos)        return Scenario::MiningGas;
+        if (q.find("ore") != std::string::npos)        return Scenario::MiningOre;
+        return Scenario::MiningGeneral;
+    }
+
+    // Base cracking
+    if (q.find("base crack") != std::string::npos ||
+        q.find("base attack") != std::string::npos ||
+        q.find("base raid") != std::string::npos ||
+        q.find("station attack") != std::string::npos)
+        return Scenario::BaseCracker;
+
+    // PvE / hostiles
+    if (q.find("hostile") != std::string::npos ||
+        q.find("pve") != std::string::npos ||
+        q.find("swarm") != std::string::npos ||
+        q.find("borg") != std::string::npos ||
+        q.find("eclipse") != std::string::npos ||
+        q.find("gorn") != std::string::npos ||
+        q.find("xindi") != std::string::npos)
+        return Scenario::PvEHostile;
+
+    // Mission boss
+    if (q.find("boss") != std::string::npos ||
+        q.find("mission") != std::string::npos)
+        return Scenario::MissionBoss;
+
+    // Loot
+    if (q.find("loot") != std::string::npos ||
+        q.find("cargo") != std::string::npos)
+        return Scenario::Loot;
+
+    // Explicit PvP
+    if (q.find("pvp") != std::string::npos ||
+        q.find("arena") != std::string::npos)
+        return Scenario::PvP;
+
+    // Default: Hybrid gives the broadest combat-relevant officer set
+    return Scenario::Hybrid;
+}
+
 LlmResponse AiCrewEngine::ask_question(
     const std::string& question,
     const PlayerData& player_data,
@@ -1353,8 +1423,15 @@ LlmResponse AiCrewEngine::ask_question(
         return resp;
     }
 
-    auto snapshot = build_snapshot(player_data, game_data, officers,
-                                   Scenario::PvP, ShipType::Explorer);
+    // Detect the most relevant scenario from the question text so we
+    // pre-filter officers for the right domain (armada, mining, PvE, etc.)
+    Scenario scenario = detect_scenario_from_question(question);
+
+    // Use a larger officer budget for Ask (60 vs default 40) since the user
+    // might ask cross-scenario questions and we want broader coverage
+    auto snapshot = build_account_snapshot(
+        player_data, game_data, officers,
+        scenario, ShipType::Explorer, 60);
 
     return advisor_->ask(snapshot, question, stream_cb);
 }

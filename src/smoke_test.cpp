@@ -27,9 +27,12 @@
 
 #include "data/models.h"
 #include "data/api_client.h"
+#include "data/llm_client.h"
 #include "util/csv_import.h"
 #include "core/crew_optimizer.h"
 #include "core/planner.h"
+#include "core/ai_crew_engine.h"
+#include "core/account_state.h"
 
 namespace fs = std::filesystem;
 using namespace stfc;
@@ -2479,6 +2482,426 @@ void test_planner_helper_functions() {
 }
 
 // ---------------------------------------------------------------------------
+// AI / LLM integration tests
+// ---------------------------------------------------------------------------
+
+static bool ai_mode = false;   // --ai flag enables LLM tests
+
+// ---------------------------------------------------------------------------
+// Helpers for building sync-path roster (duplicated from main.cpp since
+// main.cpp is not a library — these are the essential functions needed to
+// build a proper roster from player_data.json + game_data)
+// ---------------------------------------------------------------------------
+
+namespace ai_test {
+
+static char rarity_letter(int rarity) {
+    switch (rarity) {
+        case 1: return 'C'; case 2: return 'U';
+        case 3: return 'R'; case 4: return 'E';
+        default: return ' ';
+    }
+}
+
+static double ability_pct(const OfficerAbility& ability, int rank) {
+    if (ability.values.empty()) return 0.0;
+    int idx = std::max(0, std::min(rank, static_cast<int>(ability.values.size()) - 1));
+    return ability.values[idx].value;
+}
+
+static std::string fmt_pct(double value) {
+    std::ostringstream os;
+    double pct = value * 100.0;
+    if (std::abs(pct - std::round(pct)) < 0.0001) {
+        os << static_cast<int>(std::round(pct)) << "%";
+    } else {
+        os << std::fixed << std::setprecision(1) << pct << "%";
+    }
+    return os.str();
+}
+
+static std::string replace_all(std::string text, const std::string& from, const std::string& to) {
+    size_t pos = 0;
+    while ((pos = text.find(from, pos)) != std::string::npos) {
+        text.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+    return text;
+}
+
+static std::string strip_color_tags(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == '<') {
+            if (text.compare(i, 7, "<color=") == 0) {
+                auto end = text.find('>', i);
+                if (end != std::string::npos) { i = end + 1; continue; }
+            } else if (text.compare(i, 8, "</color>") == 0) {
+                i += 8; continue;
+            }
+        }
+        out += text[i++];
+    }
+    return out;
+}
+
+static std::string to_lower_str(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+static std::string collapse_whitespace(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    bool prev_space = true;
+    for (char c : text) {
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!prev_space) { out += ' '; prev_space = true; }
+        } else {
+            out += c;
+            prev_space = false;
+        }
+    }
+    if (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
+static std::string resolve_officer_tooltip(const Officer& officer, int rank) {
+    std::string text = officer.description;
+    if (text.empty()) return text;
+    const auto& cap = officer.captain_ability.values;
+    const auto& abil = officer.ability.values;
+    auto rank_idx = std::max(0, rank);
+    auto cap_value = [&](int idx) {
+        idx = std::max(0, std::min(idx, static_cast<int>(cap.size()) - 1));
+        return cap.empty() ? 0.0 : cap[idx].value;
+    };
+    auto abil_value = [&](int idx) {
+        idx = std::max(0, std::min(idx, static_cast<int>(abil.size()) - 1));
+        return abil.empty() ? 0.0 : abil[idx].value;
+    };
+    text = replace_all(text, "{0:#,#%}", fmt_pct(cap_value(rank_idx)));
+    text = replace_all(text, "{1:#,#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
+    text = replace_all(text, "{2:#,#%}", fmt_pct(abil_value(rank_idx)));
+    text = replace_all(text, "{3:#,#%}", fmt_pct(abil_value(rank_idx)));
+    text = replace_all(text, "{0:#.#%}", fmt_pct(cap_value(rank_idx)));
+    text = replace_all(text, "{1:#.#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
+    text = replace_all(text, "{2:#.#%}", fmt_pct(abil_value(rank_idx)));
+    text = replace_all(text, "{3:#.#%}", fmt_pct(abil_value(rank_idx)));
+    return text;
+}
+
+static std::string build_optimizer_description(const Officer& officer, int rank) {
+    std::string tooltip = resolve_officer_tooltip(officer, rank);
+    tooltip = strip_color_tags(tooltip);
+    std::string block0, block1;
+    auto sep = tooltip.find("\n\n");
+    if (sep != std::string::npos) {
+        block0 = tooltip.substr(0, sep);
+        block1 = tooltip.substr(sep + 2);
+        auto sep2 = block1.find("\n\n");
+        if (sep2 != std::string::npos) block1 = block1.substr(0, sep2);
+    } else {
+        block0 = tooltip;
+    }
+    block0 = collapse_whitespace(block0);
+    block1 = collapse_whitespace(block1);
+    std::string desc;
+    if (officer.has_bda) {
+        desc = "bda: " + block0 + " oa: " + block1;
+    } else {
+        desc = "cm: " + block0 + " oa: " + block1;
+    }
+    return to_lower_str(desc);
+}
+
+static void parse_status_effects(const std::string& desc, std::string& effect,
+                                  bool& causes_effect) {
+    effect.clear();
+    causes_effect = false;
+    static const char* morale_apply[] = {"inspire morale", "morale for", "apply morale", "cause morale", nullptr};
+    static const char* breach_apply[] = {"hull breach for", "apply hull breach", "cause hull breach", "inflict hull breach", nullptr};
+    static const char* burning_apply[] = {"burning for", "apply burning", "cause burning", "inflict burning", "burning to opponent", "burning to the opponent", nullptr};
+    static const char* assimilate_apply[] = {"assimilate for", "apply assimilate", nullptr};
+    static const char* morale_benefit[] = {"ship has morale", "with morale", "has morale", "when morale", "while morale", nullptr};
+    static const char* breach_benefit[] = {"has hull breach", "with hull breach", "opponent hull breach", "when hull breach", nullptr};
+    static const char* burning_benefit[] = {"is burning", "has burning", "opponent burning", "afflicted by burning", "when burning", "whilst burning", nullptr};
+    static const char* assimilate_benefit[] = {"with assimilate", "has assimilate", "when assimilate", "is assimilated", nullptr};
+    auto check_keywords = [&](const char* state, const char* const* apply_kw, const char* const* benefit_kw) {
+        for (const char* const* p = apply_kw; *p; ++p) {
+            if (desc.find(*p) != std::string::npos) { effect = state; causes_effect = true; return true; }
+        }
+        for (const char* const* p = benefit_kw; *p; ++p) {
+            if (desc.find(*p) != std::string::npos) { effect = state; causes_effect = false; return true; }
+        }
+        return false;
+    };
+    if (check_keywords("morale", morale_apply, morale_benefit)) return;
+    if (check_keywords("breach", breach_apply, breach_benefit)) return;
+    if (check_keywords("burning", burning_apply, burning_benefit)) return;
+    if (check_keywords("assimilate", assimilate_apply, assimilate_benefit)) return;
+}
+
+// Build a full roster from real player data + game data
+// (replicates build_roster_from_sync from main.cpp)
+static std::vector<RosterOfficer> build_roster(const PlayerData& pd, const GameData& gd) {
+    std::vector<RosterOfficer> result;
+    result.reserve(pd.officers.size());
+    for (const auto& po : pd.officers) {
+        if (po.level <= 0) continue;
+        auto it = gd.officers.find(po.officer_id);
+        if (it == gd.officers.end()) continue;
+        const auto& go = it->second;
+        RosterOfficer ro;
+        ro.name = po.name.empty() ? (go.name.empty() ? go.short_name : go.name) : po.name;
+        ro.rarity = rarity_letter(go.rarity);
+        ro.level = po.level;
+        ro.rank = po.rank;
+        if (!go.stats.empty() && po.level > 0) {
+            int idx = std::min(po.level - 1, static_cast<int>(go.stats.size()) - 1);
+            idx = std::max(0, idx);
+            ro.attack = go.stats[idx].attack;
+            ro.defense = go.stats[idx].defense;
+            ro.health = go.stats[idx].health;
+        }
+        ro.group = go.group_name;
+        ro.officer_class = go.officer_class;
+        if (go.has_bda) {
+            double bda_raw = ability_pct(go.below_decks_ability, 0);
+            ro.cm_pct = go.below_decks_ability.value_is_percentage ? bda_raw * 100.0 : bda_raw;
+        } else {
+            double cm_raw = ability_pct(go.captain_ability, 0);
+            ro.cm_pct = go.captain_ability.value_is_percentage ? cm_raw * 100.0 : cm_raw;
+        }
+        double oa_raw = ability_pct(go.ability, po.rank);
+        ro.oa_pct = go.ability.value_is_percentage ? oa_raw * 100.0 : oa_raw;
+        ro.description = build_optimizer_description(go, po.rank);
+        parse_status_effects(ro.description, ro.effect, ro.causes_effect);
+        ro.api_oa_is_pct = go.ability.value_is_percentage;
+        for (const auto& av : go.ability.values) {
+            ro.api_oa_values.push_back(av.value);
+            ro.api_oa_chances.push_back(av.chance);
+        }
+        ro.api_cm_is_pct = go.captain_ability.value_is_percentage;
+        for (const auto& av : go.captain_ability.values) {
+            ro.api_cm_values.push_back(av.value);
+            ro.api_cm_chances.push_back(av.chance);
+        }
+        if (go.has_bda) {
+            ro.api_bda_is_pct = go.below_decks_ability.value_is_percentage;
+            for (const auto& av : go.below_decks_ability.values) {
+                ro.api_bda_values.push_back(av.value);
+                ro.api_bda_chances.push_back(av.chance);
+            }
+        }
+        result.push_back(std::move(ro));
+    }
+    return result;
+}
+
+// Load player_data.json from disk (same format as IngressServer::load_player_data)
+static PlayerData load_player_data(const std::string& path) {
+    using json = nlohmann::json;
+    PlayerData pd;
+    if (!fs::exists(path)) return pd;
+    std::ifstream f(path);
+    if (!f) return pd;
+    json j;
+    try { j = json::parse(f); } catch (...) { return pd; }
+    pd.ops_level = j.value("ops_level", 0);
+    pd.player_name = j.value("player_name", "");
+    if (j.contains("officers") && j["officers"].is_array()) {
+        for (auto& o : j["officers"]) {
+            PlayerOfficer po;
+            po.officer_id = o.value("oid", (int64_t)0);
+            po.level = o.value("level", 0);
+            po.rank = o.value("rank", 0);
+            po.shard_count = o.value("shard_count", 0);
+            pd.officers.push_back(po);
+        }
+    }
+    if (j.contains("ships") && j["ships"].is_array()) {
+        for (auto& s : j["ships"]) {
+            PlayerShip ps;
+            ps.ship_id = s.value("psid", (int64_t)0);
+            ps.hull_id = s.value("hull_id", (int64_t)0);
+            ps.tier = s.value("tier", 0);
+            ps.level = s.value("level", 0);
+            ps.level_percentage = s.value("level_pct", 0.0);
+            pd.ships.push_back(ps);
+        }
+    }
+    if (j.contains("techs") && j["techs"].is_array()) {
+        for (auto& t : j["techs"]) {
+            PlayerTech pt;
+            pt.tech_id = t.value("tid", (int64_t)0);
+            pt.tier = t.value("tier", 0);
+            pt.level = t.value("level", 0);
+            pd.techs.push_back(pt);
+        }
+    }
+    if (j.contains("buildings") && j["buildings"].is_array()) {
+        for (auto& b : j["buildings"]) {
+            PlayerBuilding pb;
+            pb.building_id = b.value("bid", (int64_t)0);
+            pb.level = b.value("level", 0);
+            pd.buildings.push_back(pb);
+        }
+    }
+    return pd;
+}
+
+} // namespace ai_test
+
+void test_ai_ask_armada_credits() {
+    TEST("AI ask: maximize FKR credits (full account context)");
+    CHECK(data_loaded, "game data not loaded");
+
+    // Load real player data from disk
+    auto pd = ai_test::load_player_data("data/player_data/player_data.json");
+    CHECK(!pd.officers.empty(), "no player officers in player_data.json");
+
+    // ops_level may not be in sync data — derive from Operations Center (building_id 0)
+    if (pd.ops_level <= 0) {
+        for (const auto& b : pd.buildings) {
+            if (b.building_id == 0 && b.level > 0) {
+                pd.ops_level = b.level;
+                break;
+            }
+        }
+    }
+    // Fallback: estimate from roster size if buildings data is missing
+    if (pd.ops_level <= 0) {
+        int max_rank = 0;
+        for (const auto& po : pd.officers) {
+            if (po.rank > max_rank) max_rank = po.rank;
+        }
+        pd.ops_level = (pd.officers.size() > 200 && max_rank >= 5) ? 40 : 30;
+    }
+    if (pd.player_name.empty()) pd.player_name = "Player";
+
+    // Resolve names against game data
+    resolve_player_names(pd, game_data);
+
+    // Build full roster from real player data (with actual levels, ranks, stats)
+    auto sync_roster = ai_test::build_roster(pd, game_data);
+    CHECK(sync_roster.size() > 50, "roster too small: " + std::to_string(sync_roster.size()));
+
+    std::cout << "\n    Account: " << pd.player_name << " (Ops " << pd.ops_level
+              << ", " << sync_roster.size() << " officers, "
+              << pd.ships.size() << " ships)\n";
+
+    // Classify officers
+    auto opt = std::make_unique<CrewOptimizer>(sync_roster);
+    const auto& officers = opt->officers();
+
+    // Log some stats about what's going into the prompt
+    int rank5 = 0, armada_tagged = 0;
+    for (const auto& o : officers) {
+        if (o.rank >= 5) rank5++;
+        if (o.armada) armada_tagged++;
+    }
+    std::cout << "    Officers: " << officers.size() << " classified ("
+              << rank5 << " rank 5, " << armada_tagged << " armada-tagged)\n";
+
+    // Show top ships by tier
+    if (!pd.ships.empty()) {
+        auto sorted_ships = pd.ships;
+        std::sort(sorted_ships.begin(), sorted_ships.end(),
+                  [](const PlayerShip& a, const PlayerShip& b) {
+                      if (a.tier != b.tier) return a.tier > b.tier;
+                      return a.level > b.level;
+                  });
+        std::cout << "    Top ships: ";
+        for (int i = 0; i < std::min(5, (int)sorted_ships.size()); i++) {
+            if (i > 0) std::cout << ", ";
+            std::cout << sorted_ships[i].name << " T" << sorted_ships[i].tier
+                      << " L" << sorted_ships[i].level;
+        }
+        std::cout << "\n";
+    }
+
+    // Initialize the AI engine
+    AiCrewEngine engine;
+    std::string init_err = engine.initialize();
+    CHECK(init_err.empty(), "AI init failed: " + init_err);
+    CHECK(engine.is_available(), "AI engine not available after init");
+
+    auto st = engine.status();
+    std::cout << "    AI: " << st.provider << "/" << st.model << "\n";
+
+    // Ask the question with full account context
+    std::string question =
+        "I want to maximize FKR armada credits (Federation, Klingon, Romulan faction credits) "
+        "at my current ops level. For each faction's armadas, please tell me:\n"
+        "1. Which armada targets I should prioritize for the best credit yield\n"
+        "2. The full officer crew: captain, 2 bridge officers, AND below-decks (BDA) officer — "
+        "explain why each officer is chosen and what their abilities contribute\n"
+        "3. Which of my ships to use and at what tier\n"
+        "Use ONLY officers and ships I actually own (from my account data). "
+        "Consider their real levels, ranks, and armada-specific abilities. "
+        "Also share any tips for maximizing credit payout per armada run.";
+
+    std::cout << "    Waiting for LLM response..." << std::flush;
+
+    auto resp = engine.ask_question(question, pd, game_data, officers);
+
+    CHECK(resp.ok(), "LLM returned error: " + resp.error);
+    CHECK(!resp.content.empty(), "LLM returned empty content");
+    CHECK(resp.content.size() > 100, "response too short (" + std::to_string(resp.content.size()) + " chars)");
+
+    // Print the full response
+    std::cout << "\n\n    ┌─── AI Response (" << resp.content.size() << " chars, "
+              << resp.output_tokens << " tokens) ───\n";
+
+    // Word-wrap the response at ~100 chars for terminal readability
+    std::istringstream stream(resp.content);
+    std::string line;
+    while (std::getline(stream, line)) {
+        while (line.size() > 100) {
+            auto pos = line.rfind(' ', 100);
+            if (pos == std::string::npos) pos = 100;
+            std::cout << "    │ " << line.substr(0, pos) << "\n";
+            line = line.substr(pos + (pos < line.size() && line[pos] == ' ' ? 1 : 0));
+        }
+        std::cout << "    │ " << line << "\n";
+    }
+    std::cout << "    └───────────────────────────────\n";
+
+    // Content validation
+    std::string lower_content = resp.content;
+    std::transform(lower_content.begin(), lower_content.end(), lower_content.begin(), ::tolower);
+
+    bool mentions_armada = lower_content.find("armada") != std::string::npos;
+    bool mentions_faction = lower_content.find("federation") != std::string::npos ||
+                            lower_content.find("klingon") != std::string::npos ||
+                            lower_content.find("romulan") != std::string::npos ||
+                            lower_content.find("fkr") != std::string::npos;
+    bool mentions_crew = lower_content.find("crew") != std::string::npos ||
+                         lower_content.find("captain") != std::string::npos ||
+                         lower_content.find("bridge") != std::string::npos;
+    bool mentions_officers = lower_content.find("officer") != std::string::npos ||
+                             lower_content.find("kirk") != std::string::npos ||
+                             lower_content.find("khan") != std::string::npos ||
+                             lower_content.find("spock") != std::string::npos;
+    bool mentions_below_decks = lower_content.find("below") != std::string::npos ||
+                                lower_content.find("bda") != std::string::npos ||
+                                lower_content.find("below deck") != std::string::npos;
+
+    CHECK(mentions_armada, "response doesn't mention 'armada'");
+    CHECK(mentions_faction, "response doesn't mention any FKR faction (Federation/Klingon/Romulan)");
+    CHECK(mentions_crew || mentions_officers,
+          "response doesn't mention crews or officers");
+    if (!mentions_below_decks) {
+        std::cout << "    [WARN] response doesn't explicitly mention below-decks/BDA officers\n";
+    }
+
+    PASS();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -2488,11 +2911,13 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--live") == 0) live_mode = true;
         else if (std::strcmp(argv[i], "--clean") == 0) { live_mode = true; clean_mode = true; }
+        else if (std::strcmp(argv[i], "--ai") == 0) ai_mode = true;
         else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
-            std::cout << "Usage: smoke_test [--live] [--clean]\n"
+            std::cout << "Usage: smoke_test [--live] [--clean] [--ai]\n"
                       << "  (no args)  Test against cached data (fast, offline)\n"
                       << "  --live     Force fresh fetch from api.spocks.club\n"
-                      << "  --clean    Wipe cache first, then fetch live\n";
+                      << "  --clean    Wipe cache first, then fetch live\n"
+                      << "  --ai       Run AI/LLM integration tests (requires API key)\n";
             return 0;
         }
     }
@@ -2516,6 +2941,26 @@ int main(int argc, char* argv[]) {
     if (!live_mode && !fs::exists("data/game_data/officers.json")) {
         std::cerr << "ERROR: No cached data. Run with --live first, or use the main app.\n";
         return 1;
+    }
+
+    // --ai: skip the full suite, just load data and run the AI test
+    if (ai_mode) {
+        std::cout << "\n--- Data loading ---\n";
+        test_fetch_all();
+        if (!data_loaded) {
+            std::cerr << "ERROR: game data not loaded, cannot run AI test\n";
+            return 1;
+        }
+        std::cout << "\n--- AI / LLM Integration ---\n";
+        test_ai_ask_armada_credits();
+        std::cout << "\n";
+        if (tests_failed == 0) {
+            std::cout << "=== \033[32m" << tests_passed << "/" << tests_run << " PASSED\033[0m ===\n";
+        } else {
+            std::cout << "=== " << tests_passed << "/" << tests_run << " passed, "
+                      << "\033[31m" << tests_failed << " FAILED\033[0m ===\n";
+        }
+        return tests_failed > 0 ? 1 : 0;
     }
 
     std::cout << "\n--- Helper functions ---\n";
@@ -2673,6 +3118,18 @@ int main(int argc, char* argv[]) {
     test_planner_completion_pct();
     test_planner_persistence();
     test_planner_weekly_persistence();
+
+    // AI tests (only when --ai flag is passed)
+    if (ai_mode) {
+        std::cout << "\n--- AI / LLM Integration ---\n";
+        if (data_loaded) {
+            test_ai_ask_armada_credits();
+        } else {
+            std::cout << "  (skipped — game data not loaded)\n";
+        }
+    } else {
+        std::cout << "\n  (AI tests skipped — pass --ai to enable)\n";
+    }
 
     // Summary
     std::cout << "\n";

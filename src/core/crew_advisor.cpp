@@ -807,7 +807,7 @@ RESPONSE STYLE:
 
     std::ostringstream user;
     user << "QUESTION: " << question << "\n\n";
-    user << "MY ACCOUNT DATA:\n" << snapshot_to_json(snapshot, SnapshotJsonOptions::overview()) << "\n";
+    user << "MY ACCOUNT DATA:\n" << snapshot_to_json(snapshot, SnapshotJsonOptions::full()) << "\n";
 
     req.user_prompt = user.str();
 
