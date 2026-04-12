@@ -158,6 +158,18 @@ public:
         const std::string& question,
         AdvisorStreamCallback stream_cb = nullptr);
 
+    // Debug/troubleshooting helpers: expose the exact request payloads that
+    // would be sent to the LLM without actually issuing a query.
+    LlmRequest debug_build_crew_request(const AccountSnapshot& snapshot,
+                                        int top_n = 3) const;
+    LlmRequest debug_build_progression_request(const AccountSnapshot& snapshot,
+                                               const std::string& goal = "") const;
+    LlmRequest debug_build_meta_request(Scenario scenario,
+                                        const AccountSnapshot& snapshot,
+                                        const std::vector<LocalCrewSummary>& local_crews = {}) const;
+    LlmRequest debug_build_ask_request(const AccountSnapshot& snapshot,
+                                       const std::string& question) const;
+
     // -------------------------------------------------------------------
     // Provider info
     // -------------------------------------------------------------------

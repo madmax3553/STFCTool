@@ -225,8 +225,8 @@ LlmRequest CrewAdvisor::build_progression_prompt(const AccountSnapshot& snapshot
 }
 
 LlmRequest CrewAdvisor::build_meta_prompt(Scenario scenario,
-                                             const AccountSnapshot& snapshot,
-                                             const std::vector<LocalCrewSummary>& local_crews) const {
+                                              const AccountSnapshot& snapshot,
+                                              const std::vector<LocalCrewSummary>& local_crews) const {
     LlmRequest req;
     req.system_prompt = META_SYSTEM_PROMPT;
     req.temperature = 0.4;
@@ -289,6 +289,46 @@ LlmRequest CrewAdvisor::build_meta_prompt(Scenario scenario,
         req.response_schema = R"({"type":"object","properties":{"top_crews":{"type":"array"},"meta_summary":{"type":"string"}},"required":["top_crews","meta_summary"]})";
     }
 
+    return req;
+}
+
+LlmRequest CrewAdvisor::debug_build_crew_request(const AccountSnapshot& snapshot,
+                                                 int top_n) const {
+    return build_crew_prompt(snapshot, top_n);
+}
+
+LlmRequest CrewAdvisor::debug_build_progression_request(const AccountSnapshot& snapshot,
+                                                        const std::string& goal) const {
+    return build_progression_prompt(snapshot, goal);
+}
+
+LlmRequest CrewAdvisor::debug_build_meta_request(Scenario scenario,
+                                                 const AccountSnapshot& snapshot,
+                                                 const std::vector<LocalCrewSummary>& local_crews) const {
+    return build_meta_prompt(scenario, snapshot, local_crews);
+}
+
+LlmRequest CrewAdvisor::debug_build_ask_request(const AccountSnapshot& snapshot,
+                                                const std::string& question) const {
+    LlmRequest req;
+    req.system_prompt = R"(You are an expert Star Trek Fleet Command (STFC) advisor. The player is asking a question about the MOBILE GAME Star Trek Fleet Command by Scopely. This is NOT about Star Trek TV shows or movies — it is a mobile strategy game with officers, ships, crew mechanics, PvP, mining, armadas, and combat.
+
+You have the player's game account data for context. Only reference officers/ships the player actually owns (from the data below).
+
+RESPONSE STYLE:
+- Respond in plain text, NOT JSON. This is a conversation.
+- Be concise but thorough. Use bullet points or short paragraphs.
+- If the question is about crews, explain your reasoning (why captain, why bridge, what synergy).
+- If the question is about game mechanics, explain clearly with examples.
+- If you're unsure about current meta, say so rather than guessing.)";
+    req.temperature = 0.4;
+    req.max_tokens = 8192;
+    req.enable_search = client_ && client_->capabilities().search_grounding;
+
+    std::ostringstream user;
+    user << "QUESTION: " << question << "\n\n";
+    user << "MY ACCOUNT DATA:\n" << snapshot_to_json(snapshot, SnapshotJsonOptions::full()) << "\n";
+    req.user_prompt = user.str();
     return req;
 }
 
@@ -790,26 +830,7 @@ LlmResponse CrewAdvisor::ask(
         return resp;
     }
 
-    LlmRequest req;
-    req.system_prompt = R"(You are an expert Star Trek Fleet Command (STFC) advisor. The player is asking a question about the MOBILE GAME Star Trek Fleet Command by Scopely. This is NOT about Star Trek TV shows or movies — it is a mobile strategy game with officers, ships, crew mechanics, PvP, mining, armadas, and combat.
-
-You have the player's game account data for context. Only reference officers/ships the player actually owns (from the data below).
-
-RESPONSE STYLE:
-- Respond in plain text, NOT JSON. This is a conversation.
-- Be concise but thorough. Use bullet points or short paragraphs.
-- If the question is about crews, explain your reasoning (why captain, why bridge, what synergy).
-- If the question is about game mechanics, explain clearly with examples.
-- If you're unsure about current meta, say so rather than guessing.)";
-    req.temperature = 0.4;
-    req.max_tokens = 8192;  // Gemini 2.5 Flash uses thinking tokens from this budget
-    req.enable_search = client_->capabilities().search_grounding;
-
-    std::ostringstream user;
-    user << "QUESTION: " << question << "\n\n";
-    user << "MY ACCOUNT DATA:\n" << snapshot_to_json(snapshot, SnapshotJsonOptions::full()) << "\n";
-
-    req.user_prompt = user.str();
+    LlmRequest req = debug_build_ask_request(snapshot, question);
 
     // No response_schema for Ask — we want plain text, not JSON
     // No response_schema when search is enabled either (Gemini incompatibility)
