@@ -1,0 +1,95 @@
+{
+  "data_quality": {
+    "missing": [
+      "resources",
+      "inventory_items",
+      "active_jobs",
+      "missions",
+      "buffs",
+      "events",
+      "event_scores",
+      "active_ship_locations",
+      "dock_assignments",
+      "mining_node_state",
+      "research_focus"
+    ],
+    "present": [
+      "officers",
+      "ships",
+      "buildings",
+      "forbidden_tech"
+    ],
+    "warnings": [
+      "Sync timestamp missing; prompt recency cannot be verified.",
+      "No inventory item data; spend recommendations cannot confirm available speedups, XP, or credits.",
+      "No active job data; prompts cannot reason about current build/research queues.",
+      "No mission data; prompts cannot account for active mission progress.",
+      "No live event feed; prompts cannot optimize around today's event schedule or score thresholds.",
+      "No active ship location data; prompts assume all owned ships are generally available.",
+      "No mining node state; prompts cannot detect zeroed nodes, over-cargo status, or active mining assignments.",
+      "No research focus metadata; progression advice may be broad rather than tree-specific."
+    ]
+  },
+  "generated_at": "2026-04-11 13:37:04",
+  "player": {
+    "buildings": 108,
+    "last_sync": "never",
+    "name": "Player",
+    "officers": 290,
+    "ops_level": 66,
+    "ships": 70,
+    "sync_age_seconds": 9223372036854775807,
+    "sync_fresh": false,
+    "sync_status": "missing_last_sync",
+    "techs": 27
+  },
+  "prompts": [
+    {
+      "data_quality": {
+        "missing": [
+          "resources",
+          "inventory_items",
+          "active_jobs",
+          "missions",
+          "buffs",
+          "events",
+          "event_scores",
+          "active_ship_locations",
+          "dock_assignments",
+          "mining_node_state",
+          "research_focus"
+        ],
+        "present": [
+          "officers",
+          "ships",
+          "buildings",
+          "forbidden_tech"
+        ],
+        "warnings": [
+          "Sync timestamp missing; prompt recency cannot be verified.",
+          "No inventory item data; spend recommendations cannot confirm available speedups, XP, or credits.",
+          "No active job data; prompts cannot reason about current build/research queues.",
+          "No mission data; prompts cannot account for active mission progress.",
+          "No live event feed; prompts cannot optimize around today's event schedule or score thresholds.",
+          "No active ship location data; prompts assume all owned ships are generally available.",
+          "No mining node state; prompts cannot detect zeroed nodes, over-cargo status, or active mining assignments.",
+          "No research focus metadata; progression advice may be broad rather than tree-specific."
+        ]
+      },
+      "id": "strategic_assessment",
+      "mode": "strategic",
+      "request": {
+        "enable_search": false,
+        "max_tokens": 4096,
+        "response_schema": "{\"type\":\"object\",\"properties\":{\"daily_summary\":{\"type\":\"string\"},\"objectives\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"priority\":{\"type\":\"integer\"},\"title\":{\"type\":\"string\"},\"category\":{\"type\":\"string\"},\"urgency_score\":{\"type\":\"integer\"},\"reasoning\":{\"type\":\"string\"},\"expected_outcome\":{\"type\":\"string\"},\"required_resources\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"priority\",\"title\",\"category\",\"urgency_score\",\"reasoning\",\"expected_outcome\",\"required_resources\"]}},\"hoarding_advice\":{\"type\":\"string\"},\"limitations\":{\"type\":\"string\"}},\"required\":[\"daily_summary\",\"objectives\",\"hoarding_advice\",\"limitations\"]}",
+        "system_prompt": "You are the STFC Strategic Command Intelligence. Your goal is to maximize the growth and event efficiency of a Star Trek Fleet Command account.\n\nCORE LOGIC:\n1. ROI (Return on Investment): Prioritize actions that create the most account progress with the least waste.\n2. Efficiency: Do not recommend spending speed-ups, XP, or large resources unless there is a clear progression reason or the available data strongly supports it.\n3. Urgency: Give higher priority to actions blocked by active timers or near-term progression bottlenecks.\n\nCONSTRAINTS:\n- Only reference data provided in the DATA sections.\n- Do not assume event data exists if it is marked missing.\n- If the user has a Personal Focus, align all objectives to that goal.\n- If critical live data is missing, say so explicitly in the response reasoning.\n\nRespond with ONLY valid JSON, no other text:\n{\n  \"daily_summary\": \"A 2-sentence overview of today's account health.\",\n  \"objectives\": [\n    {\n      \"priority\": 1,\n      \"title\": \"Objective Title\",\n      \"category\": \"Spending | Combat | Mining | Progression\",\n      \"urgency_score\": 1,\n      \"reasoning\": \"Why this is a good move based on current account data.\",\n      \"expected_outcome\": \"What account progress this should unlock or improve.\",\n      \"required_resources\": [\"List of critical materials, timers, or ships needed\"]\n    }\n  ],\n  \"hoarding_advice\": \"What resource should I avoid spending today if the current data does not justify it.\",\n  \"limitations\": \"What important missing data reduces confidence in the recommendation.\"\n}",
+        "temperature": 0.3,
+        "user_prompt": "### DATA: ACCOUNT SNAPSHOT\n- Ops Level: 66\n- Active Jobs: none\n- Docks: unknown from current sync data\n- Primary Ships: NSEA PROTECTOR T14 L70, SS REVENANT T14 L70, GORN EVISCERATOR T13 L65, BORG CUBE T13 L65, U.S.S. RELATIVITY T12 L60\n\n### DATA: ACTIVE EVENTS & MILESTONES\nUnavailable in current sync data. Do not assume live events or milestone thresholds.\n\n### DATA: INVENTORY SNAPSHOT\n- Inventory Items: 0 synced item stacks (not yet categorized into speedups/xp buckets)\n- Resources: none\n\n### USER PERSONAL FOCUS\n\"General account growth and efficiency\"\n\n### DATA QUALITY\n{\n  \"missing\": [\n    \"resources\",\n    \"inventory_items\",\n    \"active_jobs\",\n    \"missions\",\n    \"buffs\",\n    \"events\",\n    \"event_scores\",\n    \"active_ship_locations\",\n    \"dock_assignments\",\n    \"mining_node_state\",\n    \"research_focus\"\n  ],\n  \"present\": [\n    \"officers\",\n    \"ships\",\n    \"buildings\",\n    \"forbidden_tech\"\n  ],\n  \"warnings\": [\n    \"Sync timestamp missing; prompt recency cannot be verified.\",\n    \"No inventory item data; spend recommendations cannot confirm available speedups, XP, or credits.\",\n    \"No active job data; prompts cannot reason about current build/research queues.\",\n    \"No mission data; prompts cannot account for active mission progress.\",\n    \"No live event feed; prompts cannot optimize around today's event schedule or score thresholds.\",\n    \"No active ship location data; prompts assume all owned ships are generally available.\",\n    \"No mining node state; prompts cannot detect zeroed nodes, over-cargo status, or active mining assignments.\",\n    \"No research focus metadata; progression advice may be broad rather than tree-specific.\"\n  ]\n}\n\n### TASK\nGenerate a strategic assessment using ONLY the available account data. If event-driven advice is not possible, prioritize safe progression and explain the limitation.\n"
+      },
+      "scenario": "hybrid",
+      "ship_type": "explorer",
+      "snapshot_officers": 55,
+      "snapshot_total_officers": 290
+    }
+  ]
+}

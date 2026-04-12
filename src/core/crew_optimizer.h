@@ -513,6 +513,7 @@ struct BdaSuggestion {
 struct DockConfig {
     Scenario scenario = Scenario::PvP;
     std::string ship_override;     // empty = use recommendation
+    std::string ship_override_source; // empty | ai | manual
     bool locked = false;
     std::string locked_captain;    // only when locked
     std::vector<std::string> locked_bridge;  // only when locked (2 names)

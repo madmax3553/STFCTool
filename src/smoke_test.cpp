@@ -20,12 +20,15 @@
 #include <cctype>
 #include <cmath>
 #include <unordered_map>
+#include <fstream>
+#include <condition_variable>
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
 #include "json.hpp"
 
 #include "data/models.h"
+#include "data/ingress_server.h"
 #include "data/api_client.h"
 #include "data/llm_client.h"
 #include "util/csv_import.h"
@@ -33,6 +36,8 @@
 #include "core/planner.h"
 #include "core/ai_crew_engine.h"
 #include "core/account_state.h"
+#include "core/ship_prompt.h"
+#include "core/officer_prompt.h"
 
 namespace fs = std::filesystem;
 using namespace stfc;
@@ -1939,13 +1944,13 @@ void test_loadout_basic() {
     optimizer->set_ship_type(ShipType::Explorer);
 
     std::vector<DockConfig> configs = {
-        {Scenario::PvP,             "", false, "", {}},
-        {Scenario::Hybrid,          "", false, "", {}},
-        {Scenario::PvEHostile,      "", false, "", {}},
-        {Scenario::Armada,          "", false, "", {}},
-        {Scenario::MiningSpeed,     "", false, "", {}},
-        {Scenario::MiningProtected, "", false, "", {}},
-        {Scenario::MiningGeneral,   "", false, "", {}},
+        {Scenario::PvP,             "", "", false, "", {}},
+        {Scenario::Hybrid,          "", "", false, "", {}},
+        {Scenario::PvEHostile,      "", "", false, "", {}},
+        {Scenario::Armada,          "", "", false, "", {}},
+        {Scenario::MiningSpeed,     "", "", false, "", {}},
+        {Scenario::MiningProtected, "", "", false, "", {}},
+        {Scenario::MiningGeneral,   "", "", false, "", {}},
     };
 
     auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
@@ -1975,13 +1980,13 @@ void test_loadout_no_duplicate_officers() {
     optimizer->set_ship_type(ShipType::Explorer);
 
     std::vector<DockConfig> configs = {
-        {Scenario::PvP,             "", false, "", {}},
-        {Scenario::Hybrid,          "", false, "", {}},
-        {Scenario::PvEHostile,      "", false, "", {}},
-        {Scenario::Armada,          "", false, "", {}},
-        {Scenario::MiningSpeed,     "", false, "", {}},
-        {Scenario::MiningProtected, "", false, "", {}},
-        {Scenario::MiningGeneral,   "", false, "", {}},
+        {Scenario::PvP,             "", "", false, "", {}},
+        {Scenario::Hybrid,          "", "", false, "", {}},
+        {Scenario::PvEHostile,      "", "", false, "", {}},
+        {Scenario::Armada,          "", "", false, "", {}},
+        {Scenario::MiningSpeed,     "", "", false, "", {}},
+        {Scenario::MiningProtected, "", "", false, "", {}},
+        {Scenario::MiningGeneral,   "", "", false, "", {}},
     };
 
     auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
@@ -2010,9 +2015,9 @@ void test_loadout_locked_dock() {
 
     // Lock dock 1 to a specific crew
     std::vector<DockConfig> configs = {
-        {Scenario::PvP, "", true, "Kirk", {"Dezoc", "Borg Queen"}},
-        {Scenario::Hybrid,      "", false, "", {}},
-        {Scenario::PvEHostile,  "", false, "", {}},
+        {Scenario::PvP, "", "", true, "Kirk", {"Dezoc", "Borg Queen"}},
+        {Scenario::Hybrid,      "", "", false, "", {}},
+        {Scenario::PvEHostile,  "", "", false, "", {}},
     };
 
     auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
@@ -2046,8 +2051,8 @@ void test_loadout_bda_suggestions() {
     optimizer->set_ship_type(ShipType::Explorer);
 
     std::vector<DockConfig> configs = {
-        {Scenario::PvP,     "", false, "", {}},
-        {Scenario::Hybrid,  "", false, "", {}},
+        {Scenario::PvP,     "", "", false, "", {}},
+        {Scenario::Hybrid,  "", "", false, "", {}},
     };
 
     auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
@@ -2081,8 +2086,8 @@ void test_loadout_persistence() {
     optimizer->set_ship_type(ShipType::Explorer);
 
     std::vector<DockConfig> configs = {
-        {Scenario::PvP,     "", false, "", {}},
-        {Scenario::Hybrid,  "", false, "", {}},
+        {Scenario::PvP,     "", "", false, "", {}},
+        {Scenario::Hybrid,  "", "", false, "", {}},
     };
 
     auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
@@ -2159,9 +2164,9 @@ void test_loadout_bda_no_duplicates_across_docks() {
     optimizer->set_ship_type(ShipType::Explorer);
 
     std::vector<DockConfig> configs = {
-        {Scenario::PvP,         "", false, "", {}},
-        {Scenario::Hybrid,      "", false, "", {}},
-        {Scenario::PvEHostile,  "", false, "", {}},
+        {Scenario::PvP,         "", "", false, "", {}},
+        {Scenario::Hybrid,      "", "", false, "", {}},
+        {Scenario::PvEHostile,  "", "", false, "", {}},
     };
 
     auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
@@ -2192,13 +2197,13 @@ void test_loadout_performance() {
     optimizer->set_ship_type(ShipType::Explorer);
 
     std::vector<DockConfig> configs = {
-        {Scenario::PvP,             "", false, "", {}},
-        {Scenario::Hybrid,          "", false, "", {}},
-        {Scenario::PvEHostile,      "", false, "", {}},
-        {Scenario::Armada,          "", false, "", {}},
-        {Scenario::MiningSpeed,     "", false, "", {}},
-        {Scenario::MiningProtected, "", false, "", {}},
-        {Scenario::MiningGeneral,   "", false, "", {}},
+        {Scenario::PvP,             "", "", false, "", {}},
+        {Scenario::Hybrid,          "", "", false, "", {}},
+        {Scenario::PvEHostile,      "", "", false, "", {}},
+        {Scenario::Armada,          "", "", false, "", {}},
+        {Scenario::MiningSpeed,     "", "", false, "", {}},
+        {Scenario::MiningProtected, "", "", false, "", {}},
+        {Scenario::MiningGeneral,   "", "", false, "", {}},
     };
 
     auto start = std::chrono::steady_clock::now();
@@ -2486,6 +2491,340 @@ void test_planner_helper_functions() {
 // ---------------------------------------------------------------------------
 
 static bool ai_mode = false;   // --ai flag enables LLM tests
+static bool prompt_mode = false; // --prompt prints the exact built prompt without querying an LLM
+static bool all_prompts_mode = false;
+static std::string selected_prompt_id = "ask_fkr_armada_credits";
+static bool require_live_sync = false;
+static bool force_live_sync = false;
+static bool sync_only_mode = false;
+static int prompt_sync_timeout_seconds = 120;
+
+namespace ai_test {
+static PlayerData load_player_data(const std::string& path);
+}
+
+static std::string format_sync_timestamp(const std::chrono::system_clock::time_point& tp) {
+    if (tp == std::chrono::system_clock::time_point{}) return "never";
+    auto tt = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm_buf{};
+    localtime_r(&tt, &tm_buf);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+                  tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+                  tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+    return buf;
+}
+
+static long sync_age_seconds(const PlayerData& pd) {
+    if (pd.last_sync == std::chrono::system_clock::time_point{}) return LONG_MAX;
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now() - pd.last_sync).count();
+}
+
+static bool same_local_day(const std::chrono::system_clock::time_point& tp) {
+    if (tp == std::chrono::system_clock::time_point{}) return false;
+    auto now_tt = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    auto tp_tt = std::chrono::system_clock::to_time_t(tp);
+    std::tm now_tm{};
+    std::tm tp_tm{};
+    localtime_r(&now_tt, &now_tm);
+    localtime_r(&tp_tt, &tp_tm);
+    return now_tm.tm_year == tp_tm.tm_year && now_tm.tm_yday == tp_tm.tm_yday;
+}
+
+static PlayerData load_or_wait_for_sync() {
+    PlayerData disk_pd = ai_test::load_player_data("data/player_data/player_data.json");
+    bool has_disk = !disk_pd.officers.empty();
+    bool same_day = same_local_day(disk_pd.last_sync);
+
+    if (!force_live_sync && has_disk && same_day) {
+        std::cout << "    Using saved sync from " << format_sync_timestamp(disk_pd.last_sync)
+                  << " (same day)\n";
+        return disk_pd;
+    }
+
+    if (force_live_sync) {
+        std::cout << "    Forcing live sync; ignoring saved player_data.json\n";
+    } else if (has_disk) {
+        std::cout << "    Saved sync is stale or missing timestamp ("
+                  << format_sync_timestamp(disk_pd.last_sync)
+                  << "); attempting live sync first\n";
+    } else {
+        std::cout << "    No saved sync found; attempting live sync first\n";
+    }
+
+    IngressServer ingress("data/player_data", 8270);
+    std::mutex sync_mutex;
+    std::condition_variable sync_cv;
+    bool sync_received = false;
+
+    ingress.set_data_callback([&](const std::string& body) {
+        std::lock_guard<std::mutex> lock(sync_mutex);
+        sync_received = true;
+        std::cout << "    Sync POST received (" << body.size() << " bytes)\n";
+        sync_cv.notify_all();
+    });
+
+    if (!ingress.start()) {
+        std::cout << "    Failed to start ingress server; continuing with saved data if available\n";
+        return disk_pd;
+    }
+
+    std::cout << "    Waiting for live sync on http://127.0.0.1:" << ingress.port()
+              << "/sync/ingress/ (timeout " << prompt_sync_timeout_seconds << "s)\n";
+
+    {
+        std::unique_lock<std::mutex> lock(sync_mutex);
+        bool ok = sync_cv.wait_for(lock, std::chrono::seconds(prompt_sync_timeout_seconds), [&]() {
+            return sync_received;
+        });
+        ingress.stop();
+        if (ok) {
+            std::cout << "    Live sync received at " << format_sync_timestamp(ingress.get_player_data().last_sync) << "\n";
+            return ingress.get_player_data();
+        }
+    }
+
+    if (has_disk) {
+        std::cout << "    Live sync timed out; continuing with saved data from "
+                  << format_sync_timestamp(disk_pd.last_sync) << "\n";
+        return disk_pd;
+    }
+
+    return disk_pd;
+}
+
+void test_sync_monitor() {
+    TEST("sync monitor");
+    IngressServer ingress("data/player_data", 8270);
+    std::mutex sync_mutex;
+    std::condition_variable sync_cv;
+    bool sync_received = false;
+
+    ingress.set_data_callback([&](const std::string& body) {
+        std::lock_guard<std::mutex> lock(sync_mutex);
+        sync_received = true;
+        std::cout << "    Sync POST received (" << body.size() << " bytes)\n";
+        sync_cv.notify_all();
+    });
+
+    CHECK(ingress.start(), "failed to start ingress server on port 8270");
+    std::cout << "    Listening for sync on http://127.0.0.1:" << ingress.port()
+              << "/sync/ingress/ (timeout " << prompt_sync_timeout_seconds << "s)\n";
+
+    {
+        std::unique_lock<std::mutex> lock(sync_mutex);
+        bool ok = sync_cv.wait_for(lock, std::chrono::seconds(prompt_sync_timeout_seconds), [&]() {
+            return sync_received;
+        });
+        ingress.stop();
+        CHECK(ok, "timed out waiting for live sync");
+    }
+
+    const auto& pd = ingress.get_player_data();
+    std::cout << "    Player: " << (pd.player_name.empty() ? "Player" : pd.player_name)
+              << ", officers=" << pd.officers.size()
+              << ", ships=" << pd.ships.size()
+              << ", last_sync=" << format_sync_timestamp(pd.last_sync) << "\n";
+    PASS();
+}
+
+static std::string join_strings(const std::vector<std::string>& items, const std::string& sep) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (i) oss << sep;
+        oss << items[i];
+    }
+    return oss.str();
+}
+
+static nlohmann::json split_lines_json(const std::string& text) {
+    nlohmann::json lines = nlohmann::json::array();
+    std::istringstream ss(text);
+    std::string line;
+    while (std::getline(ss, line)) lines.push_back(line);
+    if (!text.empty() && text.back() == '\n') lines.push_back("");
+    return lines;
+}
+
+static std::string summarize_primary_ships(const PlayerData& pd) {
+    if (pd.ships.empty()) return "none";
+    auto ships = pd.ships;
+    std::sort(ships.begin(), ships.end(), [](const PlayerShip& a, const PlayerShip& b) {
+        if (a.tier != b.tier) return a.tier > b.tier;
+        return a.level > b.level;
+    });
+    std::vector<std::string> lines;
+    for (int i = 0; i < std::min(5, (int)ships.size()); ++i) {
+        const auto& s = ships[i];
+        std::ostringstream line;
+        line << s.name << " T" << s.tier << " L" << s.level;
+        lines.push_back(line.str());
+    }
+    return join_strings(lines, ", ");
+}
+
+static std::string summarize_resources(const PlayerData& pd) {
+    if (pd.resources.empty()) return "none";
+    auto resources = pd.resources;
+    std::sort(resources.begin(), resources.end(), [](const PlayerResource& a, const PlayerResource& b) {
+        return a.amount > b.amount;
+    });
+    std::vector<std::string> lines;
+    for (int i = 0; i < std::min(8, (int)resources.size()); ++i) {
+        if (resources[i].amount <= 0) continue;
+        std::ostringstream line;
+        line << (resources[i].name.empty() ? ("Resource#" + std::to_string(resources[i].resource_id)) : resources[i].name)
+             << ": " << resources[i].amount;
+        lines.push_back(line.str());
+    }
+    return lines.empty() ? "none" : join_strings(lines, ", ");
+}
+
+static LlmRequest build_ship_assessment_request(const PlayerData& pd,
+                                                const GameData& gd,
+                                                const nlohmann::json&) {
+    return stfc::build_ship_assessment_request(pd, gd);
+}
+
+static std::string summarize_active_jobs(const PlayerData& pd) {
+    std::vector<std::string> lines;
+    for (const auto& job : pd.jobs) {
+        if (job.completed) continue;
+        std::ostringstream line;
+        line << job_type_str(job.job_type) << " L" << job.level
+             << " (" << format_duration_short(job_remaining_seconds(job)) << " remaining)";
+        lines.push_back(line.str());
+    }
+    return lines.empty() ? "none" : join_strings(lines, "; ");
+}
+
+static LlmRequest build_strategic_assessment_request(const PlayerData& pd,
+                                                     const nlohmann::json& data_quality) {
+    LlmRequest req;
+    req.system_prompt = R"(You are the STFC Strategic Command Intelligence. Your goal is to maximize the growth and event efficiency of a Star Trek Fleet Command account.
+
+CORE LOGIC:
+1. ROI (Return on Investment): Prioritize actions that create the most account progress with the least waste.
+2. Efficiency: Do not recommend spending speed-ups, XP, or large resources unless there is a clear progression reason or the available data strongly supports it.
+3. Urgency: Give higher priority to actions blocked by active timers or near-term progression bottlenecks.
+
+CONSTRAINTS:
+- Only reference data provided in the DATA sections.
+- Do not assume event data exists if it is marked missing.
+- If the user has a Personal Focus, align all objectives to that goal.
+- If critical live data is missing, say so explicitly in the response reasoning.
+
+Respond with ONLY valid JSON, no other text:
+{
+  "daily_summary": "A 2-sentence overview of today's account health.",
+  "objectives": [
+    {
+      "priority": 1,
+      "title": "Objective Title",
+      "category": "Spending | Combat | Mining | Progression",
+      "urgency_score": 1,
+      "reasoning": "Why this is a good move based on current account data.",
+      "expected_outcome": "What account progress this should unlock or improve.",
+      "required_resources": ["List of critical materials, timers, or ships needed"]
+    }
+  ],
+  "hoarding_advice": "What resource should I avoid spending today if the current data does not justify it.",
+  "limitations": "What important missing data reduces confidence in the recommendation."
+})";
+    req.temperature = 0.3;
+    req.max_tokens = 4096;
+
+    std::ostringstream user;
+    user << "### DATA: ACCOUNT SNAPSHOT\n";
+    user << "- Ops Level: " << pd.ops_level << "\n";
+    user << "- Active Jobs: " << summarize_active_jobs(pd) << "\n";
+    user << "- Docks: unknown from current sync data\n";
+    user << "- Primary Ships: " << summarize_primary_ships(pd) << "\n\n";
+
+    user << "### DATA: ACTIVE EVENTS & MILESTONES\n";
+    user << "Unavailable in current sync data. Do not assume live events or milestone thresholds.\n\n";
+
+    user << "### DATA: INVENTORY SNAPSHOT\n";
+    user << "- Inventory Items: " << pd.inventory.size() << " synced item stacks (not yet categorized into speedups/xp buckets)\n";
+    user << "- Resources: " << summarize_resources(pd) << "\n\n";
+
+    user << "### USER PERSONAL FOCUS\n";
+    user << "\"General account growth and efficiency\"\n\n";
+
+    user << "### TASK\n";
+    user << "Generate a strategic assessment using ONLY the available account data. If event-driven advice is not possible, prioritize safe progression and explain the limitation.\n";
+    req.user_prompt = user.str();
+    req.response_schema =
+        R"({"type":"object","properties":{"daily_summary":{"type":"string"},"objectives":{"type":"array","items":{"type":"object","properties":{"priority":{"type":"integer"},"title":{"type":"string"},"category":{"type":"string"},"urgency_score":{"type":"integer"},"reasoning":{"type":"string"},"expected_outcome":{"type":"string"},"required_resources":{"type":"array","items":{"type":"string"}}},"required":["priority","title","category","urgency_score","reasoning","expected_outcome","required_resources"]}},"hoarding_advice":{"type":"string"},"limitations":{"type":"string"}},"required":["daily_summary","objectives","hoarding_advice","limitations"]})";
+    return req;
+}
+
+static nlohmann::json build_data_quality(const PlayerData& pd, long age_sec) {
+    nlohmann::json present = nlohmann::json::array();
+    nlohmann::json missing = nlohmann::json::array();
+    nlohmann::json warnings = nlohmann::json::array();
+
+    if (!pd.officers.empty()) present.push_back("officers");
+    else missing.push_back("officers");
+
+    if (!pd.ships.empty()) present.push_back("ships");
+    else missing.push_back("ships");
+
+    if (!pd.buildings.empty()) present.push_back("buildings");
+    else missing.push_back("buildings");
+
+    if (!pd.resources.empty()) present.push_back("resources");
+    else missing.push_back("resources");
+
+    if (!pd.techs.empty()) present.push_back("forbidden_tech");
+    else missing.push_back("forbidden_tech");
+
+    if (!pd.inventory.empty()) present.push_back("inventory_items");
+    else missing.push_back("inventory_items");
+
+    if (!pd.jobs.empty()) present.push_back("active_jobs");
+    else missing.push_back("active_jobs");
+
+    if (!pd.missions.empty()) present.push_back("missions");
+    else missing.push_back("missions");
+
+    if (!pd.buffs.empty()) present.push_back("buffs");
+    else missing.push_back("buffs");
+
+    missing.push_back("events");
+    missing.push_back("event_scores");
+    missing.push_back("active_ship_locations");
+    missing.push_back("dock_assignments");
+    missing.push_back("mining_node_state");
+    missing.push_back("research_focus");
+
+    if (pd.last_sync == std::chrono::system_clock::time_point{}) {
+        warnings.push_back("Sync timestamp missing; prompt recency cannot be verified.");
+    } else if (age_sec > 600) {
+        warnings.push_back("Sync data is older than 10 minutes; prompt context may be stale.");
+    }
+
+    if (pd.inventory.empty()) {
+        warnings.push_back("No inventory item data; spend recommendations cannot confirm available speedups, XP, or credits.");
+    }
+    if (pd.jobs.empty()) {
+        warnings.push_back("No active job data; prompts cannot reason about current build/research queues.");
+    }
+    if (pd.missions.empty()) {
+        warnings.push_back("No mission data; prompts cannot account for active mission progress.");
+    }
+    warnings.push_back("No live event feed; prompts cannot optimize around today's event schedule or score thresholds.");
+    warnings.push_back("No active ship location data; prompts assume all owned ships are generally available.");
+    warnings.push_back("No mining node state; prompts cannot detect zeroed nodes, over-cargo status, or active mining assignments.");
+    warnings.push_back("No research focus metadata; progression advice may be broad rather than tree-specific.");
+
+    return {
+        {"present", present},
+        {"missing", missing},
+        {"warnings", warnings}
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers for building sync-path roster (duplicated from main.cpp since
@@ -2901,6 +3240,194 @@ void test_ai_ask_armada_credits() {
     PASS();
 }
 
+void test_ai_export_live_prompts_json() {
+    TEST("AI prompt export");
+    CHECK(data_loaded, "game data not loaded");
+
+    PlayerData pd = load_or_wait_for_sync();
+    CHECK(!pd.officers.empty(), "no player officers in data/player_data/player_data.json");
+    long age_sec = sync_age_seconds(pd);
+    bool has_last_sync = (pd.last_sync != std::chrono::system_clock::time_point{});
+    bool sync_fresh = has_last_sync && age_sec >= 0 && age_sec <= 600;
+
+    if (pd.ops_level <= 0) {
+        for (const auto& b : pd.buildings) {
+            if (b.building_id == 0 && b.level > 0) {
+                pd.ops_level = b.level;
+                break;
+            }
+        }
+    }
+    if (pd.player_name.empty()) pd.player_name = "Player";
+
+    resolve_player_names(pd, game_data);
+    auto sync_roster = ai_test::build_roster(pd, game_data);
+    CHECK(sync_roster.size() > 50, "roster too small: " + std::to_string(sync_roster.size()));
+
+    auto opt = std::make_unique<CrewOptimizer>(sync_roster);
+    const auto& officers = opt->officers();
+    CHECK(!officers.empty(), "no classified officers from live sync roster");
+
+    struct PromptSpec {
+        std::string id;
+        std::string mode;
+        Scenario scenario;
+        ShipType ship_type;
+        int top_n;
+        std::string question_or_goal;
+    };
+
+    std::vector<PromptSpec> all_specs = {
+        {"ask_fkr_armada_credits", "ask", Scenario::Armada, ShipType::Explorer, 60,
+         "I want to maximize FKR armada credits (Federation, Klingon, Romulan faction credits) at my current ops level. For each faction's armadas, please tell me which targets to prioritize, the best full crew including below decks, which owned ship to use, and why."},
+        {"ship_assessment", "ship", Scenario::Hybrid, ShipType::Explorer, 50,
+         ""},
+        {"officer_assessment", "officer", Scenario::Hybrid, ShipType::Explorer, 50,
+         ""},
+        {"strategic_assessment", "strategic", Scenario::Hybrid, ShipType::Explorer, 50,
+         ""},
+        {"crew_pvp_explorer", "crew", Scenario::PvP, ShipType::Explorer, 40,
+         ""},
+        {"crew_hybrid_explorer", "crew", Scenario::Hybrid, ShipType::Explorer, 40,
+         ""},
+        {"crew_armada", "crew", Scenario::Armada, ShipType::Explorer, 40,
+         ""},
+        {"crew_pve_hostile", "crew", Scenario::PvEHostile, ShipType::Explorer, 40,
+         ""},
+        {"crew_mining_general", "crew", Scenario::MiningGeneral, ShipType::Explorer, 40,
+         ""},
+        {"crew_loot", "crew", Scenario::Loot, ShipType::Explorer, 40,
+         ""},
+        {"progression_general", "progression", Scenario::Hybrid, ShipType::Explorer, 50,
+         "Help me decide what to invest in next for the best combat and account growth."}
+    };
+
+    std::vector<PromptSpec> specs;
+    if (all_prompts_mode) {
+        specs = all_specs;
+    } else {
+        auto it = std::find_if(all_specs.begin(), all_specs.end(), [](const PromptSpec& spec) {
+            return spec.id == selected_prompt_id;
+        });
+        CHECK(it != all_specs.end(), "unknown prompt id: " + selected_prompt_id);
+        specs.push_back(*it);
+    }
+
+    CrewAdvisor advisor(nullptr);
+    nlohmann::json diagnostics;
+    diagnostics["generated_at"] = format_sync_timestamp(std::chrono::system_clock::now());
+    diagnostics["player"] = {
+        {"name", pd.player_name},
+        {"ops_level", pd.ops_level},
+        {"last_sync", format_sync_timestamp(pd.last_sync)},
+        {"sync_age_seconds", age_sec},
+        {"sync_fresh", sync_fresh},
+        {"sync_status", !has_last_sync ? "missing_last_sync" : (sync_fresh ? "fresh" : "stale")},
+        {"officers", pd.officers.size()},
+        {"ships", pd.ships.size()},
+        {"buildings", pd.buildings.size()},
+        {"techs", pd.techs.size()}
+    };
+    diagnostics["data_quality"] = build_data_quality(pd, age_sec);
+
+    nlohmann::json out_prompts = nlohmann::json::array();
+
+    for (const auto& spec : specs) {
+        AccountSnapshot snapshot = build_account_snapshot(
+            pd, game_data, officers, spec.scenario, spec.ship_type, spec.top_n);
+
+        LlmRequest req;
+        if (spec.mode == "ask") {
+            req = advisor.debug_build_ask_request(snapshot, spec.question_or_goal);
+        } else if (spec.mode == "ship") {
+            req = build_ship_assessment_request(pd, game_data, diagnostics["data_quality"]);
+        } else if (spec.mode == "officer") {
+            req = stfc::build_officer_assessment_request(pd, game_data);
+        } else if (spec.mode == "strategic") {
+            req = build_strategic_assessment_request(pd, diagnostics["data_quality"]);
+        } else if (spec.mode == "progression") {
+            req = advisor.debug_build_progression_request(snapshot, spec.question_or_goal);
+        } else {
+            req = advisor.debug_build_crew_request(snapshot, 3);
+        }
+
+        nlohmann::json j;
+        j = {
+            {"system_prompt", split_lines_json(req.system_prompt)},
+            {"user_prompt", split_lines_json(req.user_prompt)},
+            {"response_schema", split_lines_json(req.response_schema)},
+            {"temperature", req.temperature},
+            {"max_tokens", req.max_tokens},
+            {"enable_search", req.enable_search}
+        };
+        nlohmann::json prompt_diag = {
+            {"prompt_id", spec.id},
+            {"generated_at", diagnostics["generated_at"]},
+            {"scenario", scenario_str(spec.scenario)},
+            {"ship_type", ship_type_str(spec.ship_type)},
+            {"sync_status", diagnostics["player"]["sync_status"]},
+            {"sync_fresh", diagnostics["player"]["sync_fresh"]}
+        };
+        out_prompts.push_back(std::move(j));
+        diagnostics["prompts"].push_back(std::move(prompt_diag));
+    }
+
+    for (size_t i = 0; i < out_prompts.size(); ++i) {
+        const auto& prompt = out_prompts[i];
+        const auto& prompt_diag = diagnostics["prompts"][i];
+        std::cout << "\n    ┌─── " << prompt_diag["prompt_id"].get<std::string>()
+                  << " [" << prompt_diag["scenario"].get<std::string>() << "] ───\n";
+        std::cout << "    │\n";
+        std::cout << "    │ Diagnostics: sync=" << prompt_diag["sync_status"].get<std::string>()
+                  << ", fresh=" << (prompt_diag["sync_fresh"].get<bool>() ? "yes" : "no") << "\n";
+        std::cout << "    │ Missing inputs: "
+                  << join_strings(diagnostics["data_quality"]["missing"].get<std::vector<std::string>>(), ", ") << "\n";
+        std::cout << "    │\n";
+        size_t system_chars = 0;
+        for (const auto& line : prompt["system_prompt"]) system_chars += line.get<std::string>().size() + 1;
+        size_t user_chars = 0;
+        for (const auto& line : prompt["user_prompt"]) user_chars += line.get<std::string>().size() + 1;
+        size_t schema_chars = 0;
+        for (const auto& line : prompt["response_schema"]) schema_chars += line.get<std::string>().size() + 1;
+        std::cout << "    │ Request: system=" << system_chars
+                  << " chars, user=" << user_chars
+                  << " chars, schema=" << schema_chars
+                  << " chars\n";
+        std::cout << "    │ SETTINGS: temp=" << prompt["temperature"].get<double>()
+                  << ", max_tokens=" << prompt["max_tokens"].get<int>()
+                  << ", search=" << (prompt["enable_search"].get<bool>() ? "on" : "off")
+                  << "\n";
+        std::cout << "    └────────────────────────────────────────\n";
+    }
+
+    fs::create_directories("data/prompt_exports");
+    std::string out_path = all_prompts_mode
+        ? "data/prompt_exports/live_prompts.json"
+        : ("data/prompt_exports/" + selected_prompt_id + ".json");
+    std::ofstream f(out_path);
+    CHECK(f.good(), "failed to open output file: " + out_path);
+    if (all_prompts_mode) {
+        f << out_prompts.dump(2);
+    } else {
+        f << out_prompts.front().dump(2);
+    }
+    CHECK(f.good(), "failed to write output file: " + out_path);
+
+    std::string diag_path = all_prompts_mode
+        ? "data/prompt_exports/live_prompts.diagnostics.json"
+        : ("data/prompt_exports/" + selected_prompt_id + ".diagnostics.json");
+    std::ofstream df(diag_path);
+    CHECK(df.good(), "failed to open diagnostics file: " + diag_path);
+    df << diagnostics.dump(2);
+    CHECK(df.good(), "failed to write diagnostics file: " + diag_path);
+
+    std::cout << "(sync " << format_sync_timestamp(pd.last_sync)
+              << ", age " << (has_last_sync ? std::to_string(age_sec) + "s" : std::string("unknown"))
+              << ", status " << diagnostics["player"]["sync_status"].get<std::string>() << ", "
+              << out_prompts.size() << " prompts -> " << out_path << ", diagnostics -> " << diag_path << ") ";
+    PASS();
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -2912,12 +3439,39 @@ int main(int argc, char* argv[]) {
         if (std::strcmp(argv[i], "--live") == 0) live_mode = true;
         else if (std::strcmp(argv[i], "--clean") == 0) { live_mode = true; clean_mode = true; }
         else if (std::strcmp(argv[i], "--ai") == 0) ai_mode = true;
+        else if (std::strcmp(argv[i], "--prompt") == 0) prompt_mode = true;
+        else if (std::strcmp(argv[i], "--sync") == 0) sync_only_mode = true;
+        else if (std::strcmp(argv[i], "--wait-for-sync") == 0) { prompt_mode = true; require_live_sync = true; }
+        else if (std::strcmp(argv[i], "--force-sync") == 0) { prompt_mode = true; force_live_sync = true; require_live_sync = true; }
+        else if (std::strcmp(argv[i], "--sync-timeout") == 0) {
+            if (i + 1 >= argc) {
+                std::cerr << "ERROR: --sync-timeout requires a value\n";
+                return 1;
+            }
+            prompt_sync_timeout_seconds = std::max(1, std::atoi(argv[++i]));
+        }
+        else if (std::strcmp(argv[i], "--all-prompts") == 0) { prompt_mode = true; all_prompts_mode = true; }
+        else if (std::strcmp(argv[i], "--prompt-id") == 0) {
+            prompt_mode = true;
+            if (i + 1 >= argc) {
+                std::cerr << "ERROR: --prompt-id requires a value\n";
+                return 1;
+            }
+            selected_prompt_id = argv[++i];
+        }
         else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
-            std::cout << "Usage: smoke_test [--live] [--clean] [--ai]\n"
+            std::cout << "Usage: smoke_test [--live] [--clean] [--ai] [--prompt] [--prompt-id <id>] [--all-prompts] [--sync] [--wait-for-sync] [--force-sync] [--sync-timeout <sec>]\n"
                       << "  (no args)  Test against cached data (fast, offline)\n"
                       << "  --live     Force fresh fetch from api.spocks.club\n"
                       << "  --clean    Wipe cache first, then fetch live\n"
-                      << "  --ai       Run AI/LLM integration tests (requires API key)\n";
+                      << "  --ai       Run AI/LLM integration tests (requires API key)\n"
+                      << "  --prompt   Build the default prompt from live account data\n"
+                      << "  --prompt-id <id>  Build one specific prompt id (default: ask_fkr_armada_credits)\n"
+                      << "  --all-prompts     Build and export the full prompt set\n"
+                      << "  --sync            Wait for and monitor a live sync only\n"
+                      << "  --wait-for-sync   Require a fresh live sync before prompt export\n"
+                      << "  --force-sync      Ignore saved sync and require a fresh live sync\n"
+                      << "  --sync-timeout N  Wait up to N seconds for live sync\n";
             return 0;
         }
     }
@@ -2944,15 +3498,24 @@ int main(int argc, char* argv[]) {
     }
 
     // --ai: skip the full suite, just load data and run the AI test
-    if (ai_mode) {
+    if (sync_only_mode || ai_mode || prompt_mode) {
         std::cout << "\n--- Data loading ---\n";
         test_fetch_all();
         if (!data_loaded) {
-            std::cerr << "ERROR: game data not loaded, cannot run AI test\n";
+            std::cerr << "ERROR: game data not loaded, cannot run AI/prompt test\n";
             return 1;
         }
-        std::cout << "\n--- AI / LLM Integration ---\n";
-        test_ai_ask_armada_credits();
+        if (sync_only_mode) {
+            std::cout << "\n--- Sync Monitor ---\n";
+            test_sync_monitor();
+        }
+        if (prompt_mode) {
+            test_ai_export_live_prompts_json();
+        }
+        if (ai_mode) {
+            std::cout << "\n--- AI / LLM Integration ---\n";
+            test_ai_ask_armada_credits();
+        }
         std::cout << "\n";
         if (tests_failed == 0) {
             std::cout << "=== \033[32m" << tests_passed << "/" << tests_run << " PASSED\033[0m ===\n";

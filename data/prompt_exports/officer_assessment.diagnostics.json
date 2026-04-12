@@ -1,0 +1,56 @@
+{
+  "data_quality": {
+    "missing": [
+      "resources",
+      "inventory_items",
+      "active_jobs",
+      "missions",
+      "buffs",
+      "events",
+      "event_scores",
+      "active_ship_locations",
+      "dock_assignments",
+      "mining_node_state",
+      "research_focus"
+    ],
+    "present": [
+      "officers",
+      "ships",
+      "buildings",
+      "forbidden_tech"
+    ],
+    "warnings": [
+      "Sync timestamp missing; prompt recency cannot be verified.",
+      "No inventory item data; spend recommendations cannot confirm available speedups, XP, or credits.",
+      "No active job data; prompts cannot reason about current build/research queues.",
+      "No mission data; prompts cannot account for active mission progress.",
+      "No live event feed; prompts cannot optimize around today's event schedule or score thresholds.",
+      "No active ship location data; prompts assume all owned ships are generally available.",
+      "No mining node state; prompts cannot detect zeroed nodes, over-cargo status, or active mining assignments.",
+      "No research focus metadata; progression advice may be broad rather than tree-specific."
+    ]
+  },
+  "generated_at": "2026-04-12 14:23:35",
+  "player": {
+    "buildings": 108,
+    "last_sync": "never",
+    "name": "Player",
+    "officers": 290,
+    "ops_level": 66,
+    "ships": 70,
+    "sync_age_seconds": 9223372036854775807,
+    "sync_fresh": false,
+    "sync_status": "missing_last_sync",
+    "techs": 27
+  },
+  "prompts": [
+    {
+      "generated_at": "2026-04-12 14:23:35",
+      "prompt_id": "officer_assessment",
+      "scenario": "hybrid",
+      "ship_type": "explorer",
+      "sync_fresh": false,
+      "sync_status": "missing_last_sync"
+    }
+  ]
+}

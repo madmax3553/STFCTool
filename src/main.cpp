@@ -28,6 +28,8 @@
 #include "core/crew_optimizer.h"
 #include "core/planner.h"
 #include "core/ai_crew_engine.h"
+#include "core/ship_prompt.h"
+#include "core/officer_prompt.h"
 
 using namespace ftxui;
 namespace fs = std::filesystem;
@@ -852,11 +854,22 @@ struct AppState {
     int selected_officer = 0;
     std::string officer_filter;
     bool officer_filter_active = false;  // true = typing a filter
+    int officer_focus_region = 0;        // 0=list, 1=actions
+    int officer_action_index = 0;        // 0=run plan, 1=filter
+    std::string officer_prompt_preview;
+    std::string officer_prompt_response;
+    std::atomic<bool> officer_prompt_running{false};
 
     // Ship browser state
     int selected_ship = 0;
     std::string ship_filter;
     bool ship_filter_active = false;     // true = typing a filter
+    int ship_focus_region = 0;           // 0=list, 1=actions
+    int ship_action_index = 0;           // 0=run plan, 1=filter
+    std::string ship_prompt_preview;
+    std::string ship_prompt_response;
+    std::atomic<bool> ship_prompt_running{false};
+    bool ship_prompt_imported = false;
 
     // Sync tab browser state
     int sync_view_mode = 0;   // 0=officers, 1=ships, 2=resources, 3=buildings, 4=research, 5=jobs, 6=buffs
@@ -970,6 +983,8 @@ struct AppState {
     LoadoutResult loadout_result;
     int selected_dock = 0;         // 0-6 dock selection
     int selected_dock_bda = 0;     // BDA selection within a dock
+    int loadout_focus_region = 0;  // 0=dock list, 1=actions
+    int loadout_action_index = 0;  // 0=edit, 1=apply ai, 2=optimize, 3=lock
     LoadoutPosture loadout_posture = LoadoutPosture::WarLowAttention;
     AccountAnalysis account_analysis;
     bool show_dock_modal = false;
@@ -985,6 +1000,43 @@ struct AppState {
             cfg.locked = false;
         }
         refresh_account_analysis();
+    }
+
+    void import_ship_prompt_loadout(const std::string& json_text) {
+        std::string cleaned = json_text;
+        size_t fence = cleaned.find("```");
+        if (fence != std::string::npos) {
+            size_t first_nl = cleaned.find('\n', fence);
+            size_t end_fence = cleaned.rfind("```");
+            if (first_nl != std::string::npos && end_fence != std::string::npos && end_fence > first_nl) {
+                cleaned = cleaned.substr(first_nl + 1, end_fence - first_nl - 1);
+            }
+        }
+
+        size_t obj_start = cleaned.find('{');
+        size_t obj_end = cleaned.rfind('}');
+        if (obj_start == std::string::npos || obj_end == std::string::npos || obj_end <= obj_start) {
+            throw std::runtime_error("Prompt 1 response did not contain a JSON object");
+        }
+        cleaned = cleaned.substr(obj_start, obj_end - obj_start + 1);
+
+        nlohmann::json j = nlohmann::json::parse(cleaned);
+        if (!j.contains("dock_loadout") || !j["dock_loadout"].is_array()) {
+            throw std::runtime_error("Prompt 1 response missing dock_loadout");
+        }
+        if (dock_configs.size() < 7) init_dock_configs();
+        for (auto& cfg : dock_configs) cfg.ship_override.clear();
+
+        int slot_count = 0;
+        for (const auto& item : j["dock_loadout"]) {
+            int slot = item.value("slot", 0);
+            std::string ship = item.value("name", "");
+            if (slot < 1 || slot > 7 || ship.empty()) continue;
+            dock_configs[slot - 1].ship_override = ship;
+            slot_count++;
+        }
+        ship_prompt_imported = slot_count > 0;
+        loadout_computed = false;
     }
 
     void refresh_account_analysis() {
@@ -2447,12 +2499,19 @@ static Element render_loadout(AppState& state) {
             text(" Dock " + std::to_string(state.selected_dock + 1) + ": ") | bold,
             text(dock_scenario_str) | color(Color::Cyan),
             filler(),
-            text(" [Up/Dn] Dock  ") | dim,
-            text("[</>] Scenario  ") | dim,
-            text("[R/F] Resource  ") | dim,
-            text("[O] Objective  ") | dim,
-            text("[B] BDA nav  ") | dim,
-            text("[K] Lock/Unlock") | dim,
+            ((state.loadout_focus_region == 1 && state.loadout_action_index == 0) ? text(" Edit ") | inverted | bold : text(" Edit ") | dim),
+            text(" "),
+            ((state.loadout_focus_region == 1 && state.loadout_action_index == 1) ? text(" Apply AI ") | inverted | bold : text(" Apply AI ") | dim),
+            text(" "),
+            ((state.loadout_focus_region == 1 && state.loadout_action_index == 2) ? text(" Optimize ") | inverted | bold : text(" Optimize ") | dim),
+            text(" "),
+            ((state.loadout_focus_region == 1 && state.loadout_action_index == 3) ? text(" Lock ") | inverted | bold : text(" Lock ") | dim),
+        }),
+        hbox({
+            text(state.loadout_focus_region == 0 ? " [Tab] Actions  " : " [Tab] Dock List  ") | dim,
+            text("[Enter] Activate  ") | dim,
+            text("[Up/Down] Move  ") | dim,
+            text("[Left/Right] Choose Action") | dim,
         }),
     });
 
@@ -2483,6 +2542,7 @@ static Element render_loadout(AppState& state) {
         modal_lines.push_back(text("Current mining intent: " + mining_desc) | color(Color::Green));
     }
     modal_lines.push_back(separator());
+    modal_lines.push_back(text("Ship Override cycles through owned ships + auto") | dim | center);
     modal_lines.push_back(text("[Up/Dn] field  [</>] change  [Enter/Esc] close") | dim | center);
 
     auto modal = window(text(" Edit Dock "), vbox(modal_lines)) | size(WIDTH, EQUAL, 52);
@@ -2631,7 +2691,8 @@ static Element render_officers(AppState& state) {
             });
         }
 
-        if (sel) row = row | inverted | focus;
+        if (sel && state.officer_focus_region == 0) row = row | inverted | focus;
+        else if (sel) row = row | bgcolor(Color::GrayDark);
         rows.push_back(row);
     }
 
@@ -2808,7 +2869,17 @@ static Element render_officers(AppState& state) {
         header_elems.push_back(text(state.officer_filter) | color(Color::Yellow));
     }
     header_elems.push_back(filler());
-    header_elems.push_back(text("[Up/Down] Navigate  [F] Filter") | dim);
+
+    auto officer_action = [&](const std::string& label, int idx) {
+        auto el = text(" " + label + " ");
+        if (state.officer_focus_region == 1 && state.officer_action_index == idx) {
+            return el | inverted | bold;
+        }
+        return el | dim;
+    };
+    header_elems.push_back(officer_action("Run Plan", 0));
+    header_elems.push_back(text(" "));
+    header_elems.push_back(officer_action("Filter", 1));
 
     return vbox({
         hbox(header_elems),
@@ -2818,6 +2889,12 @@ static Element render_officers(AppState& state) {
             separator(),
             detail | size(WIDTH, EQUAL, 42) | vscroll_indicator | yframe,
         }) | flex,
+        separator(),
+        hbox({
+            text(state.officer_focus_region == 0 ? "[Tab] Actions  " : "[Shift+Tab] Officer List  ") | dim,
+            text("[Enter] Activate  ") | dim,
+            text("[Up/Down] Move") | dim,
+        }),
     });
 }
 
@@ -3084,7 +3161,17 @@ static Element render_ships(AppState& state) {
         ship_header_elems.push_back(text(state.ship_filter) | color(Color::Yellow));
     }
     ship_header_elems.push_back(filler());
-    ship_header_elems.push_back(text("[Up/Down] Navigate  [F] Filter") | dim);
+
+    auto ship_action = [&](const std::string& label, int idx) {
+        auto el = text(" " + label + " ");
+        if (state.ship_focus_region == 1 && state.ship_action_index == idx) {
+            return el | inverted | bold;
+        }
+        return el | dim;
+    };
+    ship_header_elems.push_back(ship_action("Run Plan", 0));
+    ship_header_elems.push_back(text(" "));
+    ship_header_elems.push_back(ship_action("Filter", 1));
 
     return vbox({
         hbox(ship_header_elems),
@@ -3094,6 +3181,13 @@ static Element render_ships(AppState& state) {
             separator(),
             detail | size(WIDTH, EQUAL, 40) | vscroll_indicator | yframe,
         }) | flex,
+        separator(),
+        hbox({
+            text(state.ship_focus_region == 0 ? "[Tab] Actions  " : "[Tab] Ship List  ") | dim,
+            text("[Enter] Activate  ") | dim,
+            text("[Up/Down] Move  ") | dim,
+            text("[Left/Right] Choose Action") | dim,
+        }),
     });
 }
 
@@ -5608,6 +5702,62 @@ int main() {
 
         // === Loadout tab events ===
         if (selected_tab == 4) {
+            auto open_dock_editor = [&]() {
+                state->show_dock_modal = true;
+                state->dock_modal_field = 0;
+                state->status_message = "Editing dock configuration.";
+                return true;
+            };
+            auto apply_ai_action = [&]() {
+                if (state->ship_prompt_response.empty()) {
+                    state->status_message = "No imported AI ship plan available.";
+                    return true;
+                }
+                try {
+                    state->import_ship_prompt_loadout(state->ship_prompt_response);
+                    state->status_message = "AI ship overrides applied. Press Optimize to rebuild crews.";
+                } catch (const std::exception& e) {
+                    state->status_message = std::string("AI ship override import failed: ") + e.what();
+                }
+                return true;
+            };
+            auto optimize_action = [&]() {
+                if (state->optimizer && !state->loadout_running) {
+                    state->set_status("Optimizing 7-dock loadout (background)...");
+                    state->loadout_running = true;
+                    std::thread([state]() {
+                        state->run_loadout_optimizer();
+                        if (!state->loadout_error.empty()) {
+                            state->set_status(state->loadout_error);
+                        } else {
+                            state->set_status("Loadout optimized! " +
+                                std::to_string(state->loadout_result.total_officers_used) +
+                                " officers assigned across " +
+                                std::to_string(state->loadout_result.docks.size()) + " docks.");
+                        }
+                        auto screen = ScreenInteractive::Active();
+                        if (screen) screen->PostEvent(Event::Custom);
+                    }).detach();
+                }
+                return true;
+            };
+            auto lock_action = [&]() {
+                auto& cfg = state->dock_configs[state->selected_dock];
+                if (cfg.locked) {
+                    cfg.locked = false;
+                    cfg.locked_captain.clear();
+                    cfg.locked_bridge.clear();
+                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) + " unlocked.";
+                } else if (state->loadout_computed && state->selected_dock < (int)state->loadout_result.docks.size()) {
+                    const auto& dr = state->loadout_result.docks[state->selected_dock];
+                    cfg.locked = true;
+                    cfg.locked_captain = dr.captain;
+                    cfg.locked_bridge = dr.bridge;
+                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) + " locked: " + dr.captain;
+                }
+                return true;
+            };
+
             if (state->show_dock_modal) {
                 auto& cfg = state->dock_configs[state->selected_dock];
                 if (event == Event::Escape || event == Event::Return) {
@@ -5650,6 +5800,25 @@ int main() {
                         if (objective < 1) objective = 3;
                         if (objective > 3) objective = 1;
                         cfg.mining_objective = static_cast<MiningObjective>(objective);
+                    } else if (state->dock_modal_field == 3) {
+                        std::vector<std::string> owned_ships;
+                        owned_ships.push_back("");
+                        for (const auto& ps : state->player_data.ships) {
+                            std::string name = ps.name.empty() ? ("Hull#" + std::to_string(ps.hull_id)) : ps.name;
+                            if (std::find(owned_ships.begin() + 1, owned_ships.end(), name) == owned_ships.end()) {
+                                owned_ships.push_back(name);
+                            }
+                        }
+                        if (owned_ships.size() > 2) {
+                            std::sort(owned_ships.begin() + 1, owned_ships.end());
+                        }
+                        auto it = std::find(owned_ships.begin(), owned_ships.end(), cfg.ship_override);
+                        int idx = (it == owned_ships.end()) ? 0 : static_cast<int>(std::distance(owned_ships.begin(), it));
+                        idx += dir;
+                        if (idx < 0) idx = (int)owned_ships.size() - 1;
+                        if (idx >= (int)owned_ships.size()) idx = 0;
+                        cfg.ship_override = owned_ships[idx];
+                        cfg.ship_override_source = cfg.ship_override.empty() ? "" : "manual";
                     } else if (state->dock_modal_field == 4) {
                         cfg.locked = !cfg.locked;
                         if (!cfg.locked) {
@@ -5660,6 +5829,41 @@ int main() {
                     state->loadout_computed = false;
                     return true;
                 }
+                return true;
+            }
+            if (state->loadout_focus_region == 1) {
+                if (event == Event::TabReverse) {
+                    state->loadout_focus_region = 0;
+                    return true;
+                }
+                if (event == Event::ArrowLeft) {
+                    if (state->loadout_action_index == 0) state->loadout_focus_region = 0;
+                    else state->loadout_action_index = std::max(0, state->loadout_action_index - 1);
+                    return true;
+                }
+                if (event == Event::ArrowRight) {
+                    state->loadout_action_index = std::min(3, state->loadout_action_index + 1);
+                    return true;
+                }
+                if (event == Event::Return) {
+                    if (state->loadout_action_index == 0) return open_dock_editor();
+                    if (state->loadout_action_index == 1) return apply_ai_action();
+                    if (state->loadout_action_index == 2) return optimize_action();
+                    return lock_action();
+                }
+            }
+            if (event == Event::Tab && state->loadout_focus_region == 0) {
+                state->loadout_focus_region = 1;
+                state->loadout_action_index = 0;
+                return true;
+            }
+            if (event == Event::ArrowRight && state->loadout_focus_region == 0) {
+                state->loadout_focus_region = 1;
+                state->loadout_action_index = 0;
+                return true;
+            }
+            if (event == Event::Escape && state->loadout_focus_region == 1) {
+                state->loadout_focus_region = 0;
                 return true;
             }
             if (event == Event::ArrowDown) {
@@ -5677,10 +5881,7 @@ int main() {
                 return true;
             }
             if (event == Event::Return) {
-                state->show_dock_modal = true;
-                state->dock_modal_field = 0;
-                state->status_message = "Editing dock configuration.";
-                return true;
+                return open_dock_editor();
             }
             // Cycle ship type
             if (event == Event::Character('t') || event == Event::Character('T')) {
@@ -5699,23 +5900,7 @@ int main() {
             }
             // Lock/unlock dock
             if (event == Event::Character('k') || event == Event::Character('K')) {
-                auto& cfg = state->dock_configs[state->selected_dock];
-                if (cfg.locked) {
-                    cfg.locked = false;
-                    cfg.locked_captain.clear();
-                    cfg.locked_bridge.clear();
-                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) + " unlocked.";
-                } else if (state->loadout_computed &&
-                           state->selected_dock < (int)state->loadout_result.docks.size()) {
-                    // Lock with current assignment
-                    const auto& dr = state->loadout_result.docks[state->selected_dock];
-                    cfg.locked = true;
-                    cfg.locked_captain = dr.captain;
-                    cfg.locked_bridge = dr.bridge;
-                    state->status_message = "Dock " + std::to_string(state->selected_dock + 1) +
-                        " locked: " + dr.captain;
-                }
-                return true;
+                return lock_action();
             }
             // Navigate BDA suggestions
             if (event == Event::Character('b') || event == Event::Character('B')) {
@@ -5730,23 +5915,18 @@ int main() {
             }
             // Run loadout optimizer (background thread)
             if (event == Event::Character('g') || event == Event::Character('G')) {
-                if (state->optimizer && !state->loadout_running) {
-                    state->set_status("Optimizing 7-dock loadout (background)...");
-                    state->loadout_running = true;
-                    std::thread([state]() {
-                        state->run_loadout_optimizer();
-                        if (!state->loadout_error.empty()) {
-                            state->set_status(state->loadout_error);
-                        } else {
-                            state->set_status("Loadout optimized! " +
-                                std::to_string(state->loadout_result.total_officers_used) +
-                                " officers assigned across " +
-                                std::to_string(state->loadout_result.docks.size()) + " docks.");
-                        }
-                        // Trigger screen redraw
-                        auto screen = ScreenInteractive::Active();
-                        if (screen) screen->PostEvent(Event::Custom);
-                    }).detach();
+                return optimize_action();
+            }
+            if (event == Event::Character('i') || event == Event::Character('I')) {
+                if (state->ship_prompt_response.empty()) {
+                    state->status_message = "No imported AI ship plan available.";
+                    return true;
+                }
+                try {
+                    state->import_ship_prompt_loadout(state->ship_prompt_response);
+                    state->status_message = "AI ship overrides applied. Press [G] to optimize crews.";
+                } catch (const std::exception& e) {
+                    state->status_message = std::string("AI ship override import failed: ") + e.what();
                 }
                 return true;
             }
@@ -5769,6 +5949,55 @@ int main() {
 
         // === Officers tab events ===
         if (selected_tab == 5) {
+            auto run_officer_plan_action = [&]() {
+                if (state->officer_prompt_running) {
+                    state->status_message = "Officer prompt already running.";
+                    return true;
+                }
+                state->officer_prompt_preview.clear();
+                state->officer_prompt_response.clear();
+                LlmRequest req = build_officer_assessment_request(state->player_data, state->game_data);
+                state->officer_prompt_preview = "SYSTEM PROMPT\n" + req.system_prompt + "\n\nUSER PROMPT\n" + req.user_prompt + "\n\nRESPONSE SCHEMA\n" + req.response_schema;
+
+                if (!state->ai_initialized) state->ai_init_lazy();
+                if (!state->ai_engine.is_available()) {
+                    state->status_message = "Officer prompt preview generated. AI not ready yet.";
+                    return true;
+                }
+
+                state->officer_prompt_running = true;
+                state->status_message = "Running officer assessment...";
+                std::thread([state, req]() {
+                    auto client_result = create_llm_client(load_ai_config());
+                    if (!client_result.client) {
+                        state->officer_prompt_response = "AI unavailable.";
+                        state->officer_prompt_running = false;
+                        state->set_status("AI unavailable for officer prompt.");
+                        auto screen = ScreenInteractive::Active();
+                        if (screen) screen->PostEvent(Event::Custom);
+                        return;
+                    }
+                    LlmResponse resp = client_result.client->query(req);
+                    if (resp.ok()) {
+                        state->officer_prompt_response = resp.content;
+                        state->set_status("Officer assessment received.");
+                    } else {
+                        state->officer_prompt_response = resp.error;
+                        state->set_status("Officer assessment error: " + resp.error);
+                    }
+                    state->officer_prompt_running = false;
+                    auto screen = ScreenInteractive::Active();
+                    if (screen) screen->PostEvent(Event::Custom);
+                }).detach();
+                return true;
+            };
+            auto officer_filter_action = [&]() {
+                state->officer_filter_active = true;
+                state->officer_filter.clear();
+                state->selected_officer = 0;
+                state->status_message = "Filter: _ (type to search, Enter to apply, Esc to clear)";
+                return true;
+            };
             // Filter input mode: capture keystrokes as filter text
             if (state->officer_filter_active) {
                 if (event == Event::Escape) {
@@ -5809,6 +6038,27 @@ int main() {
                 }
                 return true;  // Consume all other events in filter mode
             }
+            if (event == Event::Tab && state->officer_focus_region == 0) {
+                state->officer_focus_region = 1;
+                state->officer_action_index = 0;
+                return true;
+            }
+            if (event == Event::TabReverse && state->officer_focus_region == 1) {
+                state->officer_focus_region = 0;
+                return true;
+            }
+            if (state->officer_focus_region == 1 && event == Event::Return) {
+                if (state->officer_action_index == 0) return run_officer_plan_action();
+                return officer_filter_action();
+            }
+            if (state->officer_focus_region == 1 && event == Event::ArrowLeft) {
+                state->officer_action_index = std::max(0, state->officer_action_index - 1);
+                return true;
+            }
+            if (state->officer_focus_region == 1 && event == Event::ArrowRight) {
+                state->officer_action_index = std::min(1, state->officer_action_index + 1);
+                return true;
+            }
             if (event == Event::ArrowDown) {
                 int max_off = (int)state->game_data.officers.size() - 1;
                 if (state->selected_officer < max_off) state->selected_officer++;
@@ -5819,16 +6069,78 @@ int main() {
                 return true;
             }
             if (event == Event::Character('f') || event == Event::Character('F')) {
-                state->officer_filter_active = true;
-                state->officer_filter.clear();
-                state->selected_officer = 0;
-                state->status_message = "Filter: _ (type to search, Enter to apply, Esc to clear)";
-                return true;
+                return officer_filter_action();
+            }
+            if (event == Event::Character('p') || event == Event::Character('P')) {
+                return run_officer_plan_action();
             }
         }
 
         // === Ships tab events ===
         if (selected_tab == 6) {
+            auto run_ship_plan_action = [&]() {
+                if (state->ship_prompt_running) {
+                    state->status_message = "Prompt 1 already running.";
+                    return true;
+                }
+                state->ship_prompt_preview.clear();
+                state->ship_prompt_response.clear();
+                state->ship_prompt_imported = false;
+                LlmRequest req = build_ship_assessment_request(state->player_data, state->game_data);
+                state->ship_prompt_preview = "SYSTEM PROMPT\n" + req.system_prompt + "\n\nUSER PROMPT\n" + req.user_prompt + "\n\nRESPONSE SCHEMA\n" + req.response_schema;
+
+                if (!state->ai_initialized) state->ai_init_lazy();
+                if (!state->ai_engine.is_available()) {
+                    state->status_message = "Prompt 1 preview generated. AI not ready yet.";
+                    return true;
+                }
+
+                state->ship_prompt_running = true;
+                state->status_message = "Running Prompt 1 ship assessment...";
+                std::thread([state, req]() {
+                    LlmResponse resp;
+                    auto stream_cb = [state](const std::string& chunk) {
+                        std::lock_guard<std::mutex> lk(state->status_mutex);
+                        state->ai_stream_text += chunk;
+                    };
+                    auto client_result = create_llm_client(load_ai_config());
+                    if (!client_result.client) {
+                        state->ship_prompt_response = "AI unavailable.";
+                        state->ship_prompt_running = false;
+                        state->set_status("AI unavailable for Prompt 1.");
+                        auto screen = ScreenInteractive::Active();
+                        if (screen) screen->PostEvent(Event::Custom);
+                        return;
+                    }
+                    if (client_result.client->capabilities().streaming) resp = client_result.client->query_stream(req, stream_cb);
+                    else resp = client_result.client->query(req);
+                    if (resp.ok()) {
+                        state->ship_prompt_response = resp.content;
+                        try {
+                            state->import_ship_prompt_loadout(resp.content);
+                            if (state->optimizer && !state->loadout_running) {
+                                state->loadout_running = true;
+                                state->set_status("Prompt 1 imported. Optimizing loadout...");
+                                state->run_loadout_optimizer();
+                                if (!state->loadout_error.empty()) state->set_status("Prompt 1 imported, but loadout optimization failed: " + state->loadout_error);
+                                else state->set_status("Prompt 1 imported and loadout optimized.");
+                            } else {
+                                state->set_status("Prompt 1 complete and imported into Loadout tab.");
+                            }
+                        } catch (const std::exception& e) {
+                            state->set_status(std::string("Prompt 1 complete, import failed: ") + e.what());
+                        }
+                    } else {
+                        state->ship_prompt_response = resp.error;
+                        state->set_status("Prompt 1 error: " + resp.error);
+                    }
+                    state->ship_prompt_running = false;
+                    auto screen = ScreenInteractive::Active();
+                    if (screen) screen->PostEvent(Event::Custom);
+                }).detach();
+                return true;
+            };
+
             // Filter input mode: capture keystrokes as filter text
             if (state->ship_filter_active) {
                 if (event == Event::Escape) {
@@ -5869,6 +6181,43 @@ int main() {
                 }
                 return true;  // Consume all other events in filter mode
             }
+            if (state->ship_focus_region == 1) {
+                if (event == Event::TabReverse) {
+                    state->ship_focus_region = 0;
+                    return true;
+                }
+                if (event == Event::ArrowLeft) {
+                    if (state->ship_action_index == 0) state->ship_focus_region = 0;
+                    else state->ship_action_index = std::max(0, state->ship_action_index - 1);
+                    return true;
+                }
+                if (event == Event::ArrowRight) {
+                    state->ship_action_index = std::min(1, state->ship_action_index + 1);
+                    return true;
+                }
+                if (event == Event::Return) {
+                    if (state->ship_action_index == 0) return run_ship_plan_action();
+                    state->ship_filter_active = true;
+                    state->ship_filter.clear();
+                    state->selected_ship = 0;
+                    state->status_message = "Filter: _ (type to search, Enter to apply, Esc to clear)";
+                    return true;
+                }
+            }
+            if (event == Event::Tab && state->ship_focus_region == 0) {
+                state->ship_focus_region = 1;
+                state->ship_action_index = 0;
+                return true;
+            }
+            if (event == Event::ArrowRight && state->ship_focus_region == 0) {
+                state->ship_focus_region = 1;
+                state->ship_action_index = 0;
+                return true;
+            }
+            if (event == Event::Escape && state->ship_focus_region == 1) {
+                state->ship_focus_region = 0;
+                return true;
+            }
             if (event == Event::ArrowDown) {
                 int max_ship = (int)state->game_data.ships.size() - 1;
                 if (state->selected_ship < max_ship) state->selected_ship++;
@@ -5885,6 +6234,7 @@ int main() {
                 state->status_message = "Filter: _ (type to search, Enter to apply, Esc to clear)";
                 return true;
             }
+            if (event == Event::Character('p') || event == Event::Character('P')) return run_ship_plan_action();
         }
 
         // === Sync tab events ===
