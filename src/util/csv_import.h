@@ -12,6 +12,7 @@ namespace stfc {
 // ---------------------------------------------------------------------------
 
 struct RosterOfficer {
+    int64_t officer_id = 0;          // game officer ID (0 if from CSV without ID)
     std::string name;
     char rarity = ' ';           // C, U, R, E
     int officer_class = 0;       // 1=Command, 2=Science, 3=Engineering

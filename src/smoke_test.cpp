@@ -38,6 +38,7 @@
 #include "core/account_state.h"
 #include "core/ship_prompt.h"
 #include "core/officer_prompt.h"
+#include "core/strategic_prompt.h"
 
 namespace fs = std::filesystem;
 using namespace stfc;
@@ -986,6 +987,7 @@ std::string resolve_officer_tooltip(const Officer& officer, int rank) {
     if (text.empty()) return text;
     const auto cap = officer.captain_ability.values;
     const auto abil = officer.ability.values;
+    const auto bda = officer.below_decks_ability.values;
     auto rank_idx = std::max(0, rank);
     auto cap_value = [&](int idx) {
         idx = std::max(0, std::min(idx, static_cast<int>(cap.size()) - 1));
@@ -995,14 +997,53 @@ std::string resolve_officer_tooltip(const Officer& officer, int rank) {
         idx = std::max(0, std::min(idx, static_cast<int>(abil.size()) - 1));
         return abil.empty() ? 0.0 : abil[idx].value;
     };
-    text = replace_all(text, "{0:#,#%}", fmt_pct(cap_value(rank_idx)));
-    text = replace_all(text, "{1:#,#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
-    text = replace_all(text, "{2:#,#%}", fmt_pct(abil_value(rank_idx)));
-    text = replace_all(text, "{3:#,#%}", fmt_pct(abil_value(rank_idx)));
-    text = replace_all(text, "{0:#.#%}", fmt_pct(cap_value(rank_idx)));
-    text = replace_all(text, "{1:#.#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
-    text = replace_all(text, "{2:#.#%}", fmt_pct(abil_value(rank_idx)));
-    text = replace_all(text, "{3:#.#%}", fmt_pct(abil_value(rank_idx)));
+    auto bda_value = [&](int idx) {
+        idx = std::max(0, std::min(idx, static_cast<int>(bda.size()) - 1));
+        return bda.empty() ? 0.0 : bda[idx].value;
+    };
+    auto p0_value = [&](int idx) {
+        return officer.has_bda ? bda_value(idx) : cap_value(idx);
+    };
+    auto fmt_num = [](double value) -> std::string {
+        std::ostringstream os;
+        if (std::abs(value - std::round(value)) < 0.0001) {
+            auto v = static_cast<int64_t>(std::round(value));
+            if (v >= 1000 || v <= -1000) {
+                std::string s = std::to_string(std::abs(v));
+                std::string result;
+                int count = 0;
+                for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {
+                    if (count > 0 && count % 3 == 0) result = "," + result;
+                    result = s[i] + result;
+                    ++count;
+                }
+                if (v < 0) result = "-" + result;
+                return result;
+            }
+            os << v;
+        } else {
+            os << std::fixed << std::setprecision(2) << value;
+        }
+        return os.str();
+    };
+    for (const char* pat : {"{0:#,#%}", "{0:#.#%}", "{0:0,#%}", "{0:0.#%}", "{0:#%}"})
+        text = replace_all(text, pat, fmt_pct(p0_value(rank_idx)));
+    for (const char* pat : {"{1:#,#%}", "{1:#.#%}", "{1:0,#%}", "{1:0.#%}", "{1:#%}"})
+        text = replace_all(text, pat, fmt_pct(p0_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
+    for (const char* pat : {"{2:#,#%}", "{2:#.#%}", "{2:0,#%}", "{2:0.#%}", "{2:#%}"})
+        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
+    for (const char* pat : {"{3:#,#%}", "{3:#.#%}", "{3:0,#%}", "{3:0.#%}", "{3:#%}"})
+        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
+    for (const char* pat : {"{4:#,#%}", "{4:#.#%}", "{4:0,#%}", "{4:0.#%}", "{4:#%}"})
+        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
+    for (const char* pat : {"{0:#,#}", "{0:#}", "{0:0.##}", "{0:0.#}", "{0:0}"})
+        text = replace_all(text, pat, fmt_num(p0_value(rank_idx)));
+    for (const char* pat : {"{2:#,#}", "{2:#}", "{2:0.##}", "{2:0.#}"})
+        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
+    for (const char* pat : {"{3:#,#}", "{3:#}", "{3:0.##}", "{3:0.#}"})
+        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
+    for (const char* pat : {"{4:#,#}", "{4:#}", "{4:0.##}", "{4:0.#}"})
+        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
     return text;
 }
 
@@ -1064,6 +1105,7 @@ std::vector<RosterOfficer> build_test_roster(const GameData& gd) {
     for (const auto& [id, go] : gd.officers) {
         if (go.stats.empty()) continue;
         RosterOfficer ro;
+        ro.officer_id = id;
         ro.name = go.name.empty() ? go.short_name : go.name;
         ro.rarity = rarity_letter_sync(go.rarity);
         int level = std::max(1, (int)go.stats.size());
@@ -2647,117 +2689,10 @@ static nlohmann::json split_lines_json(const std::string& text) {
     return lines;
 }
 
-static std::string summarize_primary_ships(const PlayerData& pd) {
-    if (pd.ships.empty()) return "none";
-    auto ships = pd.ships;
-    std::sort(ships.begin(), ships.end(), [](const PlayerShip& a, const PlayerShip& b) {
-        if (a.tier != b.tier) return a.tier > b.tier;
-        return a.level > b.level;
-    });
-    std::vector<std::string> lines;
-    for (int i = 0; i < std::min(5, (int)ships.size()); ++i) {
-        const auto& s = ships[i];
-        std::ostringstream line;
-        line << s.name << " T" << s.tier << " L" << s.level;
-        lines.push_back(line.str());
-    }
-    return join_strings(lines, ", ");
-}
-
-static std::string summarize_resources(const PlayerData& pd) {
-    if (pd.resources.empty()) return "none";
-    auto resources = pd.resources;
-    std::sort(resources.begin(), resources.end(), [](const PlayerResource& a, const PlayerResource& b) {
-        return a.amount > b.amount;
-    });
-    std::vector<std::string> lines;
-    for (int i = 0; i < std::min(8, (int)resources.size()); ++i) {
-        if (resources[i].amount <= 0) continue;
-        std::ostringstream line;
-        line << (resources[i].name.empty() ? ("Resource#" + std::to_string(resources[i].resource_id)) : resources[i].name)
-             << ": " << resources[i].amount;
-        lines.push_back(line.str());
-    }
-    return lines.empty() ? "none" : join_strings(lines, ", ");
-}
-
 static LlmRequest build_ship_assessment_request(const PlayerData& pd,
                                                 const GameData& gd,
                                                 const nlohmann::json&) {
     return stfc::build_ship_assessment_request(pd, gd);
-}
-
-static std::string summarize_active_jobs(const PlayerData& pd) {
-    std::vector<std::string> lines;
-    for (const auto& job : pd.jobs) {
-        if (job.completed) continue;
-        std::ostringstream line;
-        line << job_type_str(job.job_type) << " L" << job.level
-             << " (" << format_duration_short(job_remaining_seconds(job)) << " remaining)";
-        lines.push_back(line.str());
-    }
-    return lines.empty() ? "none" : join_strings(lines, "; ");
-}
-
-static LlmRequest build_strategic_assessment_request(const PlayerData& pd,
-                                                     const nlohmann::json& data_quality) {
-    LlmRequest req;
-    req.system_prompt = R"(You are the STFC Strategic Command Intelligence. Your goal is to maximize the growth and event efficiency of a Star Trek Fleet Command account.
-
-CORE LOGIC:
-1. ROI (Return on Investment): Prioritize actions that create the most account progress with the least waste.
-2. Efficiency: Do not recommend spending speed-ups, XP, or large resources unless there is a clear progression reason or the available data strongly supports it.
-3. Urgency: Give higher priority to actions blocked by active timers or near-term progression bottlenecks.
-
-CONSTRAINTS:
-- Only reference data provided in the DATA sections.
-- Do not assume event data exists if it is marked missing.
-- If the user has a Personal Focus, align all objectives to that goal.
-- If critical live data is missing, say so explicitly in the response reasoning.
-
-Respond with ONLY valid JSON, no other text:
-{
-  "daily_summary": "A 2-sentence overview of today's account health.",
-  "objectives": [
-    {
-      "priority": 1,
-      "title": "Objective Title",
-      "category": "Spending | Combat | Mining | Progression",
-      "urgency_score": 1,
-      "reasoning": "Why this is a good move based on current account data.",
-      "expected_outcome": "What account progress this should unlock or improve.",
-      "required_resources": ["List of critical materials, timers, or ships needed"]
-    }
-  ],
-  "hoarding_advice": "What resource should I avoid spending today if the current data does not justify it.",
-  "limitations": "What important missing data reduces confidence in the recommendation."
-})";
-    req.temperature = 0.3;
-    req.max_tokens = 4096;
-
-    std::ostringstream user;
-    user << "### DATA: ACCOUNT SNAPSHOT\n";
-    user << "- Ops Level: " << pd.ops_level << "\n";
-    user << "- Active Jobs: " << summarize_active_jobs(pd) << "\n";
-    user << "- Docks: unknown from current sync data\n";
-    user << "- Primary Ships: " << summarize_primary_ships(pd) << "\n\n";
-
-    user << "### DATA: ACTIVE EVENTS & MILESTONES\n";
-    user << "Unavailable in current sync data. Do not assume live events or milestone thresholds.\n\n";
-
-    user << "### DATA: INVENTORY SNAPSHOT\n";
-    user << "- Inventory Items: " << pd.inventory.size() << " synced item stacks (not yet categorized into speedups/xp buckets)\n";
-    user << "- Resources: " << summarize_resources(pd) << "\n\n";
-
-    user << "### USER PERSONAL FOCUS\n";
-    user << "\"General account growth and efficiency\"\n\n";
-
-    user << "### TASK\n";
-    user << "Generate a strategic assessment using ONLY the available account data. If event-driven advice is not possible, prioritize safe progression and explain the limitation.\n";
-    req.user_prompt = user.str();
-    req.response_schema =
-        R"({"type":"object","properties":{"daily_summary":{"type":"string"},"objectives":{"type":"array","items":{"type":"object","properties":{"priority":{"type":"integer"},"title":{"type":"string"},"category":{"type":"string"},"urgency_score":{"type":"integer"},"reasoning":{"type":"string"},"expected_outcome":{"type":"string"},"required_resources":{"type":"array","items":{"type":"string"}}},"required":["priority","title","category","urgency_score","reasoning","expected_outcome","required_resources"]}},"hoarding_advice":{"type":"string"},"limitations":{"type":"string"}},"required":["daily_summary","objectives","hoarding_advice","limitations"]})";
-    return req;
 }
 
 static nlohmann::json build_data_quality(const PlayerData& pd, long age_sec) {
@@ -2912,6 +2847,7 @@ static std::string resolve_officer_tooltip(const Officer& officer, int rank) {
     if (text.empty()) return text;
     const auto& cap = officer.captain_ability.values;
     const auto& abil = officer.ability.values;
+    const auto& bda = officer.below_decks_ability.values;
     auto rank_idx = std::max(0, rank);
     auto cap_value = [&](int idx) {
         idx = std::max(0, std::min(idx, static_cast<int>(cap.size()) - 1));
@@ -2921,14 +2857,53 @@ static std::string resolve_officer_tooltip(const Officer& officer, int rank) {
         idx = std::max(0, std::min(idx, static_cast<int>(abil.size()) - 1));
         return abil.empty() ? 0.0 : abil[idx].value;
     };
-    text = replace_all(text, "{0:#,#%}", fmt_pct(cap_value(rank_idx)));
-    text = replace_all(text, "{1:#,#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
-    text = replace_all(text, "{2:#,#%}", fmt_pct(abil_value(rank_idx)));
-    text = replace_all(text, "{3:#,#%}", fmt_pct(abil_value(rank_idx)));
-    text = replace_all(text, "{0:#.#%}", fmt_pct(cap_value(rank_idx)));
-    text = replace_all(text, "{1:#.#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
-    text = replace_all(text, "{2:#.#%}", fmt_pct(abil_value(rank_idx)));
-    text = replace_all(text, "{3:#.#%}", fmt_pct(abil_value(rank_idx)));
+    auto bda_value = [&](int idx) {
+        idx = std::max(0, std::min(idx, static_cast<int>(bda.size()) - 1));
+        return bda.empty() ? 0.0 : bda[idx].value;
+    };
+    auto p0_value = [&](int idx) {
+        return officer.has_bda ? bda_value(idx) : cap_value(idx);
+    };
+    auto fmt_num = [](double value) -> std::string {
+        std::ostringstream os;
+        if (std::abs(value - std::round(value)) < 0.0001) {
+            auto v = static_cast<int64_t>(std::round(value));
+            if (v >= 1000 || v <= -1000) {
+                std::string s = std::to_string(std::abs(v));
+                std::string result;
+                int count = 0;
+                for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {
+                    if (count > 0 && count % 3 == 0) result = "," + result;
+                    result = s[i] + result;
+                    ++count;
+                }
+                if (v < 0) result = "-" + result;
+                return result;
+            }
+            os << v;
+        } else {
+            os << std::fixed << std::setprecision(2) << value;
+        }
+        return os.str();
+    };
+    for (const char* pat : {"{0:#,#%}", "{0:#.#%}", "{0:0,#%}", "{0:0.#%}", "{0:#%}"})
+        text = replace_all(text, pat, fmt_pct(p0_value(rank_idx)));
+    for (const char* pat : {"{1:#,#%}", "{1:#.#%}", "{1:0,#%}", "{1:0.#%}", "{1:#%}"})
+        text = replace_all(text, pat, fmt_pct(p0_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
+    for (const char* pat : {"{2:#,#%}", "{2:#.#%}", "{2:0,#%}", "{2:0.#%}", "{2:#%}"})
+        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
+    for (const char* pat : {"{3:#,#%}", "{3:#.#%}", "{3:0,#%}", "{3:0.#%}", "{3:#%}"})
+        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
+    for (const char* pat : {"{4:#,#%}", "{4:#.#%}", "{4:0,#%}", "{4:0.#%}", "{4:#%}"})
+        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
+    for (const char* pat : {"{0:#,#}", "{0:#}", "{0:0.##}", "{0:0.#}", "{0:0}"})
+        text = replace_all(text, pat, fmt_num(p0_value(rank_idx)));
+    for (const char* pat : {"{2:#,#}", "{2:#}", "{2:0.##}", "{2:0.#}"})
+        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
+    for (const char* pat : {"{3:#,#}", "{3:#}", "{3:0.##}", "{3:0.#}"})
+        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
+    for (const char* pat : {"{4:#,#}", "{4:#}", "{4:0.##}", "{4:0.#}"})
+        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
     return text;
 }
 
@@ -2994,8 +2969,8 @@ static std::vector<RosterOfficer> build_roster(const PlayerData& pd, const GameD
         if (it == gd.officers.end()) continue;
         const auto& go = it->second;
         RosterOfficer ro;
-        ro.name = po.name.empty() ? (go.name.empty() ? go.short_name : go.name) : po.name;
-        ro.rarity = rarity_letter(go.rarity);
+        ro.officer_id = po.officer_id;
+        ro.name = po.name.empty() ? (go.name.empty() ? go.short_name : go.name) : po.name;        ro.rarity = rarity_letter(go.rarity);
         ro.level = po.level;
         ro.rank = po.rank;
         if (!go.stats.empty() && po.level > 0) {
@@ -3342,9 +3317,9 @@ void test_ai_export_live_prompts_json() {
         } else if (spec.mode == "ship") {
             req = build_ship_assessment_request(pd, game_data, diagnostics["data_quality"]);
         } else if (spec.mode == "officer") {
-            req = stfc::build_officer_assessment_request(pd, game_data);
+            req = stfc::build_officer_assessment_request(pd, game_data, officers);
         } else if (spec.mode == "strategic") {
-            req = build_strategic_assessment_request(pd, diagnostics["data_quality"]);
+            req = stfc::build_strategic_assessment_request(pd);
         } else if (spec.mode == "progression") {
             req = advisor.debug_build_progression_request(snapshot, spec.question_or_goal);
         } else {

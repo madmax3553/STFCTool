@@ -555,6 +555,7 @@ CrewOptimizer::CrewOptimizer(std::vector<RosterOfficer> roster,
     officers_.reserve(roster.size());
     for (auto& r : roster) {
         ClassifiedOfficer o;
+        o.officer_id = r.officer_id;
         o.name = std::move(r.name);
         o.rarity = r.rarity;
         o.officer_class = r.officer_class;

@@ -370,6 +370,7 @@ std::string resolve_officer_tooltip(const Officer& officer, int rank) {
 
     const auto cap = officer.captain_ability.values;
     const auto abil = officer.ability.values;
+    const auto bda = officer.below_decks_ability.values;
     auto rank_idx = std::max(0, rank);
 
     auto cap_value = [&](int idx) {
@@ -380,15 +381,71 @@ std::string resolve_officer_tooltip(const Officer& officer, int rank) {
         idx = std::max(0, std::min(idx, static_cast<int>(abil.size()) - 1));
         return abil.empty() ? 0.0 : abil[idx].value;
     };
+    auto bda_value = [&](int idx) {
+        idx = std::max(0, std::min(idx, static_cast<int>(bda.size()) - 1));
+        return bda.empty() ? 0.0 : bda[idx].value;
+    };
 
-    text = replace_all(text, "{0:#,#%}", fmt_pct(cap_value(rank_idx)));
-    text = replace_all(text, "{1:#,#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
-    text = replace_all(text, "{2:#,#%}", fmt_pct(abil_value(rank_idx)));
-    text = replace_all(text, "{3:#,#%}", fmt_pct(abil_value(rank_idx)));
-    text = replace_all(text, "{0:#.#%}", fmt_pct(cap_value(rank_idx)));
-    text = replace_all(text, "{1:#.#%}", fmt_pct(cap_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
-    text = replace_all(text, "{2:#.#%}", fmt_pct(abil_value(rank_idx)));
-    text = replace_all(text, "{3:#.#%}", fmt_pct(abil_value(rank_idx)));
+    // For BDA officers, {0} references below_decks_ability, not captain_ability
+    auto p0_value = [&](int idx) {
+        return officer.has_bda ? bda_value(idx) : cap_value(idx);
+    };
+
+    // Format a raw value as a number (not percentage)
+    auto fmt_num = [](double value) -> std::string {
+        std::ostringstream os;
+        if (std::abs(value - std::round(value)) < 0.0001) {
+            // Use locale-style comma formatting for large integers
+            auto v = static_cast<int64_t>(std::round(value));
+            if (v >= 1000 || v <= -1000) {
+                // Simple comma grouping
+                std::string s = std::to_string(std::abs(v));
+                std::string result;
+                int count = 0;
+                for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {
+                    if (count > 0 && count % 3 == 0) result = "," + result;
+                    result = s[i] + result;
+                    ++count;
+                }
+                if (v < 0) result = "-" + result;
+                return result;
+            }
+            os << v;
+        } else {
+            os << std::fixed << std::setprecision(2) << value;
+        }
+        return os.str();
+    };
+
+    // --- Percentage format patterns ---
+    // {N:#,#%}, {N:#.#%}, {N:0,#%}, {N:0.#%}, {N:#%}
+    // Placeholder 0: captain/BDA value at rank
+    for (const char* pat : {"{0:#,#%}", "{0:#.#%}", "{0:0,#%}", "{0:0.#%}", "{0:#%}"})
+        text = replace_all(text, pat, fmt_pct(p0_value(rank_idx)));
+    // Placeholder 1: captain/BDA value at rank+1
+    for (const char* pat : {"{1:#,#%}", "{1:#.#%}", "{1:0,#%}", "{1:0.#%}", "{1:#%}"})
+        text = replace_all(text, pat, fmt_pct(p0_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
+    // Placeholder 2: OA value at rank
+    for (const char* pat : {"{2:#,#%}", "{2:#.#%}", "{2:0,#%}", "{2:0.#%}", "{2:#%}"})
+        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
+    // Placeholder 3: OA value at rank (alt)
+    for (const char* pat : {"{3:#,#%}", "{3:#.#%}", "{3:0,#%}", "{3:0.#%}", "{3:#%}"})
+        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
+    // Placeholder 4: OA value at rank (tertiary)
+    for (const char* pat : {"{4:#,#%}", "{4:#.#%}", "{4:0,#%}", "{4:0.#%}", "{4:#%}"})
+        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
+
+    // --- Non-percentage format patterns ---
+    // {N:#,#}, {N:#}, {N:0.##}, {N:0.#}
+    for (const char* pat : {"{0:#,#}", "{0:#}", "{0:0.##}", "{0:0.#}", "{0:0}"})
+        text = replace_all(text, pat, fmt_num(p0_value(rank_idx)));
+    for (const char* pat : {"{2:#,#}", "{2:#}", "{2:0.##}", "{2:0.#}"})
+        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
+    for (const char* pat : {"{3:#,#}", "{3:#}", "{3:0.##}", "{3:0.#}"})
+        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
+    for (const char* pat : {"{4:#,#}", "{4:#}", "{4:0.##}", "{4:0.#}"})
+        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
+
     return text;
 }
 
@@ -679,6 +736,7 @@ std::vector<RosterOfficer> build_roster_from_sync(const PlayerData& player_data,
 
         const auto& go = it->second;
         RosterOfficer ro;
+        ro.officer_id = po.officer_id;
         ro.name = po.name.empty() ? (go.name.empty() ? go.short_name : go.name) : po.name;
         ro.rarity = rarity_letter(go.rarity);
         ro.level = po.level;
@@ -5956,7 +6014,7 @@ int main() {
                 }
                 state->officer_prompt_preview.clear();
                 state->officer_prompt_response.clear();
-                LlmRequest req = build_officer_assessment_request(state->player_data, state->game_data);
+                LlmRequest req = build_officer_assessment_request(state->player_data, state->game_data, state->optimizer->officers());
                 state->officer_prompt_preview = "SYSTEM PROMPT\n" + req.system_prompt + "\n\nUSER PROMPT\n" + req.user_prompt + "\n\nRESPONSE SCHEMA\n" + req.response_schema;
 
                 if (!state->ai_initialized) state->ai_init_lazy();

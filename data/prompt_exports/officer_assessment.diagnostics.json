@@ -30,7 +30,7 @@
       "No research focus metadata; progression advice may be broad rather than tree-specific."
     ]
   },
-  "generated_at": "2026-04-12 14:23:35",
+  "generated_at": "2026-04-12 22:10:28",
   "player": {
     "buildings": 108,
     "last_sync": "never",
@@ -45,7 +45,7 @@
   },
   "prompts": [
     {
-      "generated_at": "2026-04-12 14:23:35",
+      "generated_at": "2026-04-12 22:10:28",
       "prompt_id": "officer_assessment",
       "scenario": "hybrid",
       "ship_type": "explorer",

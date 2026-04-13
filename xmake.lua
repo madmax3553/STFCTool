@@ -28,7 +28,7 @@ target("smoke_test")
     set_rundir("$(projectdir)")
     add_files("src/smoke_test.cpp", "src/data/api_client.cpp", "src/util/csv_import.cpp",
               "src/data/ingress_server.cpp",
-              "src/core/crew_optimizer.cpp", "src/core/planner.cpp", "src/core/ship_prompt.cpp", "src/core/officer_prompt.cpp",
+              "src/core/crew_optimizer.cpp", "src/core/planner.cpp", "src/core/ship_prompt.cpp", "src/core/officer_prompt.cpp", "src/core/strategic_prompt.cpp",
               "src/core/ai_crew_engine.cpp", "src/core/crew_advisor.cpp",
               "src/core/account_state.cpp", "src/core/officer_groups.cpp",
               "src/core/ai_history.cpp", "src/core/meta_cache.cpp",

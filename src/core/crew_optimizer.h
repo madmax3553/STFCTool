@@ -213,6 +213,8 @@ inline double cm_scope_weight(CmScope scope) {
 // ---------------------------------------------------------------------------
 
 struct ClassifiedOfficer {
+    // Identity
+    int64_t officer_id = 0;          // game officer ID (0 if from CSV without ID)
     // Base data (from CSV)
     std::string name;
     char rarity = ' ';
