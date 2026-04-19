@@ -16,7 +16,7 @@ target("stfctool")
     set_kind("binary")
     set_filename("stfctool")
     set_rundir("$(projectdir)")
-    add_files("src/main.cpp", "src/data/*.cpp", "src/util/*.cpp", "src/core/*.cpp")
+    add_files("src/main.cpp", "src/data/*.cpp", "src/util/*.cpp", "src/core/*.cpp", "src/app/*.cpp")
     add_includedirs("src")
     add_sysincludedirs("include")  -- vendored headers: suppress warnings
     add_packages("ftxui", "openssl")
@@ -26,7 +26,8 @@ target("smoke_test")
     set_kind("binary")
     set_default(false)  -- only build when explicitly requested: xmake build smoke_test
     set_rundir("$(projectdir)")
-    add_files("src/smoke_test.cpp", "src/data/api_client.cpp", "src/util/csv_import.cpp",
+    add_files("src/smoke_test.cpp", "src/app/account_snapshot.cpp",
+              "src/data/api_client.cpp", "src/util/csv_import.cpp",
               "src/data/ingress_server.cpp",
               "src/core/crew_optimizer.cpp", "src/core/planner.cpp", "src/core/ship_prompt.cpp", "src/core/officer_prompt.cpp", "src/core/strategic_prompt.cpp",
               "src/core/ai_crew_engine.cpp", "src/core/crew_advisor.cpp",
@@ -35,6 +36,16 @@ target("smoke_test")
               "src/data/llm_client.cpp", "src/data/claude_provider.cpp",
               "src/data/gemini_provider.cpp", "src/data/ollama_provider.cpp",
               "src/data/ssh_tunnel.cpp")
+    add_includedirs("src")
+    add_sysincludedirs("include")
+    add_packages("openssl")
+    add_syslinks("pthread")
+
+target("ingress")
+    set_kind("binary")
+    set_default(false)
+    set_rundir("$(projectdir)")
+    add_files("src/ingress_standalone.cpp", "src/data/ingress_server.cpp")
     add_includedirs("src")
     add_sysincludedirs("include")
     add_packages("openssl")

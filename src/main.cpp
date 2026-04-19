@@ -3497,11 +3497,11 @@ static Element render_sync(AppState& state) {
             std::string status_str = b.expired ? "Expired" : "Active";
             Color status_color = b.expired ? Color::Red : Color::Green;
 
-            std::string expire_str = "-";
-            if (b.expiry_time > 0 && !b.expired) {
+            std::string expire_str = b.expiry_time.has_value() ? "" : "Permanent";
+            if (b.expiry_time.has_value() && !b.expired) {
                 auto now_epoch = std::chrono::duration_cast<std::chrono::seconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
-                int remaining = (int)(b.expiry_time - now_epoch);
+                int remaining = (int)(b.expiry_time.value() - now_epoch);
                 expire_str = remaining > 0 ? format_duration_short(remaining) : "Expired";
                 if (remaining <= 0) {
                     status_str = "Expired";

@@ -207,6 +207,7 @@ struct PlayerShip {
     int tier = 0;
     int level = 0;
     double level_percentage = 0.0;
+    std::vector<int64_t> components;  // installed ship component IDs
     std::string name;  // resolved from game data
 };
 
@@ -231,7 +232,7 @@ struct PlayerResource {
 struct PlayerBuff {
     int64_t buff_id = 0;
     int level = 0;
-    int64_t expiry_time = 0;  // unix timestamp, 0 = no expiry
+    std::optional<int64_t> expiry_time;  // nullopt = permanent, value = unix timestamp
     bool expired = false;
 };
 
@@ -242,6 +243,7 @@ struct PlayerJob {
     int duration = 0;        // seconds
     int reduction = 0;       // seconds reduced
     int64_t research_id = 0; // associated research if applicable
+    int64_t building_id = 0; // associated building if applicable
     int level = 0;
     bool completed = false;
 };
@@ -257,6 +259,7 @@ struct PlayerSlot {
     int slot_type = 0;
     int64_t spec_id = 0;
     int64_t item_id = 0;
+    std::optional<int64_t> expiry_time;  // from params.expiry_time if present
 };
 
 struct PlayerTrait {
@@ -275,6 +278,164 @@ struct PlayerTech {
 struct PlayerMission {
     int64_t mission_id = 0;
     bool active = false;   // true = in-progress, false = completed
+};
+
+struct PlayerEmeraldChain {
+    int level = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Event data (from platform events sync — solo events, battlepasses, etc.)
+// ---------------------------------------------------------------------------
+
+enum class EventCategory {
+    Standard = 0,
+    DailyGoals = 1,
+    DailyMilestone = 2,
+    Leaderboard = 3,
+    Stat = 4,
+    BattlePassSeason = 5,
+    BattlePassEvent = 6,
+    TreasuryProgress = 7,
+    TreasuryReward = 8,
+    ServerClashEvent = 9,
+    WebStoreEvent = 10,
+    PlayerLifecycle = 11,
+    FieldTraining = 12,
+    FtCategory = 13,
+    Cutscenes = 14,
+    MinigameCategory = 15,
+    MinigameStage = 16,
+    WarChest = 17,
+    AllianceGame = 18,
+    AllianceGameTask = 19,
+    MetaEventCategory = 20,
+    MetaEventObjective = 21,
+    Invasion = 22,
+    LoopMuseum = 23,
+    LoopMuseumTask = 24,
+    PlcBpSeason = 25,
+    PlcBpEvent = 26,
+    ProgressionReward = 27,
+};
+
+inline const char* event_category_str(EventCategory cat) {
+    switch (cat) {
+        case EventCategory::Standard: return "Solo Event";
+        case EventCategory::DailyGoals: return "Daily Goals";
+        case EventCategory::DailyMilestone: return "Daily Milestone";
+        case EventCategory::Leaderboard: return "Leaderboard";
+        case EventCategory::Stat: return "Stat";
+        case EventCategory::BattlePassSeason: return "Battle Pass Season";
+        case EventCategory::BattlePassEvent: return "Battle Pass Event";
+        case EventCategory::TreasuryProgress: return "Treasury Progress";
+        case EventCategory::TreasuryReward: return "Treasury Reward";
+        case EventCategory::ServerClashEvent: return "Server Clash";
+        case EventCategory::WebStoreEvent: return "Web Store";
+        case EventCategory::PlayerLifecycle: return "Player Lifecycle";
+        case EventCategory::FieldTraining: return "Field Training";
+        case EventCategory::FtCategory: return "FT Category";
+        case EventCategory::Cutscenes: return "Cutscenes";
+        case EventCategory::MinigameCategory: return "Minigame";
+        case EventCategory::MinigameStage: return "Minigame Stage";
+        case EventCategory::WarChest: return "War Chest";
+        case EventCategory::AllianceGame: return "Alliance Game";
+        case EventCategory::AllianceGameTask: return "Alliance Task";
+        case EventCategory::MetaEventCategory: return "Meta Event";
+        case EventCategory::MetaEventObjective: return "Meta Objective";
+        case EventCategory::Invasion: return "Invasion";
+        case EventCategory::LoopMuseum: return "Loop Museum";
+        case EventCategory::LoopMuseumTask: return "Loop Museum Task";
+        case EventCategory::PlcBpSeason: return "PLC BP Season";
+        case EventCategory::PlcBpEvent: return "PLC BP Event";
+        case EventCategory::ProgressionReward: return "Progression Reward";
+        default: return "Unknown";
+    }
+}
+
+struct EventSchedule {
+    int64_t announce = 0;    // unix timestamp
+    int64_t start = 0;
+    int64_t display = 0;
+    int64_t delay = 0;
+    int64_t end = 0;
+    int64_t next_start = 0;
+    int round_number = 0;
+};
+
+struct EventRanking {
+    std::string id;
+    int position = 0;
+    int rank = 0;
+    double score = 0.0;
+    int delta = 0;
+    int relative_position = 0;
+};
+
+struct EventEntryData {
+    bool is_registered = false;
+    bool can_claim = false;
+    int last_claimed_reward_index = -1;
+    int join_forbidden = 0;           // 0=none, 1=event in progress
+};
+
+struct EventReward {
+    std::vector<int64_t> position;    // milestone thresholds
+    int64_t amount = 0;
+    std::string type;                 // e.g. "chest_15271138"
+    std::string level;
+};
+
+struct EventSegment {
+    int type = 0;                     // SegmentType enum (0=all, 1=range, 7=rangemulti, etc.)
+    std::vector<int64_t> values;
+    std::vector<EventReward> rewards;
+};
+
+struct EventMetadata {
+    bool is_auto_register = false;
+    bool auto_reward = false;
+    bool immediate_reward = false;
+    bool is_cross_server = false;
+    int64_t cta = 0;
+    int64_t priority = 0;
+    std::string icon_asset_id;
+    std::string battle_pass_link;
+    std::string battle_pass_resource_id;
+    int battle_pass_type = 0;
+    int meta_event_day = 0;
+    int meta_event_section = 0;
+};
+
+struct PlayerEvent {
+    std::string config_id;
+    std::string source;
+    std::string event_type;           // e.g. "tournament"
+    EventCategory category = EventCategory::Standard;
+    int placement_type = 0;           // 0=position, 1=milestone, 2=relative
+    std::string group_name;
+    std::string category_group_id;
+
+    EventSchedule schedule;
+    EventRanking ranking;
+    EventEntryData entry_data;
+    EventMetadata metadata;
+    std::vector<EventSegment> segments;
+
+    // Computed helpers
+    bool is_active() const {
+        auto now = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        return schedule.start > 0 && schedule.end > 0 &&
+               now >= schedule.start && now < schedule.end;
+    }
+
+    int remaining_seconds() const {
+        auto now = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        if (schedule.end <= 0) return -1;
+        return static_cast<int>(schedule.end - now);
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -309,6 +470,8 @@ struct PlayerData {
     std::vector<PlayerTrait> traits;
     std::vector<PlayerTech> techs;
     std::vector<PlayerMission> missions;
+    std::vector<PlayerEvent> events;
+    PlayerEmeraldChain emerald_chain;
     int ops_level = 0;
     std::string player_name;
     std::chrono::system_clock::time_point last_sync;

@@ -165,6 +165,11 @@ void IngressServer::run_server() {
                     ps.tier = elem.value("tier", 0);
                     ps.level = elem.value("level", 0);
                     ps.level_percentage = elem.value("level_percentage", 0.0);
+                    if (elem.contains("components") && elem["components"].is_array()) {
+                        for (auto& comp : elem["components"]) {
+                            if (comp.is_number()) ps.components.push_back(comp.get<int64_t>());
+                        }
+                    }
                     bool found = false;
                     for (auto& existing : player_data_.ships) {
                         if (existing.ship_id == ps.ship_id) {
@@ -222,7 +227,10 @@ void IngressServer::run_server() {
                     PlayerBuff pb;
                     pb.buff_id = elem.value("bid", (int64_t)0);
                     pb.level = elem.value("level", 0);
-                    pb.expiry_time = elem.value("expiry_time", (int64_t)0);
+                    if (elem.contains("expiry_time") && elem["expiry_time"].is_number()) {
+                        pb.expiry_time = elem["expiry_time"].get<int64_t>();
+                    }
+                    // else: expiry_time stays nullopt (permanent buff)
                     pb.expired = false;
                     bool found = false;
                     for (auto& existing : player_data_.buffs) {
@@ -251,6 +259,7 @@ void IngressServer::run_server() {
                     pj.duration = elem.value("duration", 0);
                     pj.reduction = elem.value("reduction", 0);
                     pj.research_id = elem.value("rid", (int64_t)0);
+                    pj.building_id = elem.value("bid", (int64_t)0);
                     pj.level = elem.value("level", 0);
                     pj.completed = false;
                     bool found = false;
@@ -293,6 +302,12 @@ void IngressServer::run_server() {
                     ps.slot_type = elem.value("slot_type", 0);
                     ps.spec_id = elem.value("spec_id", (int64_t)0);
                     ps.item_id = elem.value("item_id", (int64_t)0);
+                    if (elem.contains("params") && elem["params"].is_object()) {
+                        auto& params = elem["params"];
+                        if (params.contains("expiry_time") && params["expiry_time"].is_number()) {
+                            ps.expiry_time = params["expiry_time"].get<int64_t>();
+                        }
+                    }
                     bool found = false;
                     for (auto& existing : player_data_.slots) {
                         if (existing.slot_id == ps.slot_id) {
@@ -352,6 +367,102 @@ void IngressServer::run_server() {
                 } else if (etype == "battlelog") {
                     // Save raw to disk but don't parse into memory
                     save_sync_data("battlelog", elem.dump());
+
+                } else if (etype == "emerald_chain") {
+                    player_data_.emerald_chain.level = elem.value("level", 0);
+
+                } else if (etype == "platform_event") {
+                    PlayerEvent pe;
+                    pe.config_id = elem.value("config_id", "");
+                    pe.source = elem.value("source", "");
+                    pe.event_type = elem.value("event_type", "");
+                    pe.category = static_cast<EventCategory>(elem.value("category", 0));
+                    pe.placement_type = elem.value("placement_type", 0);
+                    pe.group_name = elem.value("group_name", "");
+                    pe.category_group_id = elem.value("category_group_id", "");
+
+                    if (elem.contains("schedule") && elem["schedule"].is_object()) {
+                        auto& s = elem["schedule"];
+                        pe.schedule.announce = s.value("announce", (int64_t)0);
+                        pe.schedule.start = s.value("start", (int64_t)0);
+                        pe.schedule.display = s.value("display", (int64_t)0);
+                        pe.schedule.delay = s.value("delay", (int64_t)0);
+                        pe.schedule.end = s.value("end", (int64_t)0);
+                        pe.schedule.next_start = s.value("next_start", (int64_t)0);
+                        pe.schedule.round_number = s.value("round_number", 0);
+                    }
+
+                    if (elem.contains("ranking") && elem["ranking"].is_object()) {
+                        auto& r = elem["ranking"];
+                        pe.ranking.id = r.value("id", "");
+                        pe.ranking.position = r.value("position", 0);
+                        pe.ranking.rank = r.value("rank", 0);
+                        pe.ranking.score = r.value("score", 0.0);
+                        pe.ranking.delta = r.value("delta", 0);
+                        pe.ranking.relative_position = r.value("relative_position", 0);
+                    }
+
+                    if (elem.contains("entry_data") && elem["entry_data"].is_object()) {
+                        auto& e = elem["entry_data"];
+                        pe.entry_data.is_registered = e.value("is_registered", false);
+                        pe.entry_data.can_claim = e.value("can_claim", false);
+                        pe.entry_data.last_claimed_reward_index = e.value("last_claimed_reward_index", -1);
+                        pe.entry_data.join_forbidden = e.value("join_forbidden", 0);
+                    }
+
+                    if (elem.contains("metadata") && elem["metadata"].is_object()) {
+                        auto& m = elem["metadata"];
+                        pe.metadata.is_auto_register = m.value("is_auto_register", false);
+                        pe.metadata.auto_reward = m.value("auto_reward", false);
+                        pe.metadata.immediate_reward = m.value("immediate_reward", false);
+                        pe.metadata.is_cross_server = m.value("is_cross_server", false);
+                        pe.metadata.cta = m.value("cta", (int64_t)0);
+                        pe.metadata.priority = m.value("priority", (int64_t)0);
+                        pe.metadata.icon_asset_id = m.value("icon_asset_id", "");
+                        pe.metadata.battle_pass_link = m.value("battle_pass_link", "");
+                        pe.metadata.battle_pass_resource_id = m.value("battle_pass_resource_id", "");
+                        pe.metadata.battle_pass_type = m.value("battle_pass_type", 0);
+                        pe.metadata.meta_event_day = m.value("meta_event_day", 0);
+                        pe.metadata.meta_event_section = m.value("meta_event_section", 0);
+                    }
+
+                    if (elem.contains("segments") && elem["segments"].is_array()) {
+                        for (auto& seg : elem["segments"]) {
+                            EventSegment es;
+                            es.type = seg.value("type", 0);
+                            if (seg.contains("values") && seg["values"].is_array()) {
+                                for (auto& v : seg["values"]) {
+                                    if (v.is_number()) es.values.push_back(v.get<int64_t>());
+                                }
+                            }
+                            if (seg.contains("rewards") && seg["rewards"].is_array()) {
+                                for (auto& rew : seg["rewards"]) {
+                                    EventReward er;
+                                    er.amount = rew.value("amount", (int64_t)0);
+                                    er.type = rew.value("type", "");
+                                    er.level = rew.value("level", "");
+                                    if (rew.contains("position") && rew["position"].is_array()) {
+                                        for (auto& p : rew["position"]) {
+                                            if (p.is_number()) er.position.push_back(p.get<int64_t>());
+                                        }
+                                    }
+                                    es.rewards.push_back(std::move(er));
+                                }
+                            }
+                            pe.segments.push_back(std::move(es));
+                        }
+                    }
+
+                    // Upsert by config_id
+                    bool found = false;
+                    for (auto& existing : player_data_.events) {
+                        if (existing.config_id == pe.config_id) {
+                            existing = std::move(pe);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) player_data_.events.push_back(std::move(pe));
                 }
                 // else: unknown type, counted but not processed
             }
@@ -467,8 +578,12 @@ void IngressServer::save_player_data() {
 
         json ships = json::array();
         for (auto& s : player_data_.ships) {
-            ships.push_back({{"psid", s.ship_id}, {"hull_id", s.hull_id},
-                {"tier", s.tier}, {"level", s.level}, {"level_pct", s.level_percentage}});
+            json sj = {{"psid", s.ship_id}, {"hull_id", s.hull_id},
+                {"tier", s.tier}, {"level", s.level}, {"level_pct", s.level_percentage}};
+            if (!s.components.empty()) {
+                sj["components"] = s.components;
+            }
+            ships.push_back(sj);
         }
         j["ships"] = ships;
 
@@ -492,8 +607,11 @@ void IngressServer::save_player_data() {
 
         json buffs = json::array();
         for (auto& b : player_data_.buffs) {
-            buffs.push_back({{"bid", b.buff_id}, {"level", b.level},
-                {"expiry", b.expiry_time}, {"expired", b.expired}});
+            json bj = {{"bid", b.buff_id}, {"level", b.level}, {"expired", b.expired}};
+            if (b.expiry_time.has_value()) {
+                bj["expiry"] = b.expiry_time.value();
+            }
+            buffs.push_back(bj);
         }
         j["buffs"] = buffs;
 
@@ -502,6 +620,7 @@ void IngressServer::save_player_data() {
             jobs.push_back({{"uuid", jb.uuid}, {"type", jb.job_type},
                 {"start", jb.start_time}, {"duration", jb.duration},
                 {"reduction", jb.reduction}, {"rid", jb.research_id},
+                {"bid", jb.building_id},
                 {"level", jb.level}, {"completed", jb.completed}});
         }
         j["jobs"] = jobs;
@@ -515,8 +634,12 @@ void IngressServer::save_player_data() {
 
         json slots = json::array();
         for (auto& s : player_data_.slots) {
-            slots.push_back({{"sid", s.slot_id}, {"slot_type", s.slot_type},
-                {"spec_id", s.spec_id}, {"item_id", s.item_id}});
+            json sj = {{"sid", s.slot_id}, {"slot_type", s.slot_type},
+                {"spec_id", s.spec_id}, {"item_id", s.item_id}};
+            if (s.expiry_time.has_value()) {
+                sj["expiry"] = s.expiry_time.value();
+            }
+            slots.push_back(sj);
         }
         j["slots"] = slots;
 
@@ -538,6 +661,53 @@ void IngressServer::save_player_data() {
             missions.push_back({{"mid", m.mission_id}, {"active", m.active}});
         }
         j["missions"] = missions;
+
+        json events = json::array();
+        for (auto& ev : player_data_.events) {
+            json ej = {
+                {"config_id", ev.config_id},
+                {"source", ev.source},
+                {"event_type", ev.event_type},
+                {"category", static_cast<int>(ev.category)},
+                {"placement_type", ev.placement_type},
+                {"group_name", ev.group_name},
+                {"category_group_id", ev.category_group_id},
+                {"schedule", {
+                    {"announce", ev.schedule.announce},
+                    {"start", ev.schedule.start},
+                    {"display", ev.schedule.display},
+                    {"delay", ev.schedule.delay},
+                    {"end", ev.schedule.end},
+                    {"next_start", ev.schedule.next_start},
+                    {"round_number", ev.schedule.round_number},
+                }},
+                {"ranking", {
+                    {"id", ev.ranking.id},
+                    {"position", ev.ranking.position},
+                    {"rank", ev.ranking.rank},
+                    {"score", ev.ranking.score},
+                    {"delta", ev.ranking.delta},
+                    {"relative_position", ev.ranking.relative_position},
+                }},
+                {"entry_data", {
+                    {"is_registered", ev.entry_data.is_registered},
+                    {"can_claim", ev.entry_data.can_claim},
+                    {"last_claimed", ev.entry_data.last_claimed_reward_index},
+                    {"join_forbidden", ev.entry_data.join_forbidden},
+                }},
+                {"priority", ev.metadata.priority},
+            };
+            // Segments (compact — just reward count for persistence)
+            ej["segment_count"] = static_cast<int>(ev.segments.size());
+            int total_rewards = 0;
+            for (auto& seg : ev.segments)
+                total_rewards += static_cast<int>(seg.rewards.size());
+            ej["reward_count"] = total_rewards;
+            events.push_back(ej);
+        }
+        j["events"] = events;
+
+        j["emerald_chain_level"] = player_data_.emerald_chain.level;
 
         std::ofstream f(path);
         if (f) f << j.dump(2);
@@ -586,6 +756,11 @@ void IngressServer::load_player_data() {
                 ps.tier = s.value("tier", 0);
                 ps.level = s.value("level", 0);
                 ps.level_percentage = s.value("level_pct", 0.0);
+                if (s.contains("components") && s["components"].is_array()) {
+                    for (auto& comp : s["components"]) {
+                        if (comp.is_number()) ps.components.push_back(comp.get<int64_t>());
+                    }
+                }
                 player_data_.ships.push_back(ps);
             }
         }
@@ -622,7 +797,9 @@ void IngressServer::load_player_data() {
                 PlayerBuff pb;
                 pb.buff_id = b.value("bid", (int64_t)0);
                 pb.level = b.value("level", 0);
-                pb.expiry_time = b.value("expiry", (int64_t)0);
+                if (b.contains("expiry") && b["expiry"].is_number()) {
+                    pb.expiry_time = b["expiry"].get<int64_t>();
+                }
                 pb.expired = b.value("expired", false);
                 player_data_.buffs.push_back(pb);
             }
@@ -637,6 +814,7 @@ void IngressServer::load_player_data() {
                 pj.duration = jb.value("duration", 0);
                 pj.reduction = jb.value("reduction", 0);
                 pj.research_id = jb.value("rid", (int64_t)0);
+                pj.building_id = jb.value("bid", (int64_t)0);
                 pj.level = jb.value("level", 0);
                 pj.completed = jb.value("completed", false);
                 player_data_.jobs.push_back(pj);
@@ -660,6 +838,9 @@ void IngressServer::load_player_data() {
                 ps.slot_type = s.value("slot_type", 0);
                 ps.spec_id = s.value("spec_id", (int64_t)0);
                 ps.item_id = s.value("item_id", (int64_t)0);
+                if (s.contains("expiry") && s["expiry"].is_number()) {
+                    ps.expiry_time = s["expiry"].get<int64_t>();
+                }
                 player_data_.slots.push_back(ps);
             }
         }
@@ -693,6 +874,50 @@ void IngressServer::load_player_data() {
                 player_data_.missions.push_back(pm);
             }
         }
+        if (j.contains("events") && j["events"].is_array()) {
+            player_data_.events.clear();
+            for (auto& ev : j["events"]) {
+                PlayerEvent pe;
+                pe.config_id = ev.value("config_id", "");
+                pe.source = ev.value("source", "");
+                pe.event_type = ev.value("event_type", "");
+                pe.category = static_cast<EventCategory>(ev.value("category", 0));
+                pe.placement_type = ev.value("placement_type", 0);
+                pe.group_name = ev.value("group_name", "");
+                pe.category_group_id = ev.value("category_group_id", "");
+                if (ev.contains("schedule") && ev["schedule"].is_object()) {
+                    auto& s = ev["schedule"];
+                    pe.schedule.announce = s.value("announce", (int64_t)0);
+                    pe.schedule.start = s.value("start", (int64_t)0);
+                    pe.schedule.display = s.value("display", (int64_t)0);
+                    pe.schedule.delay = s.value("delay", (int64_t)0);
+                    pe.schedule.end = s.value("end", (int64_t)0);
+                    pe.schedule.next_start = s.value("next_start", (int64_t)0);
+                    pe.schedule.round_number = s.value("round_number", 0);
+                }
+                if (ev.contains("ranking") && ev["ranking"].is_object()) {
+                    auto& r = ev["ranking"];
+                    pe.ranking.id = r.value("id", "");
+                    pe.ranking.position = r.value("position", 0);
+                    pe.ranking.rank = r.value("rank", 0);
+                    pe.ranking.score = r.value("score", 0.0);
+                    pe.ranking.delta = r.value("delta", 0);
+                    pe.ranking.relative_position = r.value("relative_position", 0);
+                }
+                if (ev.contains("entry_data") && ev["entry_data"].is_object()) {
+                    auto& e = ev["entry_data"];
+                    pe.entry_data.is_registered = e.value("is_registered", false);
+                    pe.entry_data.can_claim = e.value("can_claim", false);
+                    pe.entry_data.last_claimed_reward_index = e.value("last_claimed", -1);
+                    pe.entry_data.join_forbidden = e.value("join_forbidden", 0);
+                }
+                pe.metadata.priority = ev.value("priority", (int64_t)0);
+                player_data_.events.push_back(std::move(pe));
+            }
+        }
+
+        player_data_.emerald_chain.level = j.value("emerald_chain_level", 0);
+
     } catch (...) {
         // Best effort
     }
