@@ -21,6 +21,7 @@
 #include "data/models.h"
 #include "data/api_client.h"
 #include "data/ingress_server.h"
+#include "data/community_data.h"
 
 #include "tui/ui_common.h"
 #include "tui/tab_dashboard.h"
@@ -40,6 +41,7 @@ struct AppState {
     // Core data
     GameData game_data;
     PlayerData player_data;
+    CommunityData community_data;
     ApiClient api_client;
     IngressServer ingress_server;
 
@@ -83,6 +85,14 @@ struct AppState {
         player_data = ingress_server.get_player_data();
         if (data_loaded) {
             resolve_player_names(player_data, game_data);
+        }
+
+        // Load community data (StewieDoo Officer Tool)
+        load_community_data(community_data);
+        if (!community_data.officer_scores.empty()) {
+            status_message += " | " +
+                std::to_string(community_data.officer_scores.size()) + " scored, " +
+                std::to_string(community_data.preset_crews.size()) + " crews";
         }
     }
 };

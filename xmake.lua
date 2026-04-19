@@ -27,7 +27,7 @@ target("smoke_test")
     set_default(false)  -- only build when explicitly requested: xmake build smoke_test
     set_rundir("$(projectdir)")
     add_files("src/smoke_test.cpp", "src/app/account_snapshot.cpp",
-              "src/data/api_client.cpp", "src/util/csv_import.cpp",
+              "src/data/api_client.cpp",
               "src/data/ingress_server.cpp",
               "src/core/crew_optimizer.cpp", "src/core/planner.cpp", "src/core/ship_prompt.cpp", "src/core/officer_prompt.cpp", "src/core/strategic_prompt.cpp",
               "src/core/ai_crew_engine.cpp", "src/core/crew_advisor.cpp",

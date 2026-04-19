@@ -477,6 +477,109 @@ struct PlayerData {
     std::chrono::system_clock::time_point last_sync;
 };
 
+// ---------------------------------------------------------------------------
+// Community data (from StewieDoo Officer Tool spreadsheet)
+// ---------------------------------------------------------------------------
+
+// Officer score/rating from the community spreadsheet
+struct CommunityOfficerScore {
+    std::string name;
+    std::string rarity;           // "C", "U", "R", "E"
+    std::string notes;            // StewieDoo's notes about this officer
+    double immediate_value = 0.0; // 1-5 rating: how useful right now
+    double upgrade_value = 0.0;   // 1-5 rating: how useful when upgraded
+    double overall_score = 0.0;   // 1-5 rating: overall value
+    std::map<std::string, double> scores; // per-column scores (col_3..col_19)
+};
+
+// Officer skill data from the community spreadsheet
+struct CommunityOfficerSkill {
+    std::string name;
+    std::string alternate_name;
+    std::string officer_ability;    // OA text description
+    std::vector<double> oa_values;  // OA value per rank [rank1..rank5]
+    std::string captain_maneuver;   // CM text description
+    double cm_value = 0.0;          // CM primary value
+    std::string officer_group;      // synergy group name
+    std::string officer_type;       // "Command", "Science", "Engineering"
+    double synergy_full = 0.0;      // full synergy multiplier
+    double synergy_half = 0.0;      // half synergy multiplier
+    bool is_bda = false;
+
+    // State interactions
+    bool cause_burning = false;
+    bool use_burning = false;
+    bool cause_breach = false;
+    bool use_breach = false;
+    bool cause_morale = false;
+    bool use_morale = false;
+    bool cause_assimilate = false;
+    bool use_assimilate = false;
+
+    // Stat boosts (OA)
+    bool oa_attack_bridge = false;
+    bool oa_attack_all = false;
+    bool oa_defence_bridge = false;
+    bool oa_defence_all = false;
+    bool oa_health_bridge = false;
+    bool oa_health_all = false;
+
+    // Stat boosts (CM)
+    bool cm_attack_bridge = false;
+    bool cm_attack_all = false;
+    bool cm_defence_bridge = false;
+    bool cm_defence_all = false;
+    bool cm_health_bridge = false;
+    bool cm_health_all = false;
+};
+
+// Preset crew composition from the community spreadsheet
+struct PresetCrew {
+    std::string name;              // crew name/label
+    std::string captain;           // captain officer name
+    double captain_rank = 0.0;     // minimum rank for captain
+    std::string officer1;          // bridge officer 1
+    double officer1_rank = 0.0;    // minimum rank
+    std::string officer2;          // bridge officer 2
+    double officer2_rank = 0.0;    // minimum rank
+    std::string notes;             // usage notes
+
+    // Scenario tags
+    bool pvp = false;
+    bool hostiles = false;
+    bool mining = false;
+    bool bases = false;
+    bool mission_boss = false;
+    bool swarms = false;
+    bool eclipse = false;
+    bool probes = false;
+    bool xp_grinding = false;
+    bool armada_normal = false;
+    bool armada_eclipse = false;
+    bool armada_swarm = false;
+    bool armada_borg = false;
+    bool for_explorer = false;
+    bool for_interceptor = false;
+    bool for_battleship = false;
+    bool vs_explorer = false;
+    bool vs_interceptor = false;
+    bool vs_battleship = false;
+    bool vs_survey = false;
+};
+
+// All community data in one place
+struct CommunityData {
+    std::string version;
+    std::vector<CommunityOfficerScore> officer_scores;
+    std::vector<CommunityOfficerSkill> officer_skills;
+    std::vector<PresetCrew> preset_crews;
+
+    // Name-indexed lookups (populated by load)
+    std::map<std::string, const CommunityOfficerScore*> score_by_name;
+    std::map<std::string, const CommunityOfficerSkill*> skill_by_name;
+};
+
+// ---------------------------------------------------------------------------
 // Hull type helpers (API values: 0=interceptor, 1=survey, 2=explorer, 3=battleship)
 inline const char* hull_type_str(int hull_type) {
     switch (hull_type) {

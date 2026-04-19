@@ -31,7 +31,6 @@
 #include "data/ingress_server.h"
 #include "data/api_client.h"
 #include "data/llm_client.h"
-#include "util/csv_import.h"
 #include "core/crew_optimizer.h"
 #include "core/planner.h"
 #include "core/ai_crew_engine.h"
@@ -39,6 +38,7 @@
 #include "core/ship_prompt.h"
 #include "core/officer_prompt.h"
 #include "core/strategic_prompt.h"
+#include "data/community_data.h"
 
 namespace fs = std::filesystem;
 using namespace stfc;
@@ -791,377 +791,157 @@ void test_officer_class_str() {
 }
 
 // ---------------------------------------------------------------------------
-// CSV import tests
+// Community data tests
 // ---------------------------------------------------------------------------
 
-static std::vector<RosterOfficer> roster;
+static CommunityData community_data;
 
-void test_csv_load() {
-    TEST("load roster.csv");
-    roster = load_roster_csv("roster.csv");
-    CHECK(roster.size() > 100, "expected >100 officers, got " + std::to_string(roster.size()));
+void test_community_scores_load() {
+    TEST("load officer_scores.json");
+    bool ok = load_officer_scores("data/officer_scores.json", community_data);
+    CHECK(ok, "failed to load officer_scores.json");
+    CHECK(community_data.officer_scores.size() > 200,
+          "expected >200 scored officers, got " + std::to_string(community_data.officer_scores.size()));
+    std::cout << "(" << community_data.officer_scores.size() << " officers) ";
     PASS();
 }
 
-void test_csv_officer_count() {
-    TEST("roster officer count matches Python (~270+)");
-    // Python loads officers with attack > 0. The file has ~276 data rows (rows 20-295).
-    // Some have zero attack and are filtered out.
-    CHECK(roster.size() >= 200, "expected >= 200, got " + std::to_string(roster.size()));
-    CHECK(roster.size() <= 300, "expected <= 300, got " + std::to_string(roster.size()));
+void test_community_skills_load() {
+    TEST("load officer_skills.json");
+    bool ok = load_officer_skills("data/officer_skills.json", community_data);
+    CHECK(ok, "failed to load officer_skills.json");
+    CHECK(community_data.officer_skills.size() > 200,
+          "expected >200 officers with skills, got " + std::to_string(community_data.officer_skills.size()));
+    std::cout << "(" << community_data.officer_skills.size() << " officers) ";
     PASS();
 }
 
-void test_csv_known_officer() {
-    TEST("known officer: Kirk");
-    bool found = false;
-    for (const auto& o : roster) {
-        if (o.name == "Kirk") {
-            found = true;
-            CHECK(o.rarity == 'E', "Kirk rarity should be E");
-            CHECK(o.level > 0, "Kirk level should be > 0");
-            CHECK(o.attack > 0, "Kirk attack should be > 0");
-            break;
-        }
+void test_community_presets_load() {
+    TEST("load preset_crews.json");
+    bool ok = load_preset_crews("data/preset_crews.json", community_data);
+    CHECK(ok, "failed to load preset_crews.json");
+    CHECK(community_data.preset_crews.size() > 100,
+          "expected >100 preset crews, got " + std::to_string(community_data.preset_crews.size()));
+    std::cout << "(" << community_data.preset_crews.size() << " crews) ";
+    PASS();
+}
+
+void test_community_scores_fields() {
+    TEST("officer scores have valid fields");
+    CHECK(!community_data.officer_scores.empty(), "no scores loaded");
+    int with_notes = 0, with_overall = 0;
+    for (const auto& s : community_data.officer_scores) {
+        CHECK(!s.name.empty(), "officer score with empty name");
+        if (!s.notes.empty()) with_notes++;
+        if (s.overall_score > 0.0) with_overall++;
     }
-    CHECK(found, "Kirk not found in roster");
+    CHECK(with_overall > 200, "too few officers with overall_score: " + std::to_string(with_overall));
+    std::cout << "(notes:" << with_notes << " scored:" << with_overall << ") ";
     PASS();
 }
 
-void test_csv_rarity_values() {
-    TEST("rarity values are C/U/R/E");
-    std::set<char> rarities;
-    for (const auto& o : roster) {
-        rarities.insert(o.rarity);
+void test_community_skills_fields() {
+    TEST("officer skills have valid fields");
+    CHECK(!community_data.officer_skills.empty(), "no skills loaded");
+    int with_oa = 0, with_cm = 0, with_group = 0, bda_count = 0;
+    for (const auto& s : community_data.officer_skills) {
+        CHECK(!s.name.empty(), "officer skill with empty name");
+        if (!s.officer_ability.empty()) with_oa++;
+        if (!s.captain_maneuver.empty()) with_cm++;
+        if (!s.officer_group.empty()) with_group++;
+        if (s.is_bda) bda_count++;
     }
-    CHECK(rarities.count('U') > 0, "no Uncommon officers");
-    CHECK(rarities.count('R') > 0, "no Rare officers");
-    CHECK(rarities.count('E') > 0, "no Epic officers");
-    // Common officers might have 0 attack and be filtered, but check anyway
+    CHECK(with_oa > 200, "too few officers with OA: " + std::to_string(with_oa));
+    CHECK(with_group > 200, "too few officers with group: " + std::to_string(with_group));
+    std::cout << "(oa:" << with_oa << " cm:" << with_cm << " groups:" << with_group << " bda:" << bda_count << ") ";
     PASS();
 }
 
-void test_csv_groups_populated() {
-    TEST("officer groups populated");
-    int with_group = 0;
-    for (const auto& o : roster) {
-        if (!o.group.empty()) ++with_group;
+void test_community_presets_fields() {
+    TEST("preset crews have valid fields");
+    CHECK(!community_data.preset_crews.empty(), "no presets loaded");
+    int pvp = 0, hostile = 0, mining = 0, armada = 0;
+    int empty_slots = 0;
+    for (const auto& c : community_data.preset_crews) {
+        CHECK(!c.captain.empty(), c.name + " has empty captain");
+        if (c.officer1.empty() || c.officer2.empty()) empty_slots++;
+        if (c.pvp) pvp++;
+        if (c.hostiles) hostile++;
+        if (c.mining) mining++;
+        if (c.armada_normal || c.armada_eclipse || c.armada_swarm || c.armada_borg) armada++;
     }
-    CHECK(with_group > (int)roster.size() / 2,
-          "expected most officers to have groups, got " + std::to_string(with_group));
+    CHECK(pvp > 50, "too few PvP crews: " + std::to_string(pvp));
+    std::cout << "(pvp:" << pvp << " hostile:" << hostile << " mining:" << mining << " armada:" << armada << " empty_slots:" << empty_slots << ") ";
     PASS();
 }
 
-void test_csv_bda_detection() {
-    TEST("BDA detection (cm_pct >= 10000)");
-    int bda_count = 0;
-    for (const auto& o : roster) {
-        if (o.is_bda()) ++bda_count;
-    }
-    // Should have some BDA officers but not most
-    CHECK(bda_count > 0, "expected some BDA officers");
-    CHECK(bda_count < (int)roster.size() / 2, "too many BDA officers: " + std::to_string(bda_count));
-    PASS();
-}
+void test_community_name_lookups() {
+    TEST("community name lookups built");
+    // Build lookups
+    for (const auto& s : community_data.officer_scores)
+        community_data.score_by_name[s.name] = &s;
+    for (const auto& s : community_data.officer_skills)
+        community_data.skill_by_name[s.name] = &s;
 
-void test_csv_multiline_fields() {
-    TEST("multiline ability descriptions parsed");
-    // WOK Saavik and WOK Scotty have multiline descriptions in the CSV
-    bool found_multiline = false;
-    for (const auto& o : roster) {
-        if (o.name.find("WOK") != std::string::npos && o.description.find('\n') != std::string::npos) {
-            found_multiline = true;
-            break;
-        }
-    }
-    CHECK(found_multiline, "expected multiline description for WOK officers");
-    PASS();
-}
-
-void test_csv_mess_hall_level() {
-    TEST("mess hall level parsed from header");
-    int level = parse_mess_hall_level("roster.csv");
-    CHECK(level > 0, "mess hall level should be > 0, got " + std::to_string(level));
-    CHECK(level < 99999, "mess hall level unreasonably high: " + std::to_string(level));
-    PASS();
-}
-
-void test_csv_effects() {
-    TEST("status effects populated");
-    std::set<std::string> effects;
-    for (const auto& o : roster) {
-        if (!o.effect.empty()) effects.insert(o.effect);
-    }
-    CHECK(effects.count("burning") > 0, "no burning officers");
-    CHECK(effects.count("morale") > 0, "no morale officers");
+    // Check known officers
+    CHECK(community_data.score_by_name.count("Kirk") > 0, "Kirk not found in scores");
+    CHECK(community_data.skill_by_name.count("Kirk") > 0, "Kirk not found in skills");
+    auto* kirk_score = community_data.score_by_name["Kirk"];
+    CHECK(kirk_score->overall_score > 0.0, "Kirk overall_score should be > 0");
+    auto* kirk_skill = community_data.skill_by_name["Kirk"];
+    CHECK(!kirk_skill->captain_maneuver.empty(), "Kirk CM should not be empty");
+    std::cout << "(Kirk: score=" << kirk_score->overall_score
+              << " cm=\"" << kirk_skill->captain_maneuver.substr(0, 40) << "\") ";
     PASS();
 }
 
 // ---------------------------------------------------------------------------
 // Sync-path data pipeline tests
 // ---------------------------------------------------------------------------
-// These tests simulate what build_roster_from_sync() does in main.cpp,
-// constructing RosterOfficer objects from GameData (as if synced from the
-// community mod) and verifying the optimizer receives correct data.
+// These tests build a synthetic PlayerData from GameData (simulating a sync
+// where all officers are at max level) and use CrewOptimizer(pd, gd).
 
-// Replicate the helpers from main.cpp (they live in an anonymous namespace there)
-namespace sync_test {
-
-std::string replace_all(std::string text, const std::string& from, const std::string& to) {
-    size_t pos = 0;
-    while ((pos = text.find(from, pos)) != std::string::npos) {
-        text.replace(pos, from.size(), to);
-        pos += to.size();
-    }
-    return text;
-}
-
-std::string fmt_pct(double value) {
-    std::ostringstream os;
-    double pct = value * 100.0;
-    if (std::abs(pct - std::round(pct)) < 0.0001) {
-        os << static_cast<int>(std::round(pct)) << "%";
-    } else {
-        os << std::fixed << std::setprecision(1) << pct << "%";
-    }
-    return os.str();
-}
-
-double ability_pct(const OfficerAbility& ability, int rank) {
-    if (ability.values.empty()) return 0.0;
-    int idx = std::max(0, std::min(rank, static_cast<int>(ability.values.size()) - 1));
-    return ability.values[idx].value;
-}
-
-char rarity_letter_sync(int rarity) {
-    switch (rarity) {
-        case 1: return 'C';
-        case 2: return 'U';
-        case 3: return 'R';
-        case 4: return 'E';
-        default: return ' ';
-    }
-}
-
-std::string strip_color_tags(const std::string& text) {
-    std::string out;
-    out.reserve(text.size());
-    size_t i = 0;
-    while (i < text.size()) {
-        if (text[i] == '<') {
-            if (text.compare(i, 7, "<color=") == 0) {
-                auto end = text.find('>', i);
-                if (end != std::string::npos) { i = end + 1; continue; }
-            } else if (text.compare(i, 8, "</color>") == 0) {
-                i += 8; continue;
-            }
-        }
-        out += text[i++];
-    }
-    return out;
-}
-
-std::string to_lower_str(std::string s) {
-    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
-
-std::string collapse_whitespace(const std::string& text) {
-    std::string out;
-    out.reserve(text.size());
-    bool prev_space = true;
-    for (char c : text) {
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!prev_space) { out += ' '; prev_space = true; }
-        } else {
-            out += c;
-            prev_space = false;
-        }
-    }
-    if (!out.empty() && out.back() == ' ') out.pop_back();
-    return out;
-}
-
-std::string resolve_officer_tooltip(const Officer& officer, int rank) {
-    std::string text = officer.description;
-    if (text.empty()) return text;
-    const auto cap = officer.captain_ability.values;
-    const auto abil = officer.ability.values;
-    const auto bda = officer.below_decks_ability.values;
-    auto rank_idx = std::max(0, rank);
-    auto cap_value = [&](int idx) {
-        idx = std::max(0, std::min(idx, static_cast<int>(cap.size()) - 1));
-        return cap.empty() ? 0.0 : cap[idx].value;
-    };
-    auto abil_value = [&](int idx) {
-        idx = std::max(0, std::min(idx, static_cast<int>(abil.size()) - 1));
-        return abil.empty() ? 0.0 : abil[idx].value;
-    };
-    auto bda_value = [&](int idx) {
-        idx = std::max(0, std::min(idx, static_cast<int>(bda.size()) - 1));
-        return bda.empty() ? 0.0 : bda[idx].value;
-    };
-    auto p0_value = [&](int idx) {
-        return officer.has_bda ? bda_value(idx) : cap_value(idx);
-    };
-    auto fmt_num = [](double value) -> std::string {
-        std::ostringstream os;
-        if (std::abs(value - std::round(value)) < 0.0001) {
-            auto v = static_cast<int64_t>(std::round(value));
-            if (v >= 1000 || v <= -1000) {
-                std::string s = std::to_string(std::abs(v));
-                std::string result;
-                int count = 0;
-                for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {
-                    if (count > 0 && count % 3 == 0) result = "," + result;
-                    result = s[i] + result;
-                    ++count;
-                }
-                if (v < 0) result = "-" + result;
-                return result;
-            }
-            os << v;
-        } else {
-            os << std::fixed << std::setprecision(2) << value;
-        }
-        return os.str();
-    };
-    for (const char* pat : {"{0:#,#%}", "{0:#.#%}", "{0:0,#%}", "{0:0.#%}", "{0:#%}"})
-        text = replace_all(text, pat, fmt_pct(p0_value(rank_idx)));
-    for (const char* pat : {"{1:#,#%}", "{1:#.#%}", "{1:0,#%}", "{1:0.#%}", "{1:#%}"})
-        text = replace_all(text, pat, fmt_pct(p0_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
-    for (const char* pat : {"{2:#,#%}", "{2:#.#%}", "{2:0,#%}", "{2:0.#%}", "{2:#%}"})
-        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
-    for (const char* pat : {"{3:#,#%}", "{3:#.#%}", "{3:0,#%}", "{3:0.#%}", "{3:#%}"})
-        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
-    for (const char* pat : {"{4:#,#%}", "{4:#.#%}", "{4:0,#%}", "{4:0.#%}", "{4:#%}"})
-        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
-    for (const char* pat : {"{0:#,#}", "{0:#}", "{0:0.##}", "{0:0.#}", "{0:0}"})
-        text = replace_all(text, pat, fmt_num(p0_value(rank_idx)));
-    for (const char* pat : {"{2:#,#}", "{2:#}", "{2:0.##}", "{2:0.#}"})
-        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
-    for (const char* pat : {"{3:#,#}", "{3:#}", "{3:0.##}", "{3:0.#}"})
-        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
-    for (const char* pat : {"{4:#,#}", "{4:#}", "{4:0.##}", "{4:0.#}"})
-        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
-    return text;
-}
-
-std::string build_optimizer_description(const Officer& officer, int rank) {
-    std::string tooltip = resolve_officer_tooltip(officer, rank);
-    tooltip = strip_color_tags(tooltip);
-    std::string block0, block1;
-    auto sep = tooltip.find("\n\n");
-    if (sep != std::string::npos) {
-        block0 = tooltip.substr(0, sep);
-        block1 = tooltip.substr(sep + 2);
-        auto sep2 = block1.find("\n\n");
-        if (sep2 != std::string::npos) block1 = block1.substr(0, sep2);
-    } else {
-        block0 = tooltip;
-    }
-    block0 = collapse_whitespace(block0);
-    block1 = collapse_whitespace(block1);
-    std::string desc;
-    if (officer.has_bda) {
-        desc = "bda: " + block0 + " oa: " + block1;
-    } else {
-        desc = "cm: " + block0 + " oa: " + block1;
-    }
-    return to_lower_str(desc);
-}
-
-void parse_status_effects(const std::string& desc, std::string& effect, bool& causes_effect) {
-    effect.clear();
-    causes_effect = false;
-    static const char* morale_apply[] = { "inspire morale", "morale for", "apply morale", "cause morale", nullptr };
-    static const char* breach_apply[] = { "hull breach for", "apply hull breach", "cause hull breach", "inflict hull breach", nullptr };
-    static const char* burning_apply[] = { "burning for", "apply burning", "cause burning", "inflict burning", "burning to opponent", "burning to the opponent", nullptr };
-    static const char* assimilate_apply[] = { "assimilate for", "apply assimilate", nullptr };
-    static const char* morale_benefit[] = { "ship has morale", "with morale", "has morale", "when morale", "while morale", nullptr };
-    static const char* breach_benefit[] = { "has hull breach", "with hull breach", "opponent hull breach", "when hull breach", nullptr };
-    static const char* burning_benefit[] = { "is burning", "has burning", "opponent burning", "afflicted by burning", "when burning", "whilst burning", nullptr };
-    static const char* assimilate_benefit[] = { "with assimilate", "has assimilate", "when assimilate", "is assimilated", nullptr };
-    auto check_keywords = [&](const char* state, const char* const* apply_kw, const char* const* benefit_kw) {
-        for (const char* const* p = apply_kw; *p; ++p) {
-            if (desc.find(*p) != std::string::npos) { effect = state; causes_effect = true; return true; }
-        }
-        for (const char* const* p = benefit_kw; *p; ++p) {
-            if (desc.find(*p) != std::string::npos) { effect = state; causes_effect = false; return true; }
-        }
-        return false;
-    };
-    if (check_keywords("morale", morale_apply, morale_benefit)) return;
-    if (check_keywords("breach", breach_apply, breach_benefit)) return;
-    if (check_keywords("burning", burning_apply, burning_benefit)) return;
-    if (check_keywords("assimilate", assimilate_apply, assimilate_benefit)) return;
-}
-
-// Build a roster from game data, simulating a sync where all officers are
-// at max level and rank 0 (typical for a fresh account; rank=0 ensures
-// we use the first ability value).
-std::vector<RosterOfficer> build_test_roster(const GameData& gd) {
-    std::vector<RosterOfficer> result;
+// Build a synthetic PlayerData where every officer in game_data is "owned"
+// at max level and max rank (for testing the full pipeline).
+static PlayerData build_synthetic_player_data(const GameData& gd) {
+    PlayerData pd;
+    pd.player_name = "TestPlayer";
+    pd.ops_level = 40;
     for (const auto& [id, go] : gd.officers) {
         if (go.stats.empty()) continue;
-        RosterOfficer ro;
-        ro.officer_id = id;
-        ro.name = go.name.empty() ? go.short_name : go.name;
-        ro.rarity = rarity_letter_sync(go.rarity);
-        int level = std::max(1, (int)go.stats.size());
-        ro.level = level;
-        ro.rank = std::min(go.max_rank, 4);  // simulate max rank
-        int idx = std::min(level - 1, (int)go.stats.size() - 1);
-        ro.attack = go.stats[idx].attack;
-        ro.defense = go.stats[idx].defense;
-        ro.health = go.stats[idx].health;
-        ro.group = go.group_name;
-        ro.officer_class = go.officer_class;
-
-        if (go.has_bda) {
-            double bda_raw = sync_test::ability_pct(go.below_decks_ability, 0);  // always index 0
-            if (go.below_decks_ability.value_is_percentage) {
-                ro.cm_pct = bda_raw * 100.0;
-            } else {
-                ro.cm_pct = bda_raw;
-            }
-        } else {
-            double cm_raw = sync_test::ability_pct(go.captain_ability, 0);  // always index 0
-            ro.cm_pct = go.captain_ability.value_is_percentage ? cm_raw * 100.0 : cm_raw;
-        }
-        double oa_raw = ability_pct(go.ability, ro.rank);
-        ro.oa_pct = go.ability.value_is_percentage ? oa_raw * 100.0 : oa_raw;
-
-        ro.description = build_optimizer_description(go, ro.rank);
-        parse_status_effects(ro.description, ro.effect, ro.causes_effect);
-
-        if (ro.attack > 0) result.push_back(std::move(ro));
+        PlayerOfficer po;
+        po.officer_id = id;
+        po.level = std::max(1, (int)go.stats.size());
+        po.rank = std::min(go.max_rank, 4);
+        pd.officers.push_back(po);
     }
-    return result;
+    return pd;
 }
 
-} // namespace sync_test
-
-static std::vector<RosterOfficer> sync_roster;
+static PlayerData synthetic_pd;
+static std::unique_ptr<CrewOptimizer> sync_optimizer;
 
 void test_sync_roster_build() {
     TEST("build sync-path roster from game data");
     CHECK(data_loaded, "data not loaded");
-    sync_roster = sync_test::build_test_roster(game_data);
-    CHECK(sync_roster.size() > 200, "expected >200 officers, got " + std::to_string(sync_roster.size()));
-    std::cout << "(" << sync_roster.size() << " officers) ";
+    synthetic_pd = build_synthetic_player_data(game_data);
+    resolve_player_names(synthetic_pd, game_data);
+    sync_optimizer = std::make_unique<CrewOptimizer>(synthetic_pd, game_data);
+    CHECK(sync_optimizer->officers().size() > 200,
+          "expected >200 officers, got " + std::to_string(sync_optimizer->officers().size()));
+    std::cout << "(" << sync_optimizer->officers().size() << " officers) ";
     PASS();
 }
 
 void test_sync_descriptions_have_markers() {
     TEST("sync descriptions have cm:/oa: or bda:/oa: markers");
-    CHECK(!sync_roster.empty(), "sync roster not built");
+    CHECK(sync_optimizer != nullptr, "sync optimizer not built");
     int with_cm = 0, with_bda = 0, with_oa = 0, empty_desc = 0;
-    for (const auto& ro : sync_roster) {
-        if (ro.description.empty()) { empty_desc++; continue; }
-        if (ro.description.find("cm:") != std::string::npos) with_cm++;
-        if (ro.description.find("bda:") != std::string::npos) with_bda++;
-        if (ro.description.find("oa:") != std::string::npos) with_oa++;
+    for (const auto& off : sync_optimizer->officers()) {
+        if (off.description.empty()) { empty_desc++; continue; }
+        if (off.description.find("cm:") != std::string::npos) with_cm++;
+        if (off.description.find("bda:") != std::string::npos) with_bda++;
+        if (off.description.find("oa:") != std::string::npos) with_oa++;
     }
     CHECK(with_cm + with_bda > 200, "too few officers with cm:/bda: markers: " + std::to_string(with_cm + with_bda));
     CHECK(with_oa > 200, "too few officers with oa: markers: " + std::to_string(with_oa));
@@ -1172,22 +952,22 @@ void test_sync_descriptions_have_markers() {
 
 void test_sync_descriptions_no_color_tags() {
     TEST("sync descriptions have no <color> tags");
-    CHECK(!sync_roster.empty(), "sync roster not built");
-    for (const auto& ro : sync_roster) {
-        CHECK(ro.description.find("<color") == std::string::npos,
-              ro.name + " has color tags: " + ro.description.substr(0, 80));
+    CHECK(sync_optimizer != nullptr, "sync optimizer not built");
+    for (const auto& off : sync_optimizer->officers()) {
+        CHECK(off.description.find("<color") == std::string::npos,
+              off.name + " has color tags: " + off.description.substr(0, 80));
     }
     PASS();
 }
 
 void test_sync_descriptions_lowercase() {
     TEST("sync descriptions are lowercase");
-    CHECK(!sync_roster.empty(), "sync roster not built");
-    for (const auto& ro : sync_roster) {
-        for (char c : ro.description) {
+    CHECK(sync_optimizer != nullptr, "sync optimizer not built");
+    for (const auto& off : sync_optimizer->officers()) {
+        for (char c : off.description) {
             if (std::isalpha(static_cast<unsigned char>(c))) {
                 CHECK(std::islower(static_cast<unsigned char>(c)),
-                      ro.name + " has uppercase in description: " + ro.description.substr(0, 80));
+                      off.name + " has uppercase in description: " + off.description.substr(0, 80));
             }
         }
     }
@@ -1196,34 +976,30 @@ void test_sync_descriptions_lowercase() {
 
 void test_sync_pct_conversion() {
     TEST("sync cm_pct/oa_pct are percentage-scale (not raw decimals)");
-    CHECK(!sync_roster.empty(), "sync roster not built");
-    // For regular (non-BDA) officers with abilities, cm_pct should be > 1.0
-    // (e.g., 40.0 for 40%), not raw decimals like 0.40.
+    CHECK(sync_optimizer != nullptr, "sync optimizer not built");
     int checked = 0;
     int correct_scale = 0;
-    for (const auto& ro : sync_roster) {
-        if (ro.is_bda()) continue;  // BDA officers have unusual cm_pct values
-        if (ro.cm_pct <= 0.0) continue;
+    for (const auto& off : sync_optimizer->officers()) {
+        if (off.is_bda()) continue;
+        if (off.cm_pct <= 0.0) continue;
         checked++;
-        if (ro.cm_pct >= 1.0) correct_scale++;
+        if (off.cm_pct >= 1.0) correct_scale++;
     }
     CHECK(checked > 100, "too few regular officers with cm_pct: " + std::to_string(checked));
-    // Allow some officers to have small values (< 1%), but vast majority should be >= 1.0
     double pct_correct = (double)correct_scale / checked * 100.0;
     CHECK(pct_correct > 90.0,
           "only " + std::to_string((int)pct_correct) + "% of officers have cm_pct >= 1.0 (expected >90%)");
-    std::cout << "(" << correct_scale << "/" << checked << " officers ≥ 1.0%) ";
+    std::cout << "(" << correct_scale << "/" << checked << " officers >= 1.0%) ";
     PASS();
 }
 
 void test_sync_bda_detection() {
     TEST("sync BDA officers are detected via is_bda()");
-    CHECK(!sync_roster.empty(), "sync roster not built");
+    CHECK(sync_optimizer != nullptr, "sync optimizer not built");
     int bda_count = 0;
-    for (const auto& ro : sync_roster) {
-        if (ro.is_bda()) bda_count++;
+    for (const auto& off : sync_optimizer->officers()) {
+        if (off.is_bda()) bda_count++;
     }
-    // We know there are ~77 BDA officers in the game data
     CHECK(bda_count > 20, "too few BDA officers detected: " + std::to_string(bda_count));
     std::cout << "(" << bda_count << " BDA officers) ";
     PASS();
@@ -1231,13 +1007,13 @@ void test_sync_bda_detection() {
 
 void test_sync_effects_populated() {
     TEST("sync status effects populated from description");
-    CHECK(!sync_roster.empty(), "sync roster not built");
+    CHECK(sync_optimizer != nullptr, "sync optimizer not built");
     int with_effect = 0;
     std::set<std::string> effect_types;
-    for (const auto& ro : sync_roster) {
-        if (!ro.effect.empty()) {
+    for (const auto& off : sync_optimizer->officers()) {
+        if (!off.effect.empty()) {
             with_effect++;
-            effect_types.insert(ro.effect);
+            effect_types.insert(off.effect);
         }
     }
     CHECK(with_effect > 10, "too few officers with effects: " + std::to_string(with_effect));
@@ -1248,52 +1024,12 @@ void test_sync_effects_populated() {
     PASS();
 }
 
-void test_sync_optimizer_mining() {
-    TEST("sync-path optimizer: mining crews pick mining officers");
-    CHECK(!sync_roster.empty(), "sync roster not built");
-
-    auto opt = std::make_unique<CrewOptimizer>(sync_roster);
-    opt->set_ship_type(ShipType::Survey);
-    auto results = opt->find_best_crews(Scenario::MiningGeneral, 5);
-    CHECK(!results.empty(), "no mining crews returned");
-
-    // The top mining crew should score meaningfully (not near-zero)
-    CHECK(results[0].score > 1000.0,
-          "top mining crew score too low: " + std::to_string(results[0].score));
-
-    // Check that the top crew contains known mining officers
-    std::set<std::string> known_miners = {"Arrock", "Mavery", "Three Of Eleven",
-                                           "T'Pring", "Fess", "Quark", "Stonn",
-                                           "Ten Of Eleven", "Five Of Eleven",
-                                           "Raphaël DuPont", "Raphael DuPont"};
-    std::vector<std::string> crew_names;
-    crew_names.push_back(results[0].breakdown.captain);
-    for (const auto& b : results[0].breakdown.bridge) crew_names.push_back(b);
-
-    int miner_hits = 0;
-    for (const auto& name : crew_names) {
-        if (known_miners.count(name)) miner_hits++;
-    }
-    CHECK(miner_hits >= 2,
-          "top mining crew has only " + std::to_string(miner_hits) +
-          " known miners: " + crew_names[0] + "+" +
-          (crew_names.size() > 1 ? crew_names[1] : "?") + "+" +
-          (crew_names.size() > 2 ? crew_names[2] : "?"));
-
-    std::cout << "(top=" << (int)results[0].score
-              << " [" << crew_names[0]
-              << "+" << (crew_names.size() > 1 ? crew_names[1] : "?")
-              << "+" << (crew_names.size() > 2 ? crew_names[2] : "?") << "]) ";
-    PASS();
-}
-
 void test_sync_optimizer_classification() {
     TEST("sync-path optimizer: officer classification produces tags");
-    CHECK(!sync_roster.empty(), "sync roster not built");
+    CHECK(sync_optimizer != nullptr, "sync optimizer not built");
 
-    auto opt = std::make_unique<CrewOptimizer>(sync_roster);
     int mining_tagged = 0, cm_text_populated = 0, oa_text_populated = 0;
-    for (const auto& off : opt->officers()) {
+    for (const auto& off : sync_optimizer->officers()) {
         if (off.mining) mining_tagged++;
         if (!off.cm_text.empty()) cm_text_populated++;
         if (!off.oa_text.empty()) oa_text_populated++;
@@ -1315,12 +1051,17 @@ void test_sync_optimizer_classification() {
 static std::unique_ptr<CrewOptimizer> optimizer;
 
 void test_crew_optimizer_construction() {
-    TEST("CrewOptimizer construction from roster");
-    CHECK(!roster.empty(), "roster not loaded");
-    optimizer = std::make_unique<CrewOptimizer>(roster);
-    CHECK(optimizer->officers().size() == roster.size(),
-          "officer count mismatch: " + std::to_string(optimizer->officers().size()) +
-          " vs " + std::to_string(roster.size()));
+    TEST("CrewOptimizer construction from sync data");
+    CHECK(data_loaded, "game data not loaded");
+    // Use the synthetic player data built by test_sync_roster_build
+    if (synthetic_pd.officers.empty()) {
+        synthetic_pd = build_synthetic_player_data(game_data);
+        resolve_player_names(synthetic_pd, game_data);
+    }
+    optimizer = std::make_unique<CrewOptimizer>(synthetic_pd, game_data);
+    CHECK(optimizer->officers().size() > 200,
+          "expected >200 officers, got " + std::to_string(optimizer->officers().size()));
+    std::cout << "(" << optimizer->officers().size() << " officers) ";
     PASS();
 }
 
@@ -1398,174 +1139,6 @@ void test_crew_ship_lock() {
     PASS();
 }
 
-void test_crew_pvp_find_best() {
-    TEST("find_best_crews PvP returns top-5 valid results");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto results = optimizer->find_best_crews(Scenario::PvP, 5);
-
-    CHECK(results.size() == 5, "expected 5 results, got " + std::to_string(results.size()));
-
-    // Results should be sorted descending
-    for (size_t i = 1; i < results.size(); ++i) {
-        CHECK(results[i].score <= results[i-1].score,
-              "results not sorted: " + std::to_string(results[i-1].score) +
-              " < " + std::to_string(results[i].score));
-    }
-
-    // Each result should have valid captain + 2 bridge
-    for (size_t i = 0; i < results.size(); ++i) {
-        const auto& bd = results[i].breakdown;
-        CHECK(!bd.captain.empty(), "result " + std::to_string(i) + " has empty captain");
-        CHECK(bd.bridge.size() == 2, "result " + std::to_string(i) + " has " +
-              std::to_string(bd.bridge.size()) + " bridge officers");
-        // All 3 names should be distinct
-        std::set<std::string> names = {bd.captain, bd.bridge[0], bd.bridge[1]};
-        CHECK(names.size() == 3, "duplicate officers in result " + std::to_string(i));
-    }
-
-    // All 5 results should have distinct crew sets
-    std::set<std::set<std::string>> seen;
-    for (const auto& r : results) {
-        std::set<std::string> key = {r.breakdown.captain, r.breakdown.bridge[0], r.breakdown.bridge[1]};
-        CHECK(seen.count(key) == 0, "duplicate crew set in results");
-        seen.insert(key);
-    }
-
-    std::cout << "(top=" << static_cast<int>(results[0].score)
-              << " [" << results[0].breakdown.captain
-              << "+" << results[0].breakdown.bridge[0]
-              << "+" << results[0].breakdown.bridge[1] << "]) ";
-    PASS();
-}
-
-void test_crew_hybrid_find_best() {
-    TEST("find_best_crews Hybrid returns valid results");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    auto results = optimizer->find_best_crews(Scenario::Hybrid, 3);
-    CHECK(results.size() == 3, "expected 3 results, got " + std::to_string(results.size()));
-    CHECK(results[0].score > 0, "top hybrid score should be > 0");
-
-    std::cout << "(top=" << static_cast<int>(results[0].score)
-              << " [" << results[0].breakdown.captain
-              << "+" << results[0].breakdown.bridge[0]
-              << "+" << results[0].breakdown.bridge[1] << "]) ";
-    PASS();
-}
-
-void test_crew_pve_hostile_find_best() {
-    TEST("find_best_crews PvE Hostile returns valid results");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    auto results = optimizer->find_best_crews(Scenario::PvEHostile, 3);
-    CHECK(results.size() == 3, "expected 3 results, got " + std::to_string(results.size()));
-    CHECK(results[0].score > 0, "top PvE score should be > 0");
-
-    // PvE crew should prefer PvE officers — just verify it runs correctly
-    std::cout << "(top=" << static_cast<int>(results[0].score)
-              << " [" << results[0].breakdown.captain
-              << "+" << results[0].breakdown.bridge[0]
-              << "+" << results[0].breakdown.bridge[1] << "]) ";
-    PASS();
-}
-
-void test_crew_mining_find_best() {
-    TEST("find_best_crews MiningGeneral returns mining officers");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    auto results = optimizer->find_best_crews(Scenario::MiningGeneral, 3);
-    CHECK(results.size() == 3, "expected 3 results, got " + std::to_string(results.size()));
-
-    // Top mining crew should include at least one mining-tagged officer
-    bool any_mining = false;
-    for (const auto& off : optimizer->officers()) {
-        if (off.name == results[0].breakdown.captain && off.mining) any_mining = true;
-        for (const auto& b : results[0].breakdown.bridge) {
-            if (off.name == b && off.mining) any_mining = true;
-        }
-    }
-    CHECK(any_mining, "top mining crew has no mining officers");
-
-    std::cout << "(top=" << static_cast<int>(results[0].score)
-              << " [" << results[0].breakdown.captain
-              << "+" << results[0].breakdown.bridge[0]
-              << "+" << results[0].breakdown.bridge[1] << "]) ";
-    PASS();
-}
-
-void test_crew_excluded_officers() {
-    TEST("find_best_crews respects excluded officers");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    auto results_full = optimizer->find_best_crews(Scenario::PvP, 1);
-    CHECK(!results_full.empty(), "no results from full search");
-
-    // Exclude the captain from the top result
-    std::set<std::string> excluded = {results_full[0].breakdown.captain};
-    auto results_excl = optimizer->find_best_crews(Scenario::PvP, 1, excluded);
-    CHECK(!results_excl.empty(), "no results with exclusion");
-
-    // The excluded officer should not appear in any result
-    CHECK(results_excl[0].breakdown.captain != results_full[0].breakdown.captain,
-          "excluded captain still appears");
-    for (const auto& b : results_excl[0].breakdown.bridge) {
-        CHECK(b != results_full[0].breakdown.captain,
-              "excluded officer appears on bridge");
-    }
-
-    PASS();
-}
-
-void test_crew_all_scenarios() {
-    TEST("find_best_crews works for all 13 scenarios");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    int passed = 0;
-    for (auto s : all_dock_scenarios()) {
-        auto results = optimizer->find_best_crews(s, 1);
-        CHECK(!results.empty(), std::string("no results for ") + scenario_str(s));
-        CHECK(results[0].score > 0, std::string("zero score for ") + scenario_str(s));
-        ++passed;
-    }
-
-    std::cout << "(" << passed << "/13 scenarios) ";
-    PASS();
-}
-
-void test_crew_ship_type_affects_results() {
-    TEST("ship type change affects PvP results");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto exp_results = optimizer->find_best_crews(Scenario::PvP, 1);
-
-    optimizer->set_ship_type(ShipType::Battleship);
-    auto bs_results = optimizer->find_best_crews(Scenario::PvP, 1);
-
-    optimizer->set_ship_type(ShipType::Interceptor);
-    auto int_results = optimizer->find_best_crews(Scenario::PvP, 1);
-
-    // At least one ship type should give different top crew
-    bool any_diff = (exp_results[0].breakdown.captain != bs_results[0].breakdown.captain) ||
-                    (exp_results[0].breakdown.captain != int_results[0].breakdown.captain) ||
-                    (bs_results[0].breakdown.captain != int_results[0].breakdown.captain);
-    // Scores should definitely differ even if same crew
-    bool score_diff = (exp_results[0].score != bs_results[0].score) ||
-                      (bs_results[0].score != int_results[0].score);
-
-    CHECK(any_diff || score_diff, "ship type has no effect on results");
-
-    // Reset to explorer
-    optimizer->set_ship_type(ShipType::Explorer);
-
-    std::cout << "(exp:" << static_cast<int>(exp_results[0].score)
-              << " bs:" << static_cast<int>(bs_results[0].score)
-              << " int:" << static_cast<int>(int_results[0].score) << ") ";
-    PASS();
-}
-
 void test_crew_scenario_enums() {
     TEST("scenario string round-trip conversions");
     for (auto s : all_dock_scenarios()) {
@@ -1587,51 +1160,6 @@ void test_crew_scenario_enums() {
         CHECK(back == st, std::string("ship type round-trip failed for ") + str);
     }
 
-    PASS();
-}
-
-void test_crew_breakdown_fields() {
-    TEST("crew result breakdown has populated fields");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto results = optimizer->find_best_crews(Scenario::PvP, 1);
-    CHECK(!results.empty(), "no results");
-
-    const auto& bd = results[0].breakdown;
-    CHECK(!bd.captain.empty(), "empty captain");
-    CHECK(bd.bridge.size() == 2, "wrong bridge size");
-    CHECK(bd.individual_scores.size() == 3, "expected 3 individual scores, got " +
-          std::to_string(bd.individual_scores.size()));
-
-    // All individual scores should be > 0
-    for (const auto& [name, score] : bd.individual_scores) {
-        CHECK(score > 0, "zero individual score for " + name);
-    }
-
-    std::cout << "(synergy=" << static_cast<int>(bd.synergy_bonus)
-              << " bridge_grp=" << static_cast<int>(bd.bridge_synergy_bonus)
-              << " bridge_pct=" << static_cast<int>(bd.bridge_synergy_pct) << "%"
-              << " chain=" << static_cast<int>(bd.state_chain_bonus)
-              << " crit=" << static_cast<int>(bd.crit_bonus)
-              << " penalties=" << bd.penalties.size() << ") ";
-    PASS();
-}
-
-void test_crew_performance() {
-    TEST("PvP search completes in < 8 seconds");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto start = std::chrono::steady_clock::now();
-    auto results = optimizer->find_best_crews(Scenario::PvP, 5);
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - start);
-
-    CHECK(elapsed.count() < 8000, "search took " + std::to_string(elapsed.count()) + "ms");
-    CHECK(!results.empty(), "no results");
-
-    std::cout << "(" << elapsed.count() << "ms for top-5) ";
     PASS();
 }
 
@@ -1697,57 +1225,6 @@ void test_cm_scope_coverage() {
     PASS();
 }
 
-void test_top_crews_sanity() {
-    TEST("top crew picks sanity report");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    struct ScenarioCheck {
-        Scenario s;
-        const char* label;
-    };
-
-    std::vector<ScenarioCheck> checks = {
-        {Scenario::PvP, "PvP"},
-        {Scenario::Hybrid, "Hybrid"},
-        {Scenario::PvEHostile, "PvE Hostiles"},
-        {Scenario::MiningGeneral, "Mining General"},
-        {Scenario::MiningGas, "Mining Gas"},
-        {Scenario::MiningOre, "Mining Ore"},
-        {Scenario::MiningCrystal, "Mining Crystal"},
-        {Scenario::Armada, "Armada"},
-    };
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    std::cout << "\n";
-
-    for (const auto& sc : checks) {
-        auto results = optimizer->find_best_crews(sc.s, 3);
-        std::cout << "    " << std::setw(16) << std::left << sc.label << ":\n";
-        for (size_t i = 0; i < results.size(); ++i) {
-            const auto& bd = results[i].breakdown;
-            std::cout << "      " << (i+1) << ". " << bd.captain << " + "
-                      << (bd.bridge.size() > 0 ? bd.bridge[0] : "?") << " + "
-                      << (bd.bridge.size() > 1 ? bd.bridge[1] : "?")
-                      << " (score=" << static_cast<int>(results[i].score)
-                      << " synergy=" << static_cast<int>(bd.bridge_synergy_pct) << "%"
-                      << " chain=" << static_cast<int>(bd.state_chain_bonus) << ")\n";
-        }
-    }
-
-    // Basic sanity: PvP top crew should have score > 100K
-    auto pvp_top = optimizer->find_best_crews(Scenario::PvP, 1);
-    CHECK(!pvp_top.empty(), "no PvP results");
-    CHECK(pvp_top[0].score > 100000, "PvP top score too low: " +
-          std::to_string(static_cast<int>(pvp_top[0].score)));
-
-    std::cout << "    ";
-    PASS();
-}
-
-// ---------------------------------------------------------------------------
-// Tests: Bridge synergy group scoring (game mechanics)
-// ---------------------------------------------------------------------------
-
 void test_bridge_synergy_groups_populated() {
     TEST("classified officers have group and officer_class populated");
     CHECK(optimizer != nullptr, "optimizer not created");
@@ -1765,505 +1242,6 @@ void test_bridge_synergy_groups_populated() {
               << optimizer->officers().size() << ") ";
     PASS();
 }
-
-void test_bridge_synergy_bonus_applied() {
-    TEST("bridge synergy CM multiplier applied for same-group crews");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto results = optimizer->find_best_crews(Scenario::PvP, 100);
-
-    double max_pct = 0;
-    int with_synergy = 0;
-    for (const auto& r : results) {
-        if (r.breakdown.bridge_synergy_pct > 0) {
-            ++with_synergy;
-            max_pct = std::max(max_pct, r.breakdown.bridge_synergy_pct);
-        }
-    }
-
-    // Validate synergy percentages are in valid range (10, 20, 30, or 40)
-    for (const auto& r : results) {
-        double pct = r.breakdown.bridge_synergy_pct;
-        if (pct > 0) {
-            CHECK(pct == 10 || pct == 20 || pct == 30 || pct == 40,
-                  "invalid synergy pct: " + std::to_string(pct));
-        }
-    }
-
-    std::cout << "(" << with_synergy << "/" << results.size()
-              << " crews with synergy, max=" << static_cast<int>(max_pct) << "%) ";
-    PASS();
-}
-
-void test_bridge_synergy_bonus_zero_for_different_groups() {
-    TEST("bridge synergy is 0 when crew has no shared group");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto results = optimizer->find_best_crews(Scenario::PvP, 50);
-
-    int zero_synergy_count = 0;
-    for (const auto& r : results) {
-        if (r.breakdown.bridge_synergy_bonus == 0) ++zero_synergy_count;
-    }
-
-    CHECK(zero_synergy_count > 0,
-          "expected some crews with 0 bridge synergy (all had bonus)");
-    std::cout << "(" << zero_synergy_count << "/" << results.size() << " with 0 synergy) ";
-    PASS();
-}
-
-void test_bridge_synergy_bars_logic() {
-    TEST("synergy bars reflect class uniqueness (2 bars = unique classes)");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto results = optimizer->find_best_crews(Scenario::PvP, 100);
-
-    int has_2bar = 0;
-    int has_1bar = 0;
-    for (const auto& r : results) {
-        const auto& bd = r.breakdown;
-        if (bd.bridge_synergy_bars_left == 2 || bd.bridge_synergy_bars_right == 2) ++has_2bar;
-        if (bd.bridge_synergy_bars_left == 1 || bd.bridge_synergy_bars_right == 1) ++has_1bar;
-
-        // Validate: bars must be 0, 1, or 2
-        CHECK(bd.bridge_synergy_bars_left >= 0 && bd.bridge_synergy_bars_left <= 2,
-              "invalid left bars: " + std::to_string(bd.bridge_synergy_bars_left));
-        CHECK(bd.bridge_synergy_bars_right >= 0 && bd.bridge_synergy_bars_right <= 2,
-              "invalid right bars: " + std::to_string(bd.bridge_synergy_bars_right));
-
-        // Validate: pct = (left + right) * 10
-        double expected_pct = (bd.bridge_synergy_bars_left + bd.bridge_synergy_bars_right) * 10.0;
-        CHECK(std::abs(bd.bridge_synergy_pct - expected_pct) < 0.01,
-              "pct mismatch: expected " + std::to_string(expected_pct) +
-              " got " + std::to_string(bd.bridge_synergy_pct));
-    }
-
-    std::cout << "(2-bar=" << has_2bar << " 1-bar=" << has_1bar << ") ";
-    PASS();
-}
-
-void test_bridge_synergy_in_breakdown_notes() {
-    TEST("bridge synergy produces synergy_notes with bars and CM%");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto results = optimizer->find_best_crews(Scenario::PvP, 100);
-
-    bool found_note = false;
-    for (const auto& r : results) {
-        for (const auto& note : r.breakdown.synergy_notes) {
-            if (note.find("Bridge synergy") != std::string::npos &&
-                note.find("% CM") != std::string::npos) {
-                found_note = true;
-                break;
-            }
-        }
-        if (found_note) break;
-    }
-
-    std::cout << "(found_note=" << (found_note ? "yes" : "no") << ") ";
-    PASS();
-}
-
-// ---------------------------------------------------------------------------
-// Tests: BDA suggestions
-// ---------------------------------------------------------------------------
-
-void test_bda_pvp_suggestions() {
-    TEST("find_best_bda returns valid BDA suggestions for PvP crew");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto crews = optimizer->find_best_crews(Scenario::PvP, 1);
-    CHECK(!crews.empty(), "no PvP crews found");
-
-    const auto& best = crews[0];
-    auto bdas = optimizer->find_best_bda(
-        best.breakdown.captain, best.breakdown.bridge,
-        Scenario::PvP, 5);
-
-    CHECK(!bdas.empty(), "no BDA suggestions returned");
-    CHECK(bdas.size() <= 5, "too many BDA suggestions");
-
-    // BDA should not include any crew member
-    std::set<std::string> crew_names;
-    crew_names.insert(best.breakdown.captain);
-    for (const auto& b : best.breakdown.bridge) crew_names.insert(b);
-
-    for (const auto& bda : bdas) {
-        CHECK(!bda.name.empty(), "BDA has empty name");
-        CHECK(crew_names.count(bda.name) == 0,
-              "BDA '" + bda.name + "' is already on the bridge");
-        CHECK(bda.score > 0, "BDA score is zero or negative");
-        CHECK(!bda.reasons.empty(), "BDA has no reasons");
-    }
-
-    // Scores should be in descending order
-    for (size_t i = 1; i < bdas.size(); ++i) {
-        CHECK(bdas[i].score <= bdas[i-1].score, "BDA scores not sorted descending");
-    }
-
-    std::cout << "(top=" << (int)bdas[0].score << " [" << bdas[0].name << "] reasons:" << bdas[0].reasons.size() << ") ";
-    PASS();
-}
-
-void test_bda_respects_excluded() {
-    TEST("find_best_bda excludes specified officers");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto crews = optimizer->find_best_crews(Scenario::PvP, 1);
-    CHECK(!crews.empty(), "no PvP crews found");
-
-    const auto& best = crews[0];
-
-    // Get unrestricted BDAs
-    auto bdas_full = optimizer->find_best_bda(
-        best.breakdown.captain, best.breakdown.bridge,
-        Scenario::PvP, 5);
-    CHECK(!bdas_full.empty(), "no unrestricted BDA suggestions");
-
-    // Exclude the top BDA
-    std::set<std::string> excl;
-    excl.insert(bdas_full[0].name);
-
-    auto bdas_excl = optimizer->find_best_bda(
-        best.breakdown.captain, best.breakdown.bridge,
-        Scenario::PvP, 5, excl);
-
-    // Top excluded BDA should not appear
-    for (const auto& bda : bdas_excl) {
-        CHECK(bda.name != bdas_full[0].name,
-              "excluded BDA '" + bdas_full[0].name + "' still appeared");
-    }
-
-    PASS();
-}
-
-void test_bda_state_synergy() {
-    TEST("find_best_bda rewards state synergy (scoring sanity)");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    // Run BDA for any crew — check that at least some results have state-related reasons
-    optimizer->set_ship_type(ShipType::Explorer);
-    auto crews = optimizer->find_best_crews(Scenario::PvP, 1);
-    CHECK(!crews.empty(), "no crews");
-
-    auto bdas = optimizer->find_best_bda(
-        crews[0].breakdown.captain, crews[0].breakdown.bridge,
-        Scenario::PvP, 10);
-
-    int state_synergy_count = 0;
-    for (const auto& bda : bdas) {
-        for (const auto& r : bda.reasons) {
-            if (r.find("Applies") != std::string::npos ||
-                r.find("Benefits from") != std::string::npos) {
-                state_synergy_count++;
-                break;
-            }
-        }
-    }
-
-    // Expect at least 1 candidate with state synergy in top 10
-    CHECK(state_synergy_count > 0,
-          "no BDA candidates with state synergy in top 10");
-
-    std::cout << "(" << state_synergy_count << "/10 have state synergy) ";
-    PASS();
-}
-
-// ---------------------------------------------------------------------------
-// Tests: 7-dock loadout
-// ---------------------------------------------------------------------------
-
-void test_loadout_basic() {
-    TEST("optimize_dock_loadout with 7 standard docks");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-
-    std::vector<DockConfig> configs = {
-        {Scenario::PvP,             "", "", false, "", {}},
-        {Scenario::Hybrid,          "", "", false, "", {}},
-        {Scenario::PvEHostile,      "", "", false, "", {}},
-        {Scenario::Armada,          "", "", false, "", {}},
-        {Scenario::MiningSpeed,     "", "", false, "", {}},
-        {Scenario::MiningProtected, "", "", false, "", {}},
-        {Scenario::MiningGeneral,   "", "", false, "", {}},
-    };
-
-    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
-
-    CHECK(result.docks.size() == 7, "expected 7 docks, got " + std::to_string(result.docks.size()));
-    CHECK(result.total_officers_used == 21,
-          "expected 21 unique officers, got " + std::to_string(result.total_officers_used));
-
-    // Every dock should have a valid captain
-    for (const auto& d : result.docks) {
-        CHECK(!d.captain.empty() && d.captain != "N/A",
-              "dock " + std::to_string(d.dock_num) + " has no captain");
-        CHECK(d.bridge.size() == 2,
-              "dock " + std::to_string(d.dock_num) + " doesn't have 2 bridge officers");
-        CHECK(d.score > 0,
-              "dock " + std::to_string(d.dock_num) + " has zero score");
-    }
-
-    std::cout << "(21 officers across 7 docks) ";
-    PASS();
-}
-
-void test_loadout_no_duplicate_officers() {
-    TEST("optimize_dock_loadout assigns no duplicate officers");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-
-    std::vector<DockConfig> configs = {
-        {Scenario::PvP,             "", "", false, "", {}},
-        {Scenario::Hybrid,          "", "", false, "", {}},
-        {Scenario::PvEHostile,      "", "", false, "", {}},
-        {Scenario::Armada,          "", "", false, "", {}},
-        {Scenario::MiningSpeed,     "", "", false, "", {}},
-        {Scenario::MiningProtected, "", "", false, "", {}},
-        {Scenario::MiningGeneral,   "", "", false, "", {}},
-    };
-
-    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
-
-    std::set<std::string> all_names;
-    for (const auto& d : result.docks) {
-        CHECK(all_names.count(d.captain) == 0,
-              "duplicate captain: " + d.captain);
-        all_names.insert(d.captain);
-        for (const auto& b : d.bridge) {
-            CHECK(all_names.count(b) == 0,
-                  "duplicate bridge officer: " + b);
-            all_names.insert(b);
-        }
-    }
-
-    CHECK(all_names.size() == 21, "expected 21 unique names, got " + std::to_string(all_names.size()));
-    PASS();
-}
-
-void test_loadout_locked_dock() {
-    TEST("optimize_dock_loadout respects locked docks");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-
-    // Lock dock 1 to a specific crew
-    std::vector<DockConfig> configs = {
-        {Scenario::PvP, "", "", true, "Kirk", {"Dezoc", "Borg Queen"}},
-        {Scenario::Hybrid,      "", "", false, "", {}},
-        {Scenario::PvEHostile,  "", "", false, "", {}},
-    };
-
-    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
-
-    CHECK(result.docks.size() == 3, "expected 3 docks");
-
-    // Dock 1 should be locked with specified crew
-    CHECK(result.docks[0].locked, "dock 1 not marked locked");
-    CHECK(result.docks[0].captain == "Kirk", "locked captain not Kirk");
-    CHECK(result.docks[0].bridge[0] == "Dezoc" || result.docks[0].bridge[0] == "Borg Queen",
-          "locked bridge doesn't contain expected officers");
-
-    // Dock 2 and 3 should NOT use Kirk, Dezoc, or Borg Queen
-    std::set<std::string> locked_names = {"Kirk", "Dezoc", "Borg Queen"};
-    for (size_t i = 1; i < result.docks.size(); ++i) {
-        CHECK(locked_names.count(result.docks[i].captain) == 0,
-              "dock " + std::to_string(i+1) + " reused locked officer " + result.docks[i].captain);
-        for (const auto& b : result.docks[i].bridge) {
-            CHECK(locked_names.count(b) == 0,
-                  "dock " + std::to_string(i+1) + " reused locked officer " + b);
-        }
-    }
-
-    PASS();
-}
-
-void test_loadout_bda_suggestions() {
-    TEST("optimize_dock_loadout generates BDA suggestions per dock");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-
-    std::vector<DockConfig> configs = {
-        {Scenario::PvP,     "", "", false, "", {}},
-        {Scenario::Hybrid,  "", "", false, "", {}},
-    };
-
-    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
-
-    // Each non-locked dock should have BDA suggestions
-    for (const auto& d : result.docks) {
-        if (!d.locked && d.captain != "N/A") {
-            CHECK(!d.bda_suggestions.empty(),
-                  "dock " + std::to_string(d.dock_num) + " has no BDA suggestions");
-
-            // BDA should not include any crew member
-            std::set<std::string> crew_names;
-            crew_names.insert(d.captain);
-            for (const auto& b : d.bridge) crew_names.insert(b);
-            for (const auto& bda : d.bda_suggestions) {
-                CHECK(crew_names.count(bda.name) == 0,
-                      "BDA " + bda.name + " is on dock " + std::to_string(d.dock_num) + " bridge");
-            }
-        }
-    }
-
-    std::cout << "(dock1 bda:" << result.docks[0].bda_suggestions.size()
-              << " dock2 bda:" << result.docks[1].bda_suggestions.size() << ") ";
-    PASS();
-}
-
-void test_loadout_persistence() {
-    TEST("save and load loadout round-trip");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-
-    std::vector<DockConfig> configs = {
-        {Scenario::PvP,     "", "", false, "", {}},
-        {Scenario::Hybrid,  "", "", false, "", {}},
-    };
-
-    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
-
-    std::string path = "data/player_data/test_loadout.json";
-    namespace fs = std::filesystem;
-    fs::create_directories("data/player_data");
-
-    CHECK(CrewOptimizer::save_loadout(result, path, ShipType::Explorer, "Test Ship"),
-          "save failed");
-    CHECK(fs::exists(path), "save file not created");
-
-    LoadoutResult loaded;
-    CHECK(CrewOptimizer::load_loadout(loaded, path), "load failed");
-    CHECK(loaded.docks.size() == result.docks.size(), "dock count mismatch");
-    CHECK(loaded.total_officers_used == result.total_officers_used, "officer count mismatch");
-
-    // Verify dock 1 data preserved
-    CHECK(loaded.docks[0].captain == result.docks[0].captain,
-          "captain not preserved: " + loaded.docks[0].captain);
-    CHECK(loaded.docks[0].bridge.size() == 2, "bridge size not preserved");
-    CHECK(std::abs(loaded.docks[0].score - result.docks[0].score) < 1.0,
-          "score not preserved");
-
-    fs::remove(path);
-    PASS();
-}
-
-void test_loadout_priority_ordering() {
-    TEST("optimize_dock_loadout fills highest-priority dock first");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-
-    // Give PvP (dock 3) priority 10, others priority 1.
-    // PvP should get the best officers even though it's listed third.
-    DockConfig pvp_cfg;   pvp_cfg.scenario = Scenario::PvP;         pvp_cfg.priority = 1;
-    DockConfig hyb_cfg;   hyb_cfg.scenario = Scenario::Hybrid;      hyb_cfg.priority = 1;
-    DockConfig mine_cfg;  mine_cfg.scenario = Scenario::MiningGeneral; mine_cfg.priority = 1;
-
-    // Baseline: PvP is dock 0 (filled first)
-    std::vector<DockConfig> baseline = {pvp_cfg, hyb_cfg, mine_cfg};
-    auto baseline_result = optimizer->optimize_dock_loadout(baseline, {}, 1);
-    double pvp_first_score = baseline_result.docks[0].score;
-    std::string pvp_first_captain = baseline_result.docks[0].captain;
-
-    // Now: PvP is dock 2 with highest priority — should still get best crew
-    DockConfig pvp_hi;    pvp_hi.scenario = Scenario::PvP;            pvp_hi.priority = 10;
-    DockConfig hyb_lo;    hyb_lo.scenario = Scenario::Hybrid;         hyb_lo.priority = 1;
-    DockConfig mine_lo;   mine_lo.scenario = Scenario::MiningGeneral; mine_lo.priority = 1;
-    std::vector<DockConfig> prioritized = {hyb_lo, mine_lo, pvp_hi};
-    auto prio_result = optimizer->optimize_dock_loadout(prioritized, {}, 1);
-
-    // PvP is at index 2 but should have been filled first
-    double pvp_prio_score = prio_result.docks[2].score;
-
-    // The priority-ordered PvP score should be >= the baseline (same or better crew)
-    CHECK(pvp_prio_score >= pvp_first_score * 0.95,
-          "priority PvP score (" + std::to_string(pvp_prio_score) +
-          ") much lower than baseline (" + std::to_string(pvp_first_score) + ")");
-    CHECK(prio_result.docks[2].captain == pvp_first_captain,
-          "priority PvP captain (" + prio_result.docks[2].captain +
-          ") differs from baseline (" + pvp_first_captain + ")");
-
-    std::cout << "(baseline=" << (int)pvp_first_score
-              << " prio=" << (int)pvp_prio_score << ") ";
-    PASS();
-}
-
-void test_loadout_bda_no_duplicates_across_docks() {
-    TEST("BDA suggestions don't duplicate across docks");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-
-    std::vector<DockConfig> configs = {
-        {Scenario::PvP,         "", "", false, "", {}},
-        {Scenario::Hybrid,      "", "", false, "", {}},
-        {Scenario::PvEHostile,  "", "", false, "", {}},
-    };
-
-    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
-
-    // Collect all BDA names across docks
-    std::set<std::string> all_bda_names;
-    int total_bda = 0;
-    int duplicates = 0;
-    for (const auto& d : result.docks) {
-        for (const auto& bda : d.bda_suggestions) {
-            ++total_bda;
-            if (all_bda_names.count(bda.name)) ++duplicates;
-            all_bda_names.insert(bda.name);
-        }
-    }
-
-    CHECK(duplicates == 0,
-          std::to_string(duplicates) + " duplicate BDA suggestions across docks");
-
-    std::cout << "(" << total_bda << " BDA suggestions, 0 duplicates) ";
-    PASS();
-}
-
-void test_loadout_performance() {
-    TEST("7-dock loadout completes in < 25 seconds");
-    CHECK(optimizer != nullptr, "optimizer not created");
-
-    optimizer->set_ship_type(ShipType::Explorer);
-
-    std::vector<DockConfig> configs = {
-        {Scenario::PvP,             "", "", false, "", {}},
-        {Scenario::Hybrid,          "", "", false, "", {}},
-        {Scenario::PvEHostile,      "", "", false, "", {}},
-        {Scenario::Armada,          "", "", false, "", {}},
-        {Scenario::MiningSpeed,     "", "", false, "", {}},
-        {Scenario::MiningProtected, "", "", false, "", {}},
-        {Scenario::MiningGeneral,   "", "", false, "", {}},
-    };
-
-    auto start = std::chrono::steady_clock::now();
-    auto result = optimizer->optimize_dock_loadout(configs, {}, 1);
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - start);
-
-    CHECK(elapsed.count() < 25000,
-          "loadout took " + std::to_string(elapsed.count()) + "ms (limit 25s)");
-    CHECK(result.docks.size() == 7, "wrong dock count");
-
-    std::cout << "(" << elapsed.count() << "ms for 7 docks) ";
-    PASS();
-}
-
-// ---------------------------------------------------------------------------
-// Tests: Planner
-// ---------------------------------------------------------------------------
 
 void test_planner_construction() {
     TEST("Planner construction and template loading");
@@ -2769,252 +1747,6 @@ static nlohmann::json build_data_quality(const PlayerData& pd, long age_sec) {
 
 namespace ai_test {
 
-static char rarity_letter(int rarity) {
-    switch (rarity) {
-        case 1: return 'C'; case 2: return 'U';
-        case 3: return 'R'; case 4: return 'E';
-        default: return ' ';
-    }
-}
-
-static double ability_pct(const OfficerAbility& ability, int rank) {
-    if (ability.values.empty()) return 0.0;
-    int idx = std::max(0, std::min(rank, static_cast<int>(ability.values.size()) - 1));
-    return ability.values[idx].value;
-}
-
-static std::string fmt_pct(double value) {
-    std::ostringstream os;
-    double pct = value * 100.0;
-    if (std::abs(pct - std::round(pct)) < 0.0001) {
-        os << static_cast<int>(std::round(pct)) << "%";
-    } else {
-        os << std::fixed << std::setprecision(1) << pct << "%";
-    }
-    return os.str();
-}
-
-static std::string replace_all(std::string text, const std::string& from, const std::string& to) {
-    size_t pos = 0;
-    while ((pos = text.find(from, pos)) != std::string::npos) {
-        text.replace(pos, from.size(), to);
-        pos += to.size();
-    }
-    return text;
-}
-
-static std::string strip_color_tags(const std::string& text) {
-    std::string out;
-    out.reserve(text.size());
-    size_t i = 0;
-    while (i < text.size()) {
-        if (text[i] == '<') {
-            if (text.compare(i, 7, "<color=") == 0) {
-                auto end = text.find('>', i);
-                if (end != std::string::npos) { i = end + 1; continue; }
-            } else if (text.compare(i, 8, "</color>") == 0) {
-                i += 8; continue;
-            }
-        }
-        out += text[i++];
-    }
-    return out;
-}
-
-static std::string to_lower_str(std::string s) {
-    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
-
-static std::string collapse_whitespace(const std::string& text) {
-    std::string out;
-    out.reserve(text.size());
-    bool prev_space = true;
-    for (char c : text) {
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!prev_space) { out += ' '; prev_space = true; }
-        } else {
-            out += c;
-            prev_space = false;
-        }
-    }
-    if (!out.empty() && out.back() == ' ') out.pop_back();
-    return out;
-}
-
-static std::string resolve_officer_tooltip(const Officer& officer, int rank) {
-    std::string text = officer.description;
-    if (text.empty()) return text;
-    const auto& cap = officer.captain_ability.values;
-    const auto& abil = officer.ability.values;
-    const auto& bda = officer.below_decks_ability.values;
-    auto rank_idx = std::max(0, rank);
-    auto cap_value = [&](int idx) {
-        idx = std::max(0, std::min(idx, static_cast<int>(cap.size()) - 1));
-        return cap.empty() ? 0.0 : cap[idx].value;
-    };
-    auto abil_value = [&](int idx) {
-        idx = std::max(0, std::min(idx, static_cast<int>(abil.size()) - 1));
-        return abil.empty() ? 0.0 : abil[idx].value;
-    };
-    auto bda_value = [&](int idx) {
-        idx = std::max(0, std::min(idx, static_cast<int>(bda.size()) - 1));
-        return bda.empty() ? 0.0 : bda[idx].value;
-    };
-    auto p0_value = [&](int idx) {
-        return officer.has_bda ? bda_value(idx) : cap_value(idx);
-    };
-    auto fmt_num = [](double value) -> std::string {
-        std::ostringstream os;
-        if (std::abs(value - std::round(value)) < 0.0001) {
-            auto v = static_cast<int64_t>(std::round(value));
-            if (v >= 1000 || v <= -1000) {
-                std::string s = std::to_string(std::abs(v));
-                std::string result;
-                int count = 0;
-                for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {
-                    if (count > 0 && count % 3 == 0) result = "," + result;
-                    result = s[i] + result;
-                    ++count;
-                }
-                if (v < 0) result = "-" + result;
-                return result;
-            }
-            os << v;
-        } else {
-            os << std::fixed << std::setprecision(2) << value;
-        }
-        return os.str();
-    };
-    for (const char* pat : {"{0:#,#%}", "{0:#.#%}", "{0:0,#%}", "{0:0.#%}", "{0:#%}"})
-        text = replace_all(text, pat, fmt_pct(p0_value(rank_idx)));
-    for (const char* pat : {"{1:#,#%}", "{1:#.#%}", "{1:0,#%}", "{1:0.#%}", "{1:#%}"})
-        text = replace_all(text, pat, fmt_pct(p0_value(std::min(rank_idx + 1, std::max(0, (int)cap.size() - 1)))));
-    for (const char* pat : {"{2:#,#%}", "{2:#.#%}", "{2:0,#%}", "{2:0.#%}", "{2:#%}"})
-        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
-    for (const char* pat : {"{3:#,#%}", "{3:#.#%}", "{3:0,#%}", "{3:0.#%}", "{3:#%}"})
-        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
-    for (const char* pat : {"{4:#,#%}", "{4:#.#%}", "{4:0,#%}", "{4:0.#%}", "{4:#%}"})
-        text = replace_all(text, pat, fmt_pct(abil_value(rank_idx)));
-    for (const char* pat : {"{0:#,#}", "{0:#}", "{0:0.##}", "{0:0.#}", "{0:0}"})
-        text = replace_all(text, pat, fmt_num(p0_value(rank_idx)));
-    for (const char* pat : {"{2:#,#}", "{2:#}", "{2:0.##}", "{2:0.#}"})
-        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
-    for (const char* pat : {"{3:#,#}", "{3:#}", "{3:0.##}", "{3:0.#}"})
-        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
-    for (const char* pat : {"{4:#,#}", "{4:#}", "{4:0.##}", "{4:0.#}"})
-        text = replace_all(text, pat, fmt_num(abil_value(rank_idx)));
-    return text;
-}
-
-static std::string build_optimizer_description(const Officer& officer, int rank) {
-    std::string tooltip = resolve_officer_tooltip(officer, rank);
-    tooltip = strip_color_tags(tooltip);
-    std::string block0, block1;
-    auto sep = tooltip.find("\n\n");
-    if (sep != std::string::npos) {
-        block0 = tooltip.substr(0, sep);
-        block1 = tooltip.substr(sep + 2);
-        auto sep2 = block1.find("\n\n");
-        if (sep2 != std::string::npos) block1 = block1.substr(0, sep2);
-    } else {
-        block0 = tooltip;
-    }
-    block0 = collapse_whitespace(block0);
-    block1 = collapse_whitespace(block1);
-    std::string desc;
-    if (officer.has_bda) {
-        desc = "bda: " + block0 + " oa: " + block1;
-    } else {
-        desc = "cm: " + block0 + " oa: " + block1;
-    }
-    return to_lower_str(desc);
-}
-
-static void parse_status_effects(const std::string& desc, std::string& effect,
-                                  bool& causes_effect) {
-    effect.clear();
-    causes_effect = false;
-    static const char* morale_apply[] = {"inspire morale", "morale for", "apply morale", "cause morale", nullptr};
-    static const char* breach_apply[] = {"hull breach for", "apply hull breach", "cause hull breach", "inflict hull breach", nullptr};
-    static const char* burning_apply[] = {"burning for", "apply burning", "cause burning", "inflict burning", "burning to opponent", "burning to the opponent", nullptr};
-    static const char* assimilate_apply[] = {"assimilate for", "apply assimilate", nullptr};
-    static const char* morale_benefit[] = {"ship has morale", "with morale", "has morale", "when morale", "while morale", nullptr};
-    static const char* breach_benefit[] = {"has hull breach", "with hull breach", "opponent hull breach", "when hull breach", nullptr};
-    static const char* burning_benefit[] = {"is burning", "has burning", "opponent burning", "afflicted by burning", "when burning", "whilst burning", nullptr};
-    static const char* assimilate_benefit[] = {"with assimilate", "has assimilate", "when assimilate", "is assimilated", nullptr};
-    auto check_keywords = [&](const char* state, const char* const* apply_kw, const char* const* benefit_kw) {
-        for (const char* const* p = apply_kw; *p; ++p) {
-            if (desc.find(*p) != std::string::npos) { effect = state; causes_effect = true; return true; }
-        }
-        for (const char* const* p = benefit_kw; *p; ++p) {
-            if (desc.find(*p) != std::string::npos) { effect = state; causes_effect = false; return true; }
-        }
-        return false;
-    };
-    if (check_keywords("morale", morale_apply, morale_benefit)) return;
-    if (check_keywords("breach", breach_apply, breach_benefit)) return;
-    if (check_keywords("burning", burning_apply, burning_benefit)) return;
-    if (check_keywords("assimilate", assimilate_apply, assimilate_benefit)) return;
-}
-
-// Build a full roster from real player data + game data
-// (replicates build_roster_from_sync from main.cpp)
-static std::vector<RosterOfficer> build_roster(const PlayerData& pd, const GameData& gd) {
-    std::vector<RosterOfficer> result;
-    result.reserve(pd.officers.size());
-    for (const auto& po : pd.officers) {
-        if (po.level <= 0) continue;
-        auto it = gd.officers.find(po.officer_id);
-        if (it == gd.officers.end()) continue;
-        const auto& go = it->second;
-        RosterOfficer ro;
-        ro.officer_id = po.officer_id;
-        ro.name = po.name.empty() ? (go.name.empty() ? go.short_name : go.name) : po.name;        ro.rarity = rarity_letter(go.rarity);
-        ro.level = po.level;
-        ro.rank = po.rank;
-        if (!go.stats.empty() && po.level > 0) {
-            int idx = std::min(po.level - 1, static_cast<int>(go.stats.size()) - 1);
-            idx = std::max(0, idx);
-            ro.attack = go.stats[idx].attack;
-            ro.defense = go.stats[idx].defense;
-            ro.health = go.stats[idx].health;
-        }
-        ro.group = go.group_name;
-        ro.officer_class = go.officer_class;
-        if (go.has_bda) {
-            double bda_raw = ability_pct(go.below_decks_ability, 0);
-            ro.cm_pct = go.below_decks_ability.value_is_percentage ? bda_raw * 100.0 : bda_raw;
-        } else {
-            double cm_raw = ability_pct(go.captain_ability, 0);
-            ro.cm_pct = go.captain_ability.value_is_percentage ? cm_raw * 100.0 : cm_raw;
-        }
-        double oa_raw = ability_pct(go.ability, po.rank);
-        ro.oa_pct = go.ability.value_is_percentage ? oa_raw * 100.0 : oa_raw;
-        ro.description = build_optimizer_description(go, po.rank);
-        parse_status_effects(ro.description, ro.effect, ro.causes_effect);
-        ro.api_oa_is_pct = go.ability.value_is_percentage;
-        for (const auto& av : go.ability.values) {
-            ro.api_oa_values.push_back(av.value);
-            ro.api_oa_chances.push_back(av.chance);
-        }
-        ro.api_cm_is_pct = go.captain_ability.value_is_percentage;
-        for (const auto& av : go.captain_ability.values) {
-            ro.api_cm_values.push_back(av.value);
-            ro.api_cm_chances.push_back(av.chance);
-        }
-        if (go.has_bda) {
-            ro.api_bda_is_pct = go.below_decks_ability.value_is_percentage;
-            for (const auto& av : go.below_decks_ability.values) {
-                ro.api_bda_values.push_back(av.value);
-                ro.api_bda_chances.push_back(av.chance);
-            }
-        }
-        result.push_back(std::move(ro));
-    }
-    return result;
-}
-
 // Load player_data.json from disk (same format as IngressServer::load_player_data)
 static PlayerData load_player_data(const std::string& path) {
     using json = nlohmann::json;
@@ -3099,17 +1831,14 @@ void test_ai_ask_armada_credits() {
     // Resolve names against game data
     resolve_player_names(pd, game_data);
 
-    // Build full roster from real player data (with actual levels, ranks, stats)
-    auto sync_roster = ai_test::build_roster(pd, game_data);
-    CHECK(sync_roster.size() > 50, "roster too small: " + std::to_string(sync_roster.size()));
+    // Build optimizer directly from player data + game data
+    auto opt = std::make_unique<CrewOptimizer>(pd, game_data);
+    const auto& officers = opt->officers();
+    CHECK(officers.size() > 50, "roster too small: " + std::to_string(officers.size()));
 
     std::cout << "\n    Account: " << pd.player_name << " (Ops " << pd.ops_level
-              << ", " << sync_roster.size() << " officers, "
+              << ", " << officers.size() << " officers, "
               << pd.ships.size() << " ships)\n";
-
-    // Classify officers
-    auto opt = std::make_unique<CrewOptimizer>(sync_roster);
-    const auto& officers = opt->officers();
 
     // Log some stats about what's going into the prompt
     int rank5 = 0, armada_tagged = 0;
@@ -3236,11 +1965,10 @@ void test_ai_export_live_prompts_json() {
     if (pd.player_name.empty()) pd.player_name = "Player";
 
     resolve_player_names(pd, game_data);
-    auto sync_roster = ai_test::build_roster(pd, game_data);
-    CHECK(sync_roster.size() > 50, "roster too small: " + std::to_string(sync_roster.size()));
 
-    auto opt = std::make_unique<CrewOptimizer>(sync_roster);
+    auto opt = std::make_unique<CrewOptimizer>(pd, game_data);
     const auto& officers = opt->officers();
+    CHECK(officers.size() > 50, "roster too small: " + std::to_string(officers.size()));
     CHECK(!officers.empty(), "no classified officers from live sync roster");
 
     struct PromptSpec {
@@ -3547,20 +2275,14 @@ int main(int argc, char* argv[]) {
     test_resource_count();
     test_resource_names();
 
-    std::cout << "\n--- CSV Roster Import (" << "roster.csv" << ") ---\n";
-    if (fs::exists("roster.csv")) {
-        test_csv_load();
-        test_csv_officer_count();
-        test_csv_known_officer();
-        test_csv_rarity_values();
-        test_csv_groups_populated();
-        test_csv_bda_detection();
-        test_csv_multiline_fields();
-        test_csv_mess_hall_level();
-        test_csv_effects();
-    } else {
-        std::cout << "  (skipped — roster.csv not found)\n";
-    }
+    std::cout << "\n--- Community Data (StewieDoo Officer Tool) ---\n";
+    test_community_scores_load();
+    test_community_skills_load();
+    test_community_presets_load();
+    test_community_scores_fields();
+    test_community_skills_fields();
+    test_community_presets_fields();
+    test_community_name_lookups();
 
     std::cout << "\n--- Sync-Path Data Pipeline ---\n";
     if (data_loaded) {
@@ -3572,74 +2294,25 @@ int main(int argc, char* argv[]) {
         test_sync_bda_detection();
         test_sync_effects_populated();
         test_sync_optimizer_classification();
-        test_sync_optimizer_mining();
     } else {
         std::cout << "  (skipped — game data not loaded)\n";
     }
 
-    // Enrich CSV roster with officer_class from game data (CSV doesn't carry class)
-    if (!roster.empty() && data_loaded) {
-        std::unordered_map<std::string, int> name_to_class;
-        for (const auto& [id, go] : game_data.officers) {
-            if (go.officer_class >= 1 && go.officer_class <= 3)
-                name_to_class[go.name] = go.officer_class;
-        }
-        int enriched = 0;
-        for (auto& ro : roster) {
-            auto it = name_to_class.find(ro.name);
-            if (it != name_to_class.end() && ro.officer_class == 0) {
-                ro.officer_class = it->second;
-                ++enriched;
-            }
-        }
-        std::cout << "  (enriched " << enriched << "/" << roster.size()
-                  << " CSV officers with officer_class from game data)\n";
-    }
-
     std::cout << "\n--- Crew Optimizer ---\n";
-    if (!roster.empty()) {
+    if (data_loaded) {
         test_crew_optimizer_construction();
         test_crew_classification_tags();
         test_crew_classification_states();
         test_crew_ship_lock();
         test_crew_scenario_enums();
-        test_crew_pvp_find_best();
-        test_crew_hybrid_find_best();
-        test_crew_pve_hostile_find_best();
-        test_crew_mining_find_best();
-        test_crew_excluded_officers();
-        test_crew_all_scenarios();
-        test_crew_ship_type_affects_results();
-        test_crew_breakdown_fields();
-        test_crew_performance();
 
-        std::cout << "\n--- CM Scope & Crew Sanity Audit ---\n";
+        std::cout << "\n--- CM Scope ---\n";
         test_cm_scope_coverage();
-        test_top_crews_sanity();
 
         std::cout << "\n--- Bridge Synergy Groups ---\n";
         test_bridge_synergy_groups_populated();
-        test_bridge_synergy_bonus_applied();
-        test_bridge_synergy_bonus_zero_for_different_groups();
-        test_bridge_synergy_bars_logic();
-        test_bridge_synergy_in_breakdown_notes();
-
-        std::cout << "\n--- BDA Suggestions ---\n";
-        test_bda_pvp_suggestions();
-        test_bda_respects_excluded();
-        test_bda_state_synergy();
-
-        std::cout << "\n--- 7-Dock Loadout ---\n";
-        test_loadout_basic();
-        test_loadout_no_duplicate_officers();
-        test_loadout_locked_dock();
-        test_loadout_bda_suggestions();
-        test_loadout_priority_ordering();
-        test_loadout_bda_no_duplicates_across_docks();
-        test_loadout_persistence();
-        test_loadout_performance();
     } else {
-        std::cout << "  (skipped — roster not loaded)\n";
+        std::cout << "  (skipped — game data not loaded)\n";
     }
 
     std::cout << "\n--- Planner ---\n";

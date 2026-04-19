@@ -1309,33 +1309,8 @@ MetaAnalysis AiCrewEngine::analyze_meta(
                                    scenario, ShipType::Explorer);
 
     std::vector<LocalCrewSummary> local_crews;
-    if (optimizer) {
-        static const std::vector<Scenario> meta_scenarios = {
-            Scenario::PvP, Scenario::Hybrid, Scenario::BaseCracker,
-            Scenario::PvEHostile, Scenario::Armada, Scenario::Loot,
-        };
-
-        for (auto sc : meta_scenarios) {
-            auto results = optimizer->find_best_crews(sc, 2);
-            for (const auto& cr : results) {
-                LocalCrewSummary lc;
-                lc.scenario = scenario_str(sc);
-                lc.captain = cr.breakdown.captain;
-                lc.bridge = cr.breakdown.bridge;
-                lc.score = cr.score;
-                lc.notes = cr.breakdown.synergy_notes;
-
-                for (const auto& off : officers) {
-                    if (off.name == cr.breakdown.captain && !off.group.empty()) {
-                        lc.synergy_group = off.group;
-                        break;
-                    }
-                }
-
-                local_crews.push_back(std::move(lc));
-            }
-        }
-    }
+    // Crew optimizer scoring removed — local_crews will be populated
+    // by community preset data in a future update.
 
     return advisor_->analyze_meta(scenario, snapshot, local_crews, stream_cb);
 }
