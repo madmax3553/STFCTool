@@ -1,5 +1,5 @@
 set_project("stfctool")
-set_version("0.5.0")
+set_version("0.6.0")
 
 set_languages("c++17")
 set_warnings("all", "error")
@@ -16,7 +16,7 @@ target("stfctool")
     set_kind("binary")
     set_filename("stfctool")
     set_rundir("$(projectdir)")
-    add_files("src/main.cpp", "src/data/*.cpp", "src/util/*.cpp", "src/core/*.cpp", "src/app/*.cpp")
+    add_files("src/main.cpp", "src/data/api_client.cpp", "src/data/ingress_server.cpp")
     add_includedirs("src")
     add_sysincludedirs("include")  -- vendored headers: suppress warnings
     add_packages("ftxui", "openssl")
