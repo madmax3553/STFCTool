@@ -286,6 +286,10 @@ bool ApiClient::fetch_research(GameData& data) {
             r.view_level = j.value("view_level", 0);
             r.unlock_level = j.value("unlock_level", 0);
             r.research_tree = j.value("research_tree", (int64_t)0);
+            r.generation = j.value("generation", 0);
+            r.row = j.value("row", 0);
+            r.column = j.value("column", 0);
+            r.doubler = j.value("doubler", false);
 
             if (j.contains("buffs") && j["buffs"].is_array()) {
                 for (auto& b : j["buffs"]) {
@@ -298,6 +302,60 @@ bool ApiClient::fetch_research(GameData& data) {
                         }
                     }
                     r.buffs.push_back(std::move(rb));
+                }
+            }
+
+            if (j.contains("levels") && j["levels"].is_array()) {
+                for (auto& l : j["levels"]) {
+                    ResearchLevel rl;
+                    rl.id = l.value("id", 0);
+                    rl.generation = l.value("generation", 0);
+                    rl.grade = l.value("grade", 0);
+                    rl.military_might = l.value("military_might", (int64_t)0);
+                    rl.research_time_seconds = l.value("research_time_in_seconds", 0);
+                    rl.hard_currency_cost = l.value("hard_currency_cost", 0);
+
+                    if (l.contains("resource_cost") && l["resource_cost"].is_object()) {
+                        for (auto& [rid, amount] : l["resource_cost"].items()) {
+                            ResearchCost rc;
+                            try {
+                                rc.resource_id = std::stoll(rid);
+                            } catch (...) {
+                                rc.resource_id = 0;
+                            }
+                            if (amount.is_number_integer()) {
+                                rc.amount = amount.get<int64_t>();
+                            } else if (amount.is_number()) {
+                                rc.amount = static_cast<int64_t>(amount.get<double>());
+                            }
+                            if (rc.resource_id != 0 && rc.amount > 0) {
+                                rl.costs.push_back(rc);
+                            }
+                        }
+                    }
+
+                    if (l.contains("requirements") && l["requirements"].is_array()) {
+                        for (auto& req : l["requirements"]) {
+                            ResearchRequirement rr;
+                            if (req.contains("requirement_type")) {
+                                auto& rt = req["requirement_type"];
+                                if (rt.is_string()) {
+                                    try {
+                                        rr.requirement_type = std::stoi(rt.get<std::string>());
+                                    } catch (...) {
+                                        rr.requirement_type = 0;
+                                    }
+                                } else if (rt.is_number_integer()) {
+                                    rr.requirement_type = rt.get<int>();
+                                }
+                            }
+                            rr.requirement_id = req.value("requirement_id", (int64_t)0);
+                            rr.requirement_level = req.value("requirement_level", 0);
+                            rl.requirements.push_back(std::move(rr));
+                        }
+                    }
+
+                    r.levels.push_back(std::move(rl));
                 }
             }
 
@@ -502,8 +560,8 @@ bool ApiClient::fetch_translations(GameData& data, const std::string& lang) {
                     if (trans_map.count(id_str)) {
                         auto& t = trans_map[id_str];
                         for (auto& [k, v] : t) {
-                            if (k.find("research_name_") == 0) research.name = v;
-                            else if (k.find("research_description_") == 0) research.description = v;
+                            if (k.find("research_project_name_") == 0 || k.find("research_name_") == 0) research.name = v;
+                            else if (k.find("research_project_description_") == 0 || k.find("research_description_") == 0) research.description = v;
                         }
                     }
                 }
@@ -513,7 +571,7 @@ bool ApiClient::fetch_translations(GameData& data, const std::string& lang) {
                     if (trans_map.count(id_str)) {
                         auto& t = trans_map[id_str];
                         for (auto& [k, v] : t) {
-                            if (k.find("building_name_") == 0) building.name = v;
+                            if (k.find("starbase_module_") == 0 || k.find("building_name_") == 0) building.name = v;
                             else if (k.find("building_description_") == 0) building.description = v;
                         }
                     }
@@ -524,7 +582,13 @@ bool ApiClient::fetch_translations(GameData& data, const std::string& lang) {
                     if (trans_map.count(id_str)) {
                         auto& t = trans_map[id_str];
                         for (auto& [k, v] : t) {
-                            if (k.find("resource_name_") == 0) resource.name = v;
+                            if (k.find("resource_name_short_") == 0) {
+                                if (resource.name.empty()) resource.name = v;
+                            } else if (k.find("resource_name_") == 0) {
+                                resource.name = v;
+                            } else if (k.find("resource_description_") == 0) {
+                                resource.description = v;
+                            }
                         }
                     }
                 }

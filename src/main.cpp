@@ -12,6 +12,7 @@
 #include <atomic>
 #include <mutex>
 #include <climits>
+#include <algorithm>
 
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
@@ -22,16 +23,47 @@
 #include "data/api_client.h"
 #include "data/ingress_server.h"
 #include "data/community_data.h"
+#include "app/account_snapshot.h"
+#include "app/action_planner.h"
 
 #include "tui/ui_common.h"
 #include "tui/tab_dashboard.h"
 #include "tui/tab_events.h"
 #include "tui/tab_sync.h"
+#include "tui/tab_plan.h"
 
 using namespace ftxui;
 namespace fs = std::filesystem;
 
 namespace stfc {
+
+static bool contains_unresolved_plan_label(const std::string& value) {
+    return value.find("Research#") != std::string::npos ||
+           value.find("Building#") != std::string::npos ||
+           value.find("Resource#") != std::string::npos ||
+           value.find("Ship#") != std::string::npos;
+}
+
+static bool action_plan_needs_regeneration(const ActionPlan& plan) {
+    if (plan.generated_at == 0 || plan.top_research.empty()) return true;
+
+    for (const auto& r : plan.top_research) {
+        if (contains_unresolved_plan_label(r.name) || r.description.empty()) return true;
+    }
+    for (const auto& a : plan.do_now) {
+        if (contains_unresolved_plan_label(a.action) ||
+            contains_unresolved_plan_label(a.reason)) return true;
+    }
+    for (const auto& s : plan.save_for) {
+        if (contains_unresolved_plan_label(s.target)) return true;
+    }
+    for (const auto& a : plan.avoid) {
+        if (contains_unresolved_plan_label(a.action) ||
+            contains_unresolved_plan_label(a.reason)) return true;
+    }
+
+    return false;
+}
 
 // ---------------------------------------------------------------------------
 // Application state
@@ -64,6 +96,8 @@ struct AppState {
     // Per-tab state
     EventsTabState events_state;
     SyncTabState sync_state;
+    PlanTabState plan_state;
+    ActionPlan action_plan;
 
     // Constructor: load cached data
     AppState() : api_client("data/game_data"), ingress_server("data/player_data", 8270) {
@@ -94,6 +128,14 @@ struct AppState {
                 std::to_string(community_data.officer_scores.size()) + " scored, " +
                 std::to_string(community_data.preset_crews.size()) + " crews";
         }
+
+        bool loaded_plan = load_action_plan(action_plan);
+        if (data_loaded && (!loaded_plan || action_plan_needs_regeneration(action_plan))) {
+            auto snapshot = build_full_snapshot(player_data, game_data);
+            action_plan = generate_action_plan(snapshot, 45, "growth");
+            save_action_plan(action_plan);
+            status_message += " | plan refreshed";
+        }
     }
 };
 
@@ -110,12 +152,13 @@ static Element render_help() {
         text("  h/l          Prev / Next view (Sync tab)"),
         text("  g/G          Jump to top / bottom"),
         text("  Ctrl+d/u     Half-page down / up"),
-        text("  1-3          Switch tab"),
+        text("  1-4          Switch tab"),
         separator(),
         text("Actions") | bold | color(Color::Cyan),
         text("  f            Cycle filter (Events)"),
         text("  r            Refresh game data"),
         text("  s            Toggle sync server"),
+        text("  p/P          Generate action plan"),
         text("  ?            Toggle this help"),
         text("  q            Quit"),
     }) | border;
@@ -148,8 +191,8 @@ int main() {
 
     // Tab structure
     int selected_tab = 0;
-    static const char* tab_labels[] = {"Dashboard", "Events", "Sync"};
-    static const int tab_count = 3;
+    static const char* tab_labels[] = {"Dashboard", "Events", "Sync", "Plan"};
+    static const int tab_count = 4;
 
     auto main_renderer = Renderer([&] {
         // Tab bar
@@ -173,6 +216,9 @@ int main() {
             case 2:
                 content = render_sync_tab(state->player_data, state->game_data,
                                           state->ingress_server, state->sync_state);
+                break;
+            case 3:
+                content = render_plan_tab(state->action_plan, state->plan_state);
                 break;
             default:
                 content = text("Unknown tab") | center;
@@ -209,6 +255,7 @@ int main() {
         if (event == Event::Character('1')) { selected_tab = 0; return true; }
         if (event == Event::Character('2')) { selected_tab = 1; return true; }
         if (event == Event::Character('3')) { selected_tab = 2; return true; }
+        if (event == Event::Character('4')) { selected_tab = 3; return true; }
 
         // Also keep Tab/Shift+Tab
         if (event == Event::Tab) {
@@ -264,6 +311,24 @@ int main() {
                     resolve_player_names(state->player_data, state->game_data);
                 }
             }
+            return true;
+        }
+
+        // Generate live action plan
+        if (event == Event::Character('p') || event == Event::Character('P')) {
+            state->player_data = state->ingress_server.get_player_data();
+            if (state->data_loaded) {
+                resolve_player_names(state->player_data, state->game_data);
+            }
+
+            auto snapshot = build_full_snapshot(state->player_data, state->game_data);
+            state->action_plan = generate_action_plan(snapshot, 45, "growth");
+            bool saved = save_action_plan(state->action_plan);
+            state->set_status("Plan generated: " +
+                std::to_string(state->action_plan.do_now.size()) + " ready, " +
+                std::to_string(std::min<size_t>(5, state->action_plan.top_research.size())) +
+                " research" + (saved ? "" : " (save failed)"));
+            selected_tab = 3;
             return true;
         }
 

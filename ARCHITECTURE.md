@@ -204,6 +204,14 @@ Gaps:
 
 ## Implementation Order
 
+### Product-Critical Track: Live Action Planner
+
+The highest-priority work is the live action planner described in
+`TODO_LIVE_ACTION_PLANNER.md`. This takes priority over crew-scoring cleanup
+because it is the core product loop: ingest current account data, run local
+domain analyzers, use small prompts, and output a practical todo list for the
+player's limited time.
+
 ### Phase A: Stabilize Stage 1 + Stage 2
 Fix what we have. Make the data layer reliable and the math layer
 produce correct, structured output per domain.

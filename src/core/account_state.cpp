@@ -469,7 +469,17 @@ std::string snapshot_to_json(const AccountSnapshot& snap, const SnapshotJsonOpti
         j["excluded"] = std::vector<std::string>(snap.excluded.begin(), snap.excluded.end());
     }
 
-    return j.dump();  // No indentation — compact for LLM
+    // GCC 16 can emit a false -Warray-bounds inside nlohmann::json::dump()
+    // when this translation unit is optimized and warnings are errors.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
+    std::string dumped = j.dump();  // No indentation — compact for LLM
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+    return dumped;
 }
 
 // ---------------------------------------------------------------------------

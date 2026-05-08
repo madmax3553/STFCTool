@@ -122,6 +122,23 @@ struct ResearchCost {
     int64_t amount = 0;
 };
 
+struct ResearchRequirement {
+    int requirement_type = 0;      // 1=building, 2=research; other values are kept as opaque blockers
+    int64_t requirement_id = 0;
+    int requirement_level = 0;
+};
+
+struct ResearchLevel {
+    int id = 0;                    // Level number for this research node
+    int generation = 0;
+    int grade = 0;
+    int64_t military_might = 0;
+    int research_time_seconds = 0;
+    int hard_currency_cost = 0;
+    std::vector<ResearchCost> costs;
+    std::vector<ResearchRequirement> requirements;
+};
+
 struct Research {
     int64_t id = 0;
     int art_id = 0;
@@ -129,7 +146,12 @@ struct Research {
     int view_level = 0;
     int unlock_level = 0;
     int64_t research_tree = 0;
+    int generation = 0;
+    int row = 0;
+    int column = 0;
+    bool doubler = false;
     std::vector<ResearchBuff> buffs;
+    std::vector<ResearchLevel> levels;
 
     // Translated
     std::string name;

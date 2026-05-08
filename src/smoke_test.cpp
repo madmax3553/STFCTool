@@ -39,6 +39,8 @@
 #include "core/officer_prompt.h"
 #include "core/strategic_prompt.h"
 #include "data/community_data.h"
+#include "app/account_snapshot.h"
+#include "app/action_planner.h"
 
 namespace fs = std::filesystem;
 using namespace stfc;
@@ -679,6 +681,63 @@ void test_research_has_trees() {
     PASS();
 }
 
+void test_research_levels_parsed() {
+    TEST("research levels include costs, requirements, and durations");
+    CHECK(data_loaded, "data not loaded");
+
+    int with_levels = 0;
+    int with_costs = 0;
+    int with_requirements = 0;
+    int with_time = 0;
+    for (auto& [id, r] : game_data.researches) {
+        if (!r.levels.empty()) {
+            with_levels++;
+            for (auto& l : r.levels) {
+                if (!l.costs.empty()) { with_costs++; break; }
+            }
+            for (auto& l : r.levels) {
+                if (!l.requirements.empty()) { with_requirements++; break; }
+            }
+            for (auto& l : r.levels) {
+                if (l.research_time_seconds > 0) { with_time++; break; }
+            }
+        }
+    }
+
+    CHECK(with_levels > 1000, "too few research nodes have levels: " + std::to_string(with_levels));
+    CHECK(with_costs > 500, "too few research nodes have costs: " + std::to_string(with_costs));
+    CHECK(with_requirements > 500, "too few research nodes have requirements: " + std::to_string(with_requirements));
+    CHECK(with_time > 500, "too few research nodes have durations: " + std::to_string(with_time));
+
+    std::cout << "(" << with_levels << " levels, " << with_costs << " costs, "
+              << with_requirements << " reqs, " << with_time << " timers) ";
+    PASS();
+}
+
+void test_research_names_and_descriptions() {
+    TEST("research translations include human-readable names and descriptions");
+    CHECK(data_loaded, "data not loaded");
+
+    int named = 0;
+    int described = 0;
+    for (auto& [id, r] : game_data.researches) {
+        if (!r.name.empty()) named++;
+        if (!r.description.empty()) described++;
+    }
+
+    CHECK(named > 1000, "too few research names: " + std::to_string(named));
+    CHECK(described > 1000, "too few research descriptions: " + std::to_string(described));
+
+    auto it = game_data.researches.find(1423296458);
+    CHECK(it != game_data.researches.end(), "known research 1423296458 missing");
+    CHECK(it->second.name == "Prime Weapons Drain",
+          "known research name unresolved: " + it->second.name);
+    CHECK(!it->second.description.empty(), "known research description unresolved");
+
+    std::cout << "(" << named << " names, " << described << " descriptions) ";
+    PASS();
+}
+
 // ---------------------------------------------------------------------------
 // Test: building data sanity
 // ---------------------------------------------------------------------------
@@ -717,6 +776,25 @@ void test_building_levels() {
 
     std::cout << "(" << with_levels << " with levels, " << with_costs << " with costs, "
               << with_build_time << " with build times) ";
+    PASS();
+}
+
+void test_building_names() {
+    TEST("building translations include human-readable names");
+    CHECK(data_loaded, "data not loaded");
+
+    int named = 0;
+    for (auto& [id, b] : game_data.buildings) {
+        if (!b.name.empty()) named++;
+    }
+
+    CHECK(named > 50, "too few building names: " + std::to_string(named));
+
+    auto it = game_data.buildings.find(0);
+    CHECK(it != game_data.buildings.end(), "known building 0 missing");
+    CHECK(!it->second.name.empty(), "known building 0 name unresolved");
+
+    std::cout << "(" << named << " names) ";
     PASS();
 }
 
@@ -1506,6 +1584,85 @@ void test_planner_helper_functions() {
     PASS();
 }
 
+static PlayerData build_synthetic_action_plan_player() {
+    PlayerData pd;
+    pd.ops_level = 80;
+    pd.player_name = "Planner Test";
+    pd.last_sync = std::chrono::system_clock::now();
+
+    for (const auto& [id, b] : game_data.buildings) {
+        (void)b;
+        PlayerBuilding pb;
+        pb.building_id = id;
+        pb.level = 100;
+        pd.buildings.push_back(pb);
+    }
+
+    for (const auto& [id, r] : game_data.resources) {
+        (void)r;
+        PlayerResource pr;
+        pr.resource_id = id;
+        pr.amount = 1000000000000LL;
+        pd.resources.push_back(pr);
+    }
+
+    return pd;
+}
+
+void test_action_planner_research_candidates() {
+    TEST("action planner builds affordable research candidates");
+    CHECK(data_loaded, "data not loaded");
+
+    auto pd = build_synthetic_action_plan_player();
+    resolve_player_names(pd, game_data);
+    auto snapshot = build_full_snapshot(pd, game_data);
+    auto candidates = analyze_research_candidates(snapshot, 45, "growth");
+
+    CHECK(!candidates.empty(), "no research candidates generated");
+    CHECK(candidates.front().name.find("Research#") != 0,
+          "top research candidate fell back to id: " + candidates.front().name);
+    CHECK(!candidates.front().description.empty(), "top research candidate description missing");
+
+    bool found_startable = false;
+    for (const auto& c : candidates) {
+        if (c.can_start_now && c.resources_available && c.prerequisites_met) {
+            found_startable = true;
+            break;
+        }
+    }
+    CHECK(found_startable, "no startable research candidate found");
+
+    std::cout << "(" << candidates.size() << " candidates, top="
+              << candidates.front().name << ") ";
+    PASS();
+}
+
+void test_action_plan_generation_and_persistence() {
+    TEST("action plan generates and persists research recommendations");
+    CHECK(data_loaded, "data not loaded");
+
+    auto pd = build_synthetic_action_plan_player();
+    resolve_player_names(pd, game_data);
+    auto snapshot = build_full_snapshot(pd, game_data);
+    auto plan = generate_action_plan(snapshot, 45, "growth");
+
+    CHECK(!plan.top_research.empty(), "top_research empty");
+    CHECK(!plan.do_now.empty(), "do_now empty");
+    CHECK(plan.generated_at > 0, "generated_at missing");
+
+    std::string path = "data/player_data/test_action_plan.json";
+    CHECK(save_action_plan(plan, path), "save_action_plan failed");
+    CHECK(fs::exists(path), "action plan file missing");
+
+    ActionPlan loaded;
+    CHECK(load_action_plan(loaded, path), "load_action_plan failed");
+    CHECK(loaded.top_research.size() == plan.top_research.size(), "top_research size mismatch");
+    CHECK(!loaded.do_now.empty(), "loaded do_now empty");
+
+    fs::remove(path);
+    PASS();
+}
+
 // ---------------------------------------------------------------------------
 // AI / LLM integration tests
 // ---------------------------------------------------------------------------
@@ -2266,10 +2423,13 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Research (" << game_data.researches.size() << ") ---\n";
     test_research_count();
     test_research_has_trees();
+    test_research_levels_parsed();
+    test_research_names_and_descriptions();
 
     std::cout << "\n--- Buildings (" << game_data.buildings.size() << ") ---\n";
     test_building_count();
     test_building_levels();
+    test_building_names();
 
     std::cout << "\n--- Resources (" << game_data.resources.size() << ") ---\n";
     test_resource_count();
@@ -2329,6 +2489,14 @@ int main(int argc, char* argv[]) {
     test_planner_completion_pct();
     test_planner_persistence();
     test_planner_weekly_persistence();
+
+    std::cout << "\n--- Live Action Planner ---\n";
+    if (data_loaded) {
+        test_action_planner_research_candidates();
+        test_action_plan_generation_and_persistence();
+    } else {
+        std::cout << "  (skipped — game data not loaded)\n";
+    }
 
     // AI tests (only when --ai flag is passed)
     if (ai_mode) {

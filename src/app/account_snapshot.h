@@ -118,7 +118,12 @@ struct ResolvedResearch {
     int current_level = 0;
     int unlock_level = 0;             // ops level required to see this
     int view_level = 0;
+    int generation = 0;
+    int row = 0;
+    int column = 0;
+    bool doubler = false;
     std::vector<ResearchBuff> buffs;  // what this research provides
+    std::vector<ResearchLevel> levels; // per-level costs, requirements, durations
 };
 
 // ---------------------------------------------------------------------------
@@ -265,9 +270,9 @@ struct FullAccountSnapshot {
     // Resolved entities (merged player state + game data)
     std::vector<ResolvedOfficer> officers;    // ALL known officers (owned flag distinguishes)
     std::vector<ResolvedShip> ships;          // player's ships only
-    std::vector<ResolvedResearch> research;   // player's research state
+    std::vector<ResolvedResearch> research;   // all known research with player current_level overlay
     std::vector<ResolvedBuilding> buildings;  // player's buildings
-    std::vector<ResolvedResource> resources;  // player's resources
+    std::vector<ResolvedResource> resources;  // all known resources with player amount overlay
     std::vector<ResolvedBuff> buffs;          // active buffs
     std::vector<ResolvedJob> jobs;            // active jobs (not completed)
     std::vector<ResolvedTech> tech;           // forbidden/chaos tech

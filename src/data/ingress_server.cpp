@@ -485,10 +485,8 @@ void IngressServer::run_server() {
         }
 
         // Log events per type
-        int total = 0;
         for (auto& [t, c] : type_counts) {
             add_sync_event(t, c, true);
-            total += c;
         }
         if (type_counts.empty()) {
             add_sync_event("empty", 0, true, "no typed records in payload");

@@ -145,20 +145,32 @@ static void resolve_ships(FullAccountSnapshot& snap,
 static void resolve_research(FullAccountSnapshot& snap,
                               const PlayerData& pd,
                               const GameData& gd) {
+    std::map<int64_t, const PlayerResearch*> player_map;
     for (const auto& pr : pd.researches) {
-        ResolvedResearch rr;
-        rr.id = pr.research_id;
-        rr.current_level = pr.level;
-        rr.name = pr.name;
+        player_map[pr.research_id] = &pr;
+    }
 
-        auto it = gd.researches.find(pr.research_id);
-        if (it != gd.researches.end()) {
-            const auto& res = it->second;
-            rr.description = res.description;
-            rr.research_tree = res.research_tree;
-            rr.unlock_level = res.unlock_level;
-            rr.view_level = res.view_level;
-            rr.buffs = res.buffs;
+    for (const auto& [id, res] : gd.researches) {
+        ResolvedResearch rr;
+        rr.id = id;
+        rr.name = res.name;
+        rr.description = res.description;
+        rr.research_tree = res.research_tree;
+        rr.unlock_level = res.unlock_level;
+        rr.view_level = res.view_level;
+        rr.generation = res.generation;
+        rr.row = res.row;
+        rr.column = res.column;
+        rr.doubler = res.doubler;
+        rr.buffs = res.buffs;
+        rr.levels = res.levels;
+
+        auto pit = player_map.find(id);
+        if (pit != player_map.end()) {
+            rr.current_level = pit->second->level;
+            if (!pit->second->name.empty()) {
+                rr.name = pit->second->name;
+            }
         }
 
         snap.research.push_back(std::move(rr));
@@ -210,20 +222,34 @@ static void resolve_buildings(FullAccountSnapshot& snap,
 static void resolve_resources(FullAccountSnapshot& snap,
                                const PlayerData& pd,
                                const GameData& gd) {
+    std::map<int64_t, const PlayerResource*> player_map;
     for (const auto& pr : pd.resources) {
-        ResolvedResource rr;
-        rr.id = pr.resource_id;
-        rr.amount = pr.amount;
-        rr.name = pr.name;
+        player_map[pr.resource_id] = &pr;
+    }
 
-        // Try game data for a better name if player name is a placeholder
-        if (rr.name.find("Resource#") == 0) {
-            auto it = gd.resources.find(pr.resource_id);
-            if (it != gd.resources.end()) {
-                rr.name = it->second.name;
+    for (const auto& [id, res] : gd.resources) {
+        ResolvedResource rr;
+        rr.id = id;
+        rr.name = res.name.empty() ? "Resource#" + std::to_string(id) : res.name;
+
+        auto pit = player_map.find(id);
+        if (pit != player_map.end()) {
+            rr.amount = pit->second->amount;
+            if (!pit->second->name.empty() && pit->second->name.find("Resource#") != 0) {
+                rr.name = pit->second->name;
             }
         }
 
+        snap.resources.push_back(std::move(rr));
+    }
+
+    // Preserve any player resources unknown to the current game cache.
+    for (const auto& pr : pd.resources) {
+        if (gd.resources.find(pr.resource_id) != gd.resources.end()) continue;
+        ResolvedResource rr;
+        rr.id = pr.resource_id;
+        rr.amount = pr.amount;
+        rr.name = pr.name.empty() ? "Resource#" + std::to_string(pr.resource_id) : pr.name;
         snap.resources.push_back(std::move(rr));
     }
 }
