@@ -530,7 +530,6 @@ bool IngressServer::start() {
 }
 
 void IngressServer::stop() {
-    if (!running_) return;
     stop_requested_ = true;
     // Tell httplib::Server to stop accepting connections
     if (server_ptr_) {
@@ -540,6 +539,7 @@ void IngressServer::stop() {
     if (server_thread_.joinable()) {
         server_thread_.join();
     }
+    running_ = false;
 }
 
 void IngressServer::save_player_data() {

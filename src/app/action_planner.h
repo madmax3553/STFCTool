@@ -30,18 +30,25 @@ struct ResearchCandidate {
     std::string name;
     std::string description;
     int64_t research_tree = 0;
+    std::string research_tree_name;
+    int row = 0;
+    int column = 0;
+    std::string location;
     int current_level = 0;
     int next_level = 0;
     int unlock_level = 0;
     int research_time_seconds = 0;
+    int hard_currency_cost = 0;
     int64_t military_might = 0;
     double local_score = 0.0;
     double percent_affordable = 0.0;
+    bool funding_unknown = false;
     bool prerequisites_met = false;
     bool resources_available = false;
     bool can_start_now = false;
     std::vector<PlannedResource> costs;
     std::vector<PlannedResource> missing_resources;
+    std::vector<PlanBlocker> requirements;
     std::vector<PlanBlocker> blockers;
     std::string reason;
 };
@@ -50,6 +57,7 @@ struct PlanAction {
     int priority = 0;
     std::string domain;
     std::string action;
+    std::string location;
     std::string reason;
     bool can_do_now = false;
     int duration_seconds = 0;
@@ -59,12 +67,14 @@ struct PlanAction {
 
 struct SaveForTarget {
     std::string target;
+    std::string location;
     std::string reason;
     std::vector<PlannedResource> missing_resources;
 };
 
 struct AvoidAction {
     std::string action;
+    std::string location;
     std::string reason;
 };
 

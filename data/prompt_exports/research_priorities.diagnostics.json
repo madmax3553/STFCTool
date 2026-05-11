@@ -1,0 +1,52 @@
+{
+  "data_quality": {
+    "missing": [
+      "active_ship_locations",
+      "dock_assignments",
+      "mining_node_state",
+      "research_focus"
+    ],
+    "present": [
+      "officers",
+      "ships",
+      "buildings",
+      "resources",
+      "forbidden_tech",
+      "inventory_items",
+      "active_jobs",
+      "missions",
+      "buffs",
+      "events",
+      "event_scores"
+    ],
+    "warnings": [
+      "Sync data is older than 10 minutes; prompt context may be stale.",
+      "No active ship location data; prompts assume all owned ships are generally available.",
+      "No mining node state; prompts cannot detect zeroed nodes, over-cargo status, or active mining assignments.",
+      "No research focus metadata; progression advice may be broad rather than tree-specific."
+    ]
+  },
+  "generated_at": "2026-05-10 11:12:34",
+  "player": {
+    "buildings": 109,
+    "last_sync": "2026-05-09 22:36:50",
+    "name": "Player",
+    "officers": 291,
+    "ops_level": 66,
+    "ships": 70,
+    "sync_age_seconds": 45344,
+    "sync_fresh": false,
+    "sync_status": "stale",
+    "techs": 27
+  },
+  "prompts": [
+    {
+      "generated_at": "2026-05-10 11:12:34",
+      "prompt_id": "research_priorities",
+      "scenario": "hybrid",
+      "ship_type": "explorer",
+      "sync_fresh": false,
+      "sync_status": "stale"
+    }
+  ]
+}

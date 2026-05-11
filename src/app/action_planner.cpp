@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 
 #include "json.hpp"
@@ -171,12 +172,148 @@ bool contains_word(const std::string& haystack, const std::string& needle) {
     return lower_h.find(lower_n) != std::string::npos;
 }
 
+std::string research_tree_name(int64_t tree_id) {
+    switch (tree_id) {
+        case 1870147103: return "Combat tree";
+        case 1868126734: return "Starship tree";
+        default: break;
+    }
+    return "Research screen";
+}
+
+std::string research_location(int64_t tree_id, int row, int column, int unlock_level) {
+    std::ostringstream out;
+    out << research_tree_name(tree_id);
+    if (row > 0 || column > 0) {
+        out << ", row " << row << ", column " << column;
+    }
+    if (unlock_level > 0) {
+        out << ", Ops " << unlock_level << "+";
+    }
+    return out.str();
+}
+
+std::string location_key(int64_t tree_id, int row, int column) {
+    return std::to_string(tree_id) + ":" + std::to_string(row) + ":" + std::to_string(column);
+}
+
+std::string with_neighbor_hint(std::string location,
+                               const std::string& previous,
+                               const std::string& next) {
+    if (!previous.empty() && !next.empty()) {
+        location += "; between " + previous + " and " + next;
+    } else if (!previous.empty()) {
+        location += "; after " + previous;
+    } else if (!next.empty()) {
+        location += "; before " + next;
+    }
+    return location;
+}
+
+bool can_afford_with_remaining(const ResearchCandidate& c,
+                               const std::map<int64_t, int64_t>& remaining) {
+    if (c.funding_unknown || c.costs.empty()) return false;
+    for (const auto& cost : c.costs) {
+        auto it = remaining.find(cost.resource_id);
+        const int64_t owned = it == remaining.end() ? 0 : it->second;
+        if (owned < cost.amount) return false;
+    }
+    return true;
+}
+
+void reserve_costs(const ResearchCandidate& c, std::map<int64_t, int64_t>& remaining) {
+    for (const auto& cost : c.costs) {
+        auto& amount = remaining[cost.resource_id];
+        amount = std::max<int64_t>(0, amount - cost.amount);
+    }
+}
+
+std::string build_candidate_reason(const ResearchCandidate& c,
+                                   bool idle_research_slot,
+                                   int time_budget_minutes);
+
+void refresh_candidate_budget(ResearchCandidate& c,
+                              const std::map<int64_t, int64_t>& remaining,
+                              bool idle_research_slot,
+                              int time_budget_minutes,
+                              bool note_after_priorities) {
+    c.missing_resources.clear();
+    bool resource_ok = true;
+    double affordable_sum = 0.0;
+    int affordable_count = 0;
+    for (auto& cost : c.costs) {
+        auto it = remaining.find(cost.resource_id);
+        cost.owned = it == remaining.end() ? 0 : it->second;
+        cost.missing = std::max<int64_t>(0, cost.amount - cost.owned);
+        if (cost.missing > 0) {
+            resource_ok = false;
+            c.missing_resources.push_back(cost);
+        }
+        if (cost.amount > 0) {
+            affordable_sum += std::min(1.0, static_cast<double>(cost.owned) / static_cast<double>(cost.amount));
+            affordable_count++;
+        }
+    }
+
+    c.resources_available = resource_ok && !c.funding_unknown && !c.costs.empty();
+    c.percent_affordable = c.funding_unknown
+        ? 0.0
+        : (affordable_count == 0 ? 1.0 : affordable_sum / static_cast<double>(affordable_count));
+    c.can_start_now = c.prerequisites_met && c.resources_available && idle_research_slot;
+    c.reason = build_candidate_reason(c, idle_research_slot, time_budget_minutes);
+    if (note_after_priorities && !c.resources_available && !c.funding_unknown &&
+        c.prerequisites_met && !c.missing_resources.empty()) {
+        c.reason = "after higher priorities, needs resources; " + c.reason;
+    }
+}
+
+bool add_candidate_once(std::vector<ResearchCandidate>& selected,
+                        std::set<int64_t>& selected_ids,
+                        ResearchCandidate candidate) {
+    if (selected_ids.count(candidate.id)) return false;
+    selected_ids.insert(candidate.id);
+    selected.push_back(std::move(candidate));
+    return true;
+}
+
+bool is_prime_research(const ResearchCandidate& c) {
+    return contains_word(c.name, "prime");
+}
+
+bool is_low_impact_research(const ResearchCandidate& c) {
+    const std::string text = c.name + " " + c.description;
+    if (contains_word(c.name, "mining xp")) return true;
+    if (contains_word(text, "ship xp") && contains_word(text, "mining")) return true;
+    if (contains_word(c.name, "avatar") || contains_word(c.name, "frame")) return true;
+    return false;
+}
+
+bool is_bulk_resource_name(const std::string& name) {
+    return contains_word(name, "parsteel") ||
+           contains_word(name, "tritanium") ||
+           contains_word(name, "dilithium");
+}
+
+double scarce_resource_penalty(const ResearchCandidate& c) {
+    double penalty = 0.0;
+    for (const auto& cost : c.costs) {
+        if (cost.amount <= 0 || cost.owned <= 0 || is_bulk_resource_name(cost.name)) continue;
+        const double share = static_cast<double>(cost.amount) / static_cast<double>(cost.owned);
+        if (share >= 0.90) penalty = std::max(penalty, 8.0);
+        else if (share >= 0.75) penalty = std::max(penalty, 5.0);
+    }
+    return penalty;
+}
+
 double keyword_score(const ResearchCandidate& c, const std::string& focus) {
     const std::string text = c.name + " " + c.description + " " + focus;
     double score = 0.0;
 
     if (contains_word(text, "ops") || contains_word(text, "operations") ||
         contains_word(text, "unlock") || contains_word(text, "r&d")) {
+        score += 12.0;
+    }
+    if (is_prime_research(c) && !is_low_impact_research(c)) {
         score += 12.0;
     }
     if (contains_word(text, "research") || contains_word(text, "build") ||
@@ -211,19 +348,23 @@ std::string build_candidate_reason(const ResearchCandidate& c,
                                    bool idle_research_slot,
                                    int time_budget_minutes) {
     std::vector<std::string> reasons;
+    if (c.funding_unknown) {
+        reasons.push_back("funding requirements not listed in cache");
+    }
+
     if (c.can_start_now) {
         reasons.push_back("can start now");
     } else if (c.resources_available && c.prerequisites_met) {
         reasons.push_back(idle_research_slot ? "ready when selected" : "resources ready, research queue busy");
     } else if (!c.prerequisites_met) {
         reasons.push_back("blocked by prerequisites");
-    } else {
+    } else if (!c.funding_unknown) {
         reasons.push_back("good save target");
     }
 
-    if (c.percent_affordable >= 1.0) {
+    if (!c.funding_unknown && c.percent_affordable >= 1.0) {
         reasons.push_back("fully funded");
-    } else if (c.percent_affordable >= 0.75) {
+    } else if (!c.funding_unknown && c.percent_affordable >= 0.75) {
         reasons.push_back("near-affordable");
     }
 
@@ -236,6 +377,12 @@ std::string build_candidate_reason(const ResearchCandidate& c,
 
     if (c.unlock_level > 0) {
         reasons.push_back("Ops " + std::to_string(c.unlock_level) + " research");
+    }
+    if (is_low_impact_research(c)) {
+        reasons.push_back("lower-impact utility");
+    }
+    if (scarce_resource_penalty(c) > 0.0 && c.resources_available) {
+        reasons.push_back("uses scarce special currency");
     }
 
     if (reasons.empty()) return "Ranked by affordability, prerequisites, and account impact.";
@@ -291,6 +438,9 @@ json candidate_to_json(const ResearchCandidate& c) {
     json missing = json::array();
     for (const auto& r : c.missing_resources) missing.push_back(resource_to_json(r));
 
+    json requirements = json::array();
+    for (const auto& b : c.requirements) requirements.push_back(blocker_to_json(b));
+
     json blockers = json::array();
     for (const auto& b : c.blockers) blockers.push_back(blocker_to_json(b));
 
@@ -299,18 +449,25 @@ json candidate_to_json(const ResearchCandidate& c) {
         {"name", c.name},
         {"description", c.description},
         {"research_tree", c.research_tree},
+        {"research_tree_name", c.research_tree_name},
+        {"row", c.row},
+        {"column", c.column},
+        {"location", c.location},
         {"current_level", c.current_level},
         {"next_level", c.next_level},
         {"unlock_level", c.unlock_level},
         {"research_time_seconds", c.research_time_seconds},
+        {"hard_currency_cost", c.hard_currency_cost},
         {"military_might", c.military_might},
         {"local_score", c.local_score},
         {"percent_affordable", c.percent_affordable},
+        {"funding_unknown", c.funding_unknown},
         {"prerequisites_met", c.prerequisites_met},
         {"resources_available", c.resources_available},
         {"can_start_now", c.can_start_now},
         {"costs", costs},
         {"missing_resources", missing},
+        {"requirements", requirements},
         {"blockers", blockers},
         {"reason", c.reason},
     };
@@ -322,23 +479,38 @@ ResearchCandidate candidate_from_json(const json& j) {
     c.name = j.value("name", "");
     c.description = j.value("description", "");
     c.research_tree = j.value("research_tree", (int64_t)0);
+    c.research_tree_name = j.value("research_tree_name", "");
+    c.row = j.value("row", 0);
+    c.column = j.value("column", 0);
+    c.location = j.value("location", "");
     c.current_level = j.value("current_level", 0);
     c.next_level = j.value("next_level", 0);
     c.unlock_level = j.value("unlock_level", 0);
     c.research_time_seconds = j.value("research_time_seconds", 0);
+    c.hard_currency_cost = j.value("hard_currency_cost", 0);
     c.military_might = j.value("military_might", (int64_t)0);
     c.local_score = j.value("local_score", 0.0);
     c.percent_affordable = j.value("percent_affordable", 0.0);
+    c.funding_unknown = j.value("funding_unknown", false);
     c.prerequisites_met = j.value("prerequisites_met", false);
     c.resources_available = j.value("resources_available", false);
     c.can_start_now = j.value("can_start_now", false);
     c.reason = j.value("reason", "");
+    if (c.research_tree_name.empty() && c.research_tree != 0) {
+        c.research_tree_name = research_tree_name(c.research_tree);
+    }
+    if (c.location.empty() && c.research_tree != 0) {
+        c.location = research_location(c.research_tree, c.row, c.column, c.unlock_level);
+    }
 
     if (j.contains("costs") && j["costs"].is_array()) {
         for (const auto& r : j["costs"]) c.costs.push_back(resource_from_json(r));
     }
     if (j.contains("missing_resources") && j["missing_resources"].is_array()) {
         for (const auto& r : j["missing_resources"]) c.missing_resources.push_back(resource_from_json(r));
+    }
+    if (j.contains("requirements") && j["requirements"].is_array()) {
+        for (const auto& b : j["requirements"]) c.requirements.push_back(blocker_from_json(b));
     }
     if (j.contains("blockers") && j["blockers"].is_array()) {
         for (const auto& b : j["blockers"]) c.blockers.push_back(blocker_from_json(b));
@@ -356,6 +528,7 @@ json action_to_json(const PlanAction& a) {
         {"priority", a.priority},
         {"domain", a.domain},
         {"action", a.action},
+        {"location", a.location},
         {"reason", a.reason},
         {"can_do_now", a.can_do_now},
         {"duration_seconds", a.duration_seconds},
@@ -369,6 +542,7 @@ PlanAction action_from_json(const json& j) {
     a.priority = j.value("priority", 0);
     a.domain = j.value("domain", "");
     a.action = j.value("action", "");
+    a.location = j.value("location", "");
     a.reason = j.value("reason", "");
     a.can_do_now = j.value("can_do_now", false);
     a.duration_seconds = j.value("duration_seconds", 0);
@@ -397,6 +571,12 @@ std::vector<ResearchCandidate> analyze_research_candidates(
     const auto s_levels = ship_levels(snapshot);
     const auto s_names = ship_names(snapshot);
     const bool idle_research_slot = snapshot.idle_research_slots > 0;
+    std::map<std::string, std::string> names_by_location;
+    for (const auto& research : snapshot.research) {
+        if (research.row <= 0 || research.column <= 0) continue;
+        names_by_location[location_key(research.research_tree, research.row, research.column)] =
+            fallback_name(research.name, "Research#", research.id);
+    }
 
     std::vector<ResearchCandidate> candidates;
     for (const auto& research : snapshot.research) {
@@ -416,11 +596,26 @@ std::vector<ResearchCandidate> analyze_research_candidates(
         c.name = fallback_name(research.name, "Research#", research.id);
         c.description = research.description;
         c.research_tree = research.research_tree;
+        c.research_tree_name = research_tree_name(research.research_tree);
+        c.row = research.row;
+        c.column = research.column;
+        c.location = research_location(
+            research.research_tree, research.row, research.column, research.unlock_level);
+        const auto previous = names_by_location.find(
+            location_key(research.research_tree, research.row, research.column - 1));
+        const auto next_neighbor = names_by_location.find(
+            location_key(research.research_tree, research.row, research.column + 1));
+        c.location = with_neighbor_hint(
+            c.location,
+            previous == names_by_location.end() ? "" : previous->second,
+            next_neighbor == names_by_location.end() ? "" : next_neighbor->second);
         c.current_level = research.current_level;
         c.next_level = next.id > 0 ? next.id : research.current_level + 1;
         c.unlock_level = research.unlock_level;
         c.research_time_seconds = next.research_time_seconds;
+        c.hard_currency_cost = next.hard_currency_cost;
         c.military_might = next.military_might;
+        c.funding_unknown = next.costs.empty();
 
         bool resource_ok = true;
         double affordable_sum = 0.0;
@@ -444,10 +639,10 @@ std::vector<ResearchCandidate> analyze_research_candidates(
                 affordable_count++;
             }
         }
-        c.resources_available = resource_ok;
-        c.percent_affordable = affordable_count == 0
-            ? 1.0
-            : affordable_sum / static_cast<double>(affordable_count);
+        c.resources_available = resource_ok && !c.funding_unknown;
+        c.percent_affordable = c.funding_unknown
+            ? 0.0
+            : (affordable_count == 0 ? 1.0 : affordable_sum / static_cast<double>(affordable_count));
 
         bool prereq_ok = true;
         if (snapshot.ops_level > 0 && research.unlock_level > snapshot.ops_level) {
@@ -458,21 +653,32 @@ std::vector<ResearchCandidate> analyze_research_candidates(
             blocker.current_level = snapshot.ops_level;
             blocker.met = false;
             blocker.id = 0;
+            c.requirements.push_back(blocker);
             c.blockers.push_back(std::move(blocker));
             prereq_ok = false;
+        } else if (snapshot.ops_level > 0 && research.unlock_level > 0) {
+            PlanBlocker requirement;
+            requirement.type = "ops";
+            requirement.name = "Operations";
+            requirement.required_level = research.unlock_level;
+            requirement.current_level = snapshot.ops_level;
+            requirement.met = true;
+            requirement.id = 0;
+            c.requirements.push_back(std::move(requirement));
         }
 
         for (const auto& req : next.requirements) {
-            auto blocker = evaluate_requirement(req, b_levels, b_names,
-                                                res_levels, res_names,
-                                                t_levels, s_levels, s_names);
-            if (!blocker.met) {
+            auto requirement = evaluate_requirement(req, b_levels, b_names,
+                                                    res_levels, res_names,
+                                                    t_levels, s_levels, s_names);
+            if (!requirement.met) {
                 prereq_ok = false;
-                c.blockers.push_back(std::move(blocker));
+                c.blockers.push_back(requirement);
             }
+            c.requirements.push_back(std::move(requirement));
         }
         c.prerequisites_met = prereq_ok;
-        c.can_start_now = prereq_ok && resource_ok && idle_research_slot;
+        c.can_start_now = prereq_ok && c.resources_available && idle_research_slot;
 
         c.local_score = 50.0;
         c.local_score += c.resources_available ? 25.0 : (c.percent_affordable * 16.0);
@@ -496,6 +702,9 @@ std::vector<ResearchCandidate> analyze_research_candidates(
             c.local_score += std::min(8.0, std::log10(static_cast<double>(c.military_might) + 1.0));
         }
         c.local_score += keyword_score(c, focus);
+        if (c.funding_unknown) c.local_score -= 30.0;
+        if (is_low_impact_research(c)) c.local_score -= 28.0;
+        c.local_score -= scarce_resource_penalty(c);
         if (!c.resources_available && c.percent_affordable < 0.25) c.local_score -= 10.0;
         if (!c.prerequisites_met && c.blockers.size() > 2) c.local_score -= 8.0;
 
@@ -544,30 +753,108 @@ ActionPlan generate_action_plan(const FullAccountSnapshot& snapshot,
     }
 
     const size_t top_count = std::min<size_t>(10, candidates.size());
-    plan.top_research.assign(candidates.begin(), candidates.begin() + top_count);
+    const bool idle_research_slot = snapshot.idle_research_slots > 0;
+    auto remaining_after_starts = resource_amounts(snapshot);
+    std::set<int64_t> selected_ids;
+    std::map<int64_t, int> selected_by_tree;
+
+    auto add_ready = [&](const ResearchCandidate& candidate, bool enforce_tree_cap) {
+        if (plan.top_research.size() >= 5 || selected_ids.count(candidate.id)) return false;
+        if (!candidate.can_start_now) return false;
+        if (enforce_tree_cap && selected_by_tree[candidate.research_tree] >= 3) return false;
+
+        ResearchCandidate pick = candidate;
+        refresh_candidate_budget(pick, remaining_after_starts, idle_research_slot,
+                                 time_budget_minutes, false);
+        if (!pick.can_start_now || !can_afford_with_remaining(pick, remaining_after_starts)) {
+            return false;
+        }
+
+        reserve_costs(pick, remaining_after_starts);
+        if (!add_candidate_once(plan.top_research, selected_ids, std::move(pick))) return false;
+        selected_by_tree[candidate.research_tree]++;
+        return true;
+    };
+
+    for (const auto& c : candidates) {
+        add_ready(c, true);
+        if (plan.top_research.size() >= 5) break;
+    }
+    for (const auto& c : candidates) {
+        add_ready(c, false);
+        if (plan.top_research.size() >= 5) break;
+    }
+
+    size_t prime_save_targets = 0;
+    for (const auto& c : candidates) {
+        if (plan.top_research.size() >= top_count || prime_save_targets >= 2) break;
+        if (!is_prime_research(c) || is_low_impact_research(c) || selected_ids.count(c.id)) {
+            continue;
+        }
+        ResearchCandidate pick = c;
+        refresh_candidate_budget(pick, remaining_after_starts, idle_research_slot,
+                                 time_budget_minutes, true);
+        if (add_candidate_once(plan.top_research, selected_ids, std::move(pick))) {
+            selected_by_tree[c.research_tree]++;
+            prime_save_targets++;
+        }
+    }
+
+    for (const auto& c : candidates) {
+        if (plan.top_research.size() >= top_count) break;
+        if (selected_ids.count(c.id)) continue;
+        if (selected_by_tree[c.research_tree] >= 4) continue;
+        ResearchCandidate pick = c;
+        refresh_candidate_budget(pick, remaining_after_starts, idle_research_slot,
+                                 time_budget_minutes, true);
+        if (!pick.missing_resources.empty() || !pick.can_start_now) {
+            if (add_candidate_once(plan.top_research, selected_ids, std::move(pick))) {
+                selected_by_tree[c.research_tree]++;
+            }
+        }
+    }
+
+    for (const auto& c : candidates) {
+        if (plan.top_research.size() >= top_count) break;
+        if (selected_ids.count(c.id)) continue;
+        ResearchCandidate pick = c;
+        refresh_candidate_budget(pick, remaining_after_starts, idle_research_slot,
+                                 time_budget_minutes, true);
+        if (add_candidate_once(plan.top_research, selected_ids, std::move(pick))) {
+            selected_by_tree[c.research_tree]++;
+        }
+    }
 
     int priority = 1;
-    for (const auto& c : candidates) {
+    std::set<int64_t> planned_start_ids;
+    for (const auto& c : plan.top_research) {
         if (!c.can_start_now) continue;
         PlanAction action;
         action.priority = priority++;
         action.domain = "research";
         action.action = "Start research: " + c.name + " L" + std::to_string(c.next_level);
+        action.location = c.location;
         action.reason = c.reason;
         action.can_do_now = true;
         action.duration_seconds = c.research_time_seconds;
         action.resources_spent = c.costs;
         plan.do_now.push_back(std::move(action));
+        planned_start_ids.insert(c.id);
         if (plan.do_now.size() >= 5) break;
     }
 
     for (const auto& c : candidates) {
-        if (c.missing_resources.empty()) continue;
-        if (!c.prerequisites_met && c.percent_affordable < 0.8) continue;
+        if (planned_start_ids.count(c.id)) continue;
+        ResearchCandidate target_candidate = c;
+        refresh_candidate_budget(target_candidate, remaining_after_starts, idle_research_slot,
+                                 time_budget_minutes, true);
+        if (target_candidate.missing_resources.empty()) continue;
+        if (!target_candidate.prerequisites_met && target_candidate.percent_affordable < 0.8) continue;
         SaveForTarget target;
-        target.target = "Research: " + c.name + " L" + std::to_string(c.next_level);
-        target.reason = c.reason;
-        target.missing_resources = c.missing_resources;
+        target.target = "Research: " + target_candidate.name + " L" + std::to_string(target_candidate.next_level);
+        target.location = target_candidate.location;
+        target.reason = target_candidate.reason;
+        target.missing_resources = target_candidate.missing_resources;
         plan.save_for.push_back(std::move(target));
         if (plan.save_for.size() >= 5) break;
     }
@@ -576,7 +863,10 @@ ActionPlan generate_action_plan(const FullAccountSnapshot& snapshot,
         if (it->can_start_now) continue;
         AvoidAction avoid;
         avoid.action = "Research: " + it->name + " L" + std::to_string(it->next_level);
-        if (!it->prerequisites_met) {
+        avoid.location = it->location;
+        if (it->funding_unknown) {
+            avoid.reason = "Funding requirements are not present in cached data; verify in game before prioritizing.";
+        } else if (!it->prerequisites_met) {
             avoid.reason = "Blocked by prerequisites; do not reserve scarce resources for it yet.";
         } else if (it->percent_affordable < 0.25) {
             avoid.reason = "Too far from affordable compared with higher-ranked candidates.";
@@ -613,6 +903,7 @@ bool save_action_plan(const ActionPlan& plan, const std::string& path) {
             for (const auto& r : s.missing_resources) missing.push_back(resource_to_json(r));
             j["save_for"].push_back({
                 {"target", s.target},
+                {"location", s.location},
                 {"reason", s.reason},
                 {"missing_resources", missing},
             });
@@ -620,7 +911,11 @@ bool save_action_plan(const ActionPlan& plan, const std::string& path) {
 
         j["avoid"] = json::array();
         for (const auto& a : plan.avoid) {
-            j["avoid"].push_back({{"action", a.action}, {"reason", a.reason}});
+            j["avoid"].push_back({
+                {"action", a.action},
+                {"location", a.location},
+                {"reason", a.reason},
+            });
         }
 
         std::ofstream out(path);
@@ -661,6 +956,7 @@ bool load_action_plan(ActionPlan& plan, const std::string& path) {
             for (const auto& s : j["save_for"]) {
                 SaveForTarget target;
                 target.target = s.value("target", "");
+                target.location = s.value("location", "");
                 target.reason = s.value("reason", "");
                 if (s.contains("missing_resources") && s["missing_resources"].is_array()) {
                     for (const auto& r : s["missing_resources"]) {
@@ -674,6 +970,7 @@ bool load_action_plan(ActionPlan& plan, const std::string& path) {
             for (const auto& a : j["avoid"]) {
                 AvoidAction avoid;
                 avoid.action = a.value("action", "");
+                avoid.location = a.value("location", "");
                 avoid.reason = a.value("reason", "");
                 plan.avoid.push_back(std::move(avoid));
             }

@@ -13,6 +13,7 @@
 #include <mutex>
 #include <climits>
 #include <algorithm>
+#include <chrono>
 
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
@@ -48,18 +49,33 @@ static bool action_plan_needs_regeneration(const ActionPlan& plan) {
     if (plan.generated_at == 0 || plan.top_research.empty()) return true;
 
     for (const auto& r : plan.top_research) {
-        if (contains_unresolved_plan_label(r.name) || r.description.empty()) return true;
+        if (contains_unresolved_plan_label(r.name) ||
+            r.description.empty() ||
+            r.location.empty() ||
+            r.location.find("Galaxy tree") != std::string::npos ||
+            r.location.find("Research tree ") != std::string::npos) return true;
+        if (r.costs.empty() && r.research_time_seconds <= 0 &&
+            !r.funding_unknown && r.resources_available) return true;
     }
     for (const auto& a : plan.do_now) {
         if (contains_unresolved_plan_label(a.action) ||
-            contains_unresolved_plan_label(a.reason)) return true;
+            contains_unresolved_plan_label(a.reason) ||
+            a.location.empty() ||
+            a.location.find("Galaxy tree") != std::string::npos ||
+            a.location.find("Research tree ") != std::string::npos) return true;
     }
     for (const auto& s : plan.save_for) {
-        if (contains_unresolved_plan_label(s.target)) return true;
+        if (contains_unresolved_plan_label(s.target) ||
+            s.location.empty() ||
+            s.location.find("Galaxy tree") != std::string::npos ||
+            s.location.find("Research tree ") != std::string::npos) return true;
     }
     for (const auto& a : plan.avoid) {
         if (contains_unresolved_plan_label(a.action) ||
-            contains_unresolved_plan_label(a.reason)) return true;
+            contains_unresolved_plan_label(a.reason) ||
+            a.location.empty() ||
+            a.location.find("Galaxy tree") != std::string::npos ||
+            a.location.find("Research tree ") != std::string::npos) return true;
     }
 
     return false;
@@ -130,11 +146,15 @@ struct AppState {
         }
 
         bool loaded_plan = load_action_plan(action_plan);
-        if (data_loaded && (!loaded_plan || action_plan_needs_regeneration(action_plan))) {
+        if (data_loaded &&
+            player_data.last_sync != std::chrono::system_clock::time_point{} &&
+            (!loaded_plan || action_plan_needs_regeneration(action_plan))) {
             auto snapshot = build_full_snapshot(player_data, game_data);
             action_plan = generate_action_plan(snapshot, 45, "growth");
             save_action_plan(action_plan);
             status_message += " | plan refreshed";
+        } else if (data_loaded && player_data.last_sync == std::chrono::system_clock::time_point{}) {
+            status_message += " | sync required for plan";
         }
     }
 };
@@ -321,6 +341,12 @@ int main() {
                 resolve_player_names(state->player_data, state->game_data);
             }
 
+            if (state->player_data.last_sync == std::chrono::system_clock::time_point{}) {
+                state->set_status("Sync required before generating research recommendations. Start sync with [S].");
+                selected_tab = 2;
+                return true;
+            }
+
             auto snapshot = build_full_snapshot(state->player_data, state->game_data);
             state->action_plan = generate_action_plan(snapshot, 45, "growth");
             bool saved = save_action_plan(state->action_plan);
@@ -360,6 +386,10 @@ int main() {
             }
             case 2: // Sync
                 return handle_sync_input(mapped != event ? mapped : event, state->sync_state);
+            case 3: // Plan
+                return handle_plan_input(mapped != event ? mapped : event,
+                                         state->plan_state,
+                                         static_cast<int>(state->action_plan.top_research.size()));
         }
 
         return false;

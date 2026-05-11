@@ -1622,15 +1622,39 @@ void test_action_planner_research_candidates() {
     CHECK(candidates.front().name.find("Research#") != 0,
           "top research candidate fell back to id: " + candidates.front().name);
     CHECK(!candidates.front().description.empty(), "top research candidate description missing");
+    CHECK(!candidates.front().location.empty(), "top research candidate location missing");
+    CHECK(candidates.front().row > 0 && candidates.front().column > 0,
+          "top research candidate row/column missing");
 
     bool found_startable = false;
+    bool found_funding_gap = false;
+    bool found_requirements = false;
+    bool found_fkr_mining_speed = false;
     for (const auto& c : candidates) {
         if (c.can_start_now && c.resources_available && c.prerequisites_met) {
             found_startable = true;
-            break;
+        }
+        if (c.name == "FKR Mining Speed") {
+            found_fkr_mining_speed = true;
+            CHECK(c.research_tree == 1868126734, "FKR Mining Speed tree id changed");
+            CHECK(c.row == 2 && c.column == 12, "FKR Mining Speed row/column mismatch");
+            CHECK(c.location.find("Starship tree") != std::string::npos,
+                  "FKR Mining Speed location did not use Starship tree: " + c.location);
+        }
+        if (c.costs.empty()) {
+            found_funding_gap = true;
+            CHECK(c.funding_unknown, c.name + " has no cached costs but was not marked funding_unknown");
+            CHECK(!c.resources_available, c.name + " has no cached costs but was marked funded");
+            CHECK(!c.can_start_now, c.name + " has no cached costs but was marked startable");
+        }
+        if (!c.requirements.empty()) {
+            found_requirements = true;
         }
     }
     CHECK(found_startable, "no startable research candidate found");
+    CHECK(found_funding_gap, "no empty-cost research candidate found to exercise funding gap handling");
+    CHECK(found_requirements, "no research requirements captured");
+    CHECK(found_fkr_mining_speed, "FKR Mining Speed candidate missing");
 
     std::cout << "(" << candidates.size() << " candidates, top="
               << candidates.front().name << ") ";
@@ -1649,6 +1673,37 @@ void test_action_plan_generation_and_persistence() {
     CHECK(!plan.top_research.empty(), "top_research empty");
     CHECK(!plan.do_now.empty(), "do_now empty");
     CHECK(plan.generated_at > 0, "generated_at missing");
+    CHECK(!plan.top_research.front().location.empty(), "top_research location missing");
+    std::set<int64_t> first_trees;
+    bool top_has_prime = false;
+    for (size_t i = 0; i < plan.top_research.size() && i < 5; ++i) {
+        first_trees.insert(plan.top_research[i].research_tree);
+    }
+    for (const auto& r : plan.top_research) {
+        if (r.name.find("Prime") != std::string::npos) top_has_prime = true;
+    }
+    CHECK(first_trees.size() >= 2, "top research first page is not tree-diversified");
+    CHECK(top_has_prime, "top research does not surface any Prime candidates");
+    CHECK(plan.top_research.front().name != "Prime Mining XP",
+          "low-impact Prime Mining XP should not be the top research recommendation");
+    auto plan_req_it = std::find_if(plan.top_research.begin(), plan.top_research.end(),
+                                    [](const ResearchCandidate& r) { return !r.requirements.empty(); });
+    CHECK(plan_req_it != plan.top_research.end(), "top_research requirements missing");
+    CHECK(!plan.do_now.front().location.empty(), "do_now location missing");
+    for (const auto& r : plan.top_research) {
+        CHECK(!r.funding_unknown || !r.can_start_now,
+              r.name + " has unknown funding but was marked startable");
+    }
+    std::map<int64_t, int64_t> planned_spend;
+    for (const auto& action : plan.do_now) {
+        for (const auto& resource : action.resources_spent) {
+            planned_spend[resource.resource_id] += resource.amount;
+        }
+    }
+    for (const auto& [resource_id, amount] : planned_spend) {
+        CHECK(amount <= 1000000000000LL,
+              "do_now over-reserved synthetic resource " + std::to_string(resource_id));
+    }
 
     std::string path = "data/player_data/test_action_plan.json";
     CHECK(save_action_plan(plan, path), "save_action_plan failed");
@@ -1658,6 +1713,13 @@ void test_action_plan_generation_and_persistence() {
     CHECK(load_action_plan(loaded, path), "load_action_plan failed");
     CHECK(loaded.top_research.size() == plan.top_research.size(), "top_research size mismatch");
     CHECK(!loaded.do_now.empty(), "loaded do_now empty");
+    CHECK(!loaded.top_research.front().location.empty(), "loaded top_research location missing");
+    size_t req_index = static_cast<size_t>(std::distance(plan.top_research.begin(), plan_req_it));
+    CHECK(loaded.top_research[req_index].requirements.size() == plan.top_research[req_index].requirements.size(),
+          "loaded top_research requirements size mismatch");
+    CHECK(loaded.top_research.front().funding_unknown == plan.top_research.front().funding_unknown,
+          "loaded top_research funding_unknown mismatch");
+    CHECK(!loaded.do_now.front().location.empty(), "loaded do_now location missing");
 
     fs::remove(path);
     PASS();
@@ -1862,8 +1924,19 @@ static nlohmann::json build_data_quality(const PlayerData& pd, long age_sec) {
     if (!pd.buffs.empty()) present.push_back("buffs");
     else missing.push_back("buffs");
 
-    missing.push_back("events");
-    missing.push_back("event_scores");
+    if (!pd.events.empty()) present.push_back("events");
+    else missing.push_back("events");
+
+    bool has_event_scores = false;
+    for (const auto& event : pd.events) {
+        if (event.ranking.score > 0.0 || event.ranking.rank > 0 || event.ranking.position > 0) {
+            has_event_scores = true;
+            break;
+        }
+    }
+    if (has_event_scores) present.push_back("event_scores");
+    else missing.push_back("event_scores");
+
     missing.push_back("active_ship_locations");
     missing.push_back("dock_assignments");
     missing.push_back("mining_node_state");
@@ -1884,7 +1957,12 @@ static nlohmann::json build_data_quality(const PlayerData& pd, long age_sec) {
     if (pd.missions.empty()) {
         warnings.push_back("No mission data; prompts cannot account for active mission progress.");
     }
-    warnings.push_back("No live event feed; prompts cannot optimize around today's event schedule or score thresholds.");
+    if (pd.events.empty()) {
+        warnings.push_back("No event data; prompts cannot optimize around today's event schedule.");
+    }
+    if (!has_event_scores) {
+        warnings.push_back("No event score data; prompts cannot optimize around event threshold progress.");
+    }
     warnings.push_back("No active ship location data; prompts assume all owned ships are generally available.");
     warnings.push_back("No mining node state; prompts cannot detect zeroed nodes, over-cargo status, or active mining assignments.");
     warnings.push_back("No research focus metadata; progression advice may be broad rather than tree-specific.");
@@ -1906,54 +1984,10 @@ namespace ai_test {
 
 // Load player_data.json from disk (same format as IngressServer::load_player_data)
 static PlayerData load_player_data(const std::string& path) {
-    using json = nlohmann::json;
-    PlayerData pd;
-    if (!fs::exists(path)) return pd;
-    std::ifstream f(path);
-    if (!f) return pd;
-    json j;
-    try { j = json::parse(f); } catch (...) { return pd; }
-    pd.ops_level = j.value("ops_level", 0);
-    pd.player_name = j.value("player_name", "");
-    if (j.contains("officers") && j["officers"].is_array()) {
-        for (auto& o : j["officers"]) {
-            PlayerOfficer po;
-            po.officer_id = o.value("oid", (int64_t)0);
-            po.level = o.value("level", 0);
-            po.rank = o.value("rank", 0);
-            po.shard_count = o.value("shard_count", 0);
-            pd.officers.push_back(po);
-        }
-    }
-    if (j.contains("ships") && j["ships"].is_array()) {
-        for (auto& s : j["ships"]) {
-            PlayerShip ps;
-            ps.ship_id = s.value("psid", (int64_t)0);
-            ps.hull_id = s.value("hull_id", (int64_t)0);
-            ps.tier = s.value("tier", 0);
-            ps.level = s.value("level", 0);
-            ps.level_percentage = s.value("level_pct", 0.0);
-            pd.ships.push_back(ps);
-        }
-    }
-    if (j.contains("techs") && j["techs"].is_array()) {
-        for (auto& t : j["techs"]) {
-            PlayerTech pt;
-            pt.tech_id = t.value("tid", (int64_t)0);
-            pt.tier = t.value("tier", 0);
-            pt.level = t.value("level", 0);
-            pd.techs.push_back(pt);
-        }
-    }
-    if (j.contains("buildings") && j["buildings"].is_array()) {
-        for (auto& b : j["buildings"]) {
-            PlayerBuilding pb;
-            pb.building_id = b.value("bid", (int64_t)0);
-            pb.level = b.value("level", 0);
-            pd.buildings.push_back(pb);
-        }
-    }
-    return pd;
+    auto dir = fs::path(path).parent_path();
+    if (dir.empty()) dir = ".";
+    IngressServer loader(dir.string(), 8270);
+    return loader.get_player_data();
 }
 
 } // namespace ai_test
@@ -2107,6 +2141,8 @@ void test_ai_export_live_prompts_json() {
 
     PlayerData pd = load_or_wait_for_sync();
     CHECK(!pd.officers.empty(), "no player officers in data/player_data/player_data.json");
+    CHECK(pd.last_sync != std::chrono::system_clock::time_point{},
+          "no sync timestamp in data/player_data/player_data.json; refresh sync before exporting prompts");
     long age_sec = sync_age_seconds(pd);
     bool has_last_sync = (pd.last_sync != std::chrono::system_clock::time_point{});
     bool sync_fresh = has_last_sync && age_sec >= 0 && age_sec <= 600;
@@ -2146,6 +2182,8 @@ void test_ai_export_live_prompts_json() {
          ""},
         {"strategic_assessment", "strategic", Scenario::Hybrid, ShipType::Explorer, 50,
          ""},
+        {"research_priorities", "research", Scenario::Hybrid, ShipType::Explorer, 50,
+         "What research do I need to do today in order of priority?"},
         {"crew_pvp_explorer", "crew", Scenario::PvP, ShipType::Explorer, 40,
          ""},
         {"crew_hybrid_explorer", "crew", Scenario::Hybrid, ShipType::Explorer, 40,
@@ -2205,6 +2243,8 @@ void test_ai_export_live_prompts_json() {
             req = stfc::build_officer_assessment_request(pd, game_data, officers);
         } else if (spec.mode == "strategic") {
             req = stfc::build_strategic_assessment_request(pd);
+        } else if (spec.mode == "research") {
+            req = stfc::build_research_priority_request(pd, game_data);
         } else if (spec.mode == "progression") {
             req = advisor.debug_build_progression_request(snapshot, spec.question_or_goal);
         } else {
