@@ -25,6 +25,17 @@ struct PlanBlocker {
     bool met = false;
 };
 
+struct SpeedupCoverage {
+    bool required = false;
+    bool evaluated = false;
+    bool enough = false;
+    int64_t required_seconds = 0;
+    int64_t available_seconds = 0;
+    int64_t shortage_seconds = 0;
+    std::string source;
+    std::string warning;
+};
+
 struct ResearchCandidate {
     int64_t id = 0;
     std::string name;
@@ -43,13 +54,18 @@ struct ResearchCandidate {
     double local_score = 0.0;
     double percent_affordable = 0.0;
     bool funding_unknown = false;
+    bool resource_balances_unknown = false;
     bool prerequisites_met = false;
     bool resources_available = false;
     bool can_start_now = false;
+    std::string research_bucket = "daily";       // daily, specialty_ship, prime
+    std::string funding_class = "standard";      // standard, f2p_grindable, purchase_or_event, level_locked
+    bool tracking_only = false;
     std::vector<PlannedResource> costs;
     std::vector<PlannedResource> missing_resources;
     std::vector<PlanBlocker> requirements;
     std::vector<PlanBlocker> blockers;
+    SpeedupCoverage speedups;
     std::string reason;
 };
 
@@ -61,6 +77,7 @@ struct PlanAction {
     std::string reason;
     bool can_do_now = false;
     int duration_seconds = 0;
+    SpeedupCoverage speedups;
     std::vector<PlannedResource> resources_spent;
     std::vector<PlannedResource> missing_resources;
 };

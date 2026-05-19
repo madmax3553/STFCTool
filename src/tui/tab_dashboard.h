@@ -4,6 +4,7 @@
 // ---------------------------------------------------------------------------
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <climits>
 
@@ -14,6 +15,79 @@
 namespace stfc {
 
 using namespace ftxui;
+
+inline bool dashboard_event_is_background(const PlayerEvent& e) {
+    return e.category == EventCategory::FieldTraining ||
+           e.category == EventCategory::FtCategory ||
+           e.category == EventCategory::Cutscenes ||
+           e.category == EventCategory::MinigameCategory ||
+           e.category == EventCategory::MinigameStage ||
+           e.category == EventCategory::LoopMuseum ||
+           e.category == EventCategory::LoopMuseumTask;
+}
+
+inline std::string dashboard_event_label(const PlayerEvent& e, const GameData& gd) {
+    if (!e.group_name.empty()) return e.group_name;
+
+    std::string scope = e.source.find("alliance") != std::string::npos ? "alliance" : "solo";
+    std::string exact_key = "config_id:" + e.config_id;
+    auto exact = gd.event_label_overrides.find(exact_key);
+    if (exact != gd.event_label_overrides.end() && !exact->second.empty()) return exact->second;
+
+    std::string family_key = "category:" + std::to_string(static_cast<int>(e.category)) +
+        "|priority:" + std::to_string(e.metadata.priority) + "|scope:" + scope;
+    auto family = gd.event_label_overrides.find(family_key);
+    if (family != gd.event_label_overrides.end() && !family->second.empty()) return family->second;
+
+    std::string label = scope == "alliance" ? "Alliance" : "Solo";
+    int64_t duration = e.schedule.end - e.schedule.start;
+    if (!e.schedule.term.empty() && e.schedule.term != "None") {
+        std::string term = e.schedule.term;
+        term[0] = static_cast<char>(std::toupper(term[0]));
+        label += " " + term;
+    } else if (duration >= 20LL * 24 * 3600) {
+        label += " Multiweek";
+    } else if (duration >= 6LL * 24 * 3600) {
+        label += " Weekly";
+    } else if (duration >= 20LL * 3600) {
+        label += " Daily";
+    }
+
+    std::string category = event_category_str(e.category);
+    if (category == "Unknown") category = "Category " + std::to_string(static_cast<int>(e.category));
+    if (category == "Special Event") category = "Special";
+    label += " " + category;
+    if (e.metadata.priority > 0) {
+        label += " #" + std::to_string(e.metadata.priority >= 100000
+            ? e.metadata.priority % 1000
+            : e.metadata.priority);
+    }
+    return label;
+}
+
+inline std::string dashboard_job_kind(const PlayerJob& job) {
+    if (job.research_id != 0) return "Research";
+    if (job.building_id != 0) return "Building";
+    return job_type_str(job.job_type);
+}
+
+inline std::string dashboard_job_target(const PlayerJob& job, const GameData& gd) {
+    if (job.research_id != 0) {
+        auto it = gd.researches.find(job.research_id);
+        std::string name = it != gd.researches.end() && !it->second.name.empty()
+            ? it->second.name
+            : "Research#" + std::to_string(job.research_id);
+        return name + " L" + std::to_string(job.level);
+    }
+    if (job.building_id != 0) {
+        auto it = gd.buildings.find(job.building_id);
+        std::string name = it != gd.buildings.end() && !it->second.name.empty()
+            ? it->second.name
+            : "Building#" + std::to_string(job.building_id);
+        return name + " L" + std::to_string(job.level);
+    }
+    return "Level " + std::to_string(job.level);
+}
 
 inline Element render_dashboard_tab(const PlayerData& pd, const GameData& gd, bool data_loaded) {
 
@@ -31,24 +105,45 @@ inline Element render_dashboard_tab(const PlayerData& pd, const GameData& gd, bo
 
     // --- Active Jobs (compact, one line each, max 3) ---
     Elements job_lines;
+    int64_t job_now = ui::now_epoch();
+    int completed_recent = 0;
+    int stale_unfinished = 0;
+    for (auto& j : pd.jobs) {
+        if (has_actionable_completed_job_claim(pd, j, job_now)) completed_recent++;
+        if (unfinished_job_is_stale(pd, j, job_now)) stale_unfinished++;
+    }
+    if (completed_recent > 0) {
+        job_lines.push_back(hbox({
+            text("  Claimable      "),
+            text(std::to_string(completed_recent) + " completed") | bold | color(Color::Green),
+        }));
+    }
     if (!pd.jobs.empty()) {
         int shown = 0;
         for (auto& j : pd.jobs) {
             if (j.completed || shown >= 3) continue;
+            if (!has_live_unfinished_job(pd, j, job_now)) continue;
             int rem = job_remaining_seconds(j);
-            if (rem < -3600) continue;
-            std::string type = job_type_str(j.job_type);
-            std::string time_s = rem > 0 ? format_duration_short(rem) : "DONE";
+            std::string type = dashboard_job_kind(j);
+            std::string time_s = rem > 0 ? format_duration_short(rem) : "READY";
             Color tc = rem > 0 ? (rem < 300 ? Color::Yellow : Color::White) : Color::Green;
             job_lines.push_back(hbox({
-                text("  " + ui::pad(type, 14)),
-                text(time_s) | bold | color(tc),
+                text("  " + ui::pad(ui::trunc(type, 10), 12)),
+                text(ui::pad(time_s, 9)) | bold | color(tc),
+                text(ui::trunc(dashboard_job_target(j, gd), 28)) | dim,
             }));
             shown++;
         }
     }
     if (job_lines.empty()) {
-        job_lines.push_back(text("  Queue empty") | dim);
+        bool has_job_sync = pd.last_job_sync != std::chrono::system_clock::time_point{};
+        std::string last_job = has_job_sync ? " last " + ui::fmt_time(pd.last_job_sync) : "";
+        if (stale_unfinished > 0) {
+            job_lines.push_back(text("  Active queues unknown: " + std::to_string(stale_unfinished) +
+                                     " stale raw job record(s)" + last_job) | color(Color::Yellow));
+        } else {
+            job_lines.push_back(text("  Active queues unknown; no recent job payload" + last_job) | color(Color::Yellow));
+        }
     }
 
     // --- Events summary ---
@@ -59,16 +154,17 @@ inline Element render_dashboard_tab(const PlayerData& pd, const GameData& gd, bo
         int soonest = INT_MAX;
         std::string soonest_name;
         for (auto& e : pd.events) {
+            if (dashboard_event_is_background(e)) continue;
             bool is_active = e.schedule.start > 0 && e.schedule.end > 0 &&
                              now >= e.schedule.start && now < e.schedule.end;
             bool is_upcoming = e.schedule.start > 0 && now < e.schedule.start;
             if (is_active) {
                 active++;
                 int rem = (int)(e.schedule.end - now);
-                if (rem < soonest) { soonest = rem; soonest_name = event_category_str(e.category); }
+                if (rem < soonest) { soonest = rem; soonest_name = dashboard_event_label(e, gd); }
             }
             if (is_upcoming) upcoming++;
-            if (e.entry_data.can_claim) claimable++;
+            if (e.has_manual_claimable_reward(now)) claimable++;
         }
         ev_lines.push_back(hbox({
             text("  Active ") | dim, text(std::to_string(active)) | bold | color(active > 0 ? Color::Green : Color::GrayDark),

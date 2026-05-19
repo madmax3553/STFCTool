@@ -339,6 +339,7 @@ enum class EventCategory {
     PlcBpSeason = 25,
     PlcBpEvent = 26,
     ProgressionReward = 27,
+    SpecialEvent = 28,
 };
 
 inline const char* event_category_str(EventCategory cat) {
@@ -371,6 +372,7 @@ inline const char* event_category_str(EventCategory cat) {
         case EventCategory::PlcBpSeason: return "PLC BP Season";
         case EventCategory::PlcBpEvent: return "PLC BP Event";
         case EventCategory::ProgressionReward: return "Progression Reward";
+        case EventCategory::SpecialEvent: return "Special Event";
         default: return "Unknown";
     }
 }
@@ -383,6 +385,7 @@ struct EventSchedule {
     int64_t end = 0;
     int64_t next_start = 0;
     int round_number = 0;
+    std::string term;
 };
 
 struct EventRanking {
@@ -427,6 +430,11 @@ struct EventMetadata {
     int battle_pass_type = 0;
     int meta_event_day = 0;
     int meta_event_section = 0;
+    struct ScoringInfo {
+        int id = 0;
+        std::string icon;
+    };
+    std::vector<ScoringInfo> scoring_info;
 };
 
 struct PlayerEvent {
@@ -458,11 +466,45 @@ struct PlayerEvent {
         if (schedule.end <= 0) return -1;
         return static_cast<int>(schedule.end - now);
     }
+
+    int reward_tier_count() const {
+        int count = 0;
+        for (const auto& segment : segments) {
+            count += static_cast<int>(segment.rewards.size());
+        }
+        return count;
+    }
+
+    bool has_manual_claimable_reward(int64_t now_epoch = 0) const {
+        if (!entry_data.can_claim) return false;
+        if (metadata.auto_reward || metadata.immediate_reward) return false;
+        if (reward_tier_count() <= 0) return false;
+
+        if (now_epoch <= 0) {
+            now_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+        }
+        if (schedule.start > 0 && now_epoch < schedule.start) return false;
+        if (schedule.end > 0 && now_epoch > schedule.end + 24LL * 3600) return false;
+        return true;
+    }
 };
 
 // ---------------------------------------------------------------------------
 // Aggregate game data cache
 // ---------------------------------------------------------------------------
+
+struct EventDataStatus {
+    int64_t checked_at = 0;
+    int cache_age_hours = -1;
+    int consumable_count = 0;
+    bool checked = false;
+    bool stale = true;
+    bool fallback_names = true;
+    bool reward_definitions_available = false;
+    std::string source;
+    std::string warning;
+};
 
 struct GameData {
     std::map<int64_t, Officer> officers;
@@ -477,6 +519,9 @@ struct GameData {
     std::map<std::string, std::map<std::string, std::string>> ship_translations;
     std::map<std::string, std::map<std::string, std::string>> research_translations;
     std::map<std::string, std::map<std::string, std::string>> building_translations;
+
+    EventDataStatus event_data_status;
+    std::map<std::string, std::string> event_label_overrides;
 };
 
 struct PlayerData {
@@ -497,7 +542,77 @@ struct PlayerData {
     int ops_level = 0;
     std::string player_name;
     std::chrono::system_clock::time_point last_sync;
+    std::chrono::system_clock::time_point last_job_sync;
 };
+
+inline int player_research_level(const PlayerData& pd, int64_t research_id) {
+    for (const auto& research : pd.researches) {
+        if (research.research_id == research_id) return research.level;
+    }
+    return -1;
+}
+
+inline int player_building_level(const PlayerData& pd, int64_t building_id) {
+    for (const auto& building : pd.buildings) {
+        if (building.building_id == building_id) return building.level;
+    }
+    return -1;
+}
+
+inline bool completed_job_already_reflected(const PlayerData& pd, const PlayerJob& job) {
+    if (!job.completed) return false;
+    if (job.research_id != 0) {
+        int current = player_research_level(pd, job.research_id);
+        if (current >= job.level) return true;
+    }
+    if (job.building_id != 0) {
+        int current = player_building_level(pd, job.building_id);
+        if (current >= job.level) return true;
+    }
+    return false;
+}
+
+inline bool has_actionable_completed_job_claim(const PlayerData& pd,
+                                               const PlayerJob& job,
+                                               int64_t now_epoch) {
+    if (!job.completed) return false;
+    if (job.start_time < now_epoch - 24LL * 3600) return false;
+    if (completed_job_already_reflected(pd, job)) return false;
+    return true;
+}
+
+inline int64_t player_last_sync_epoch(const PlayerData& pd) {
+    if (pd.last_sync == std::chrono::system_clock::time_point{}) return 0;
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        pd.last_sync.time_since_epoch()).count();
+}
+
+inline int64_t player_last_job_sync_epoch(const PlayerData& pd) {
+    if (pd.last_job_sync == std::chrono::system_clock::time_point{}) return 0;
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        pd.last_job_sync.time_since_epoch()).count();
+}
+
+inline int64_t job_finish_epoch(const PlayerJob& job) {
+    return job.start_time + job.duration - job.reduction;
+}
+
+inline bool unfinished_job_is_stale(const PlayerData& pd,
+                                    const PlayerJob& job,
+                                    int64_t now_epoch) {
+    if (job.completed) return false;
+    if (job.start_time <= 0 || job.duration <= 0) return false;
+    int64_t reference = player_last_sync_epoch(pd);
+    if (reference <= 0) reference = now_epoch;
+    if (reference <= 0) return false;
+    return job_finish_epoch(job) < reference - 3600;
+}
+
+inline bool has_live_unfinished_job(const PlayerData& pd,
+                                    const PlayerJob& job,
+                                    int64_t now_epoch) {
+    return !job.completed && !unfinished_job_is_stale(pd, job, now_epoch);
+}
 
 // ---------------------------------------------------------------------------
 // Community data (from StewieDoo Officer Tool spreadsheet)
@@ -686,11 +801,23 @@ inline void resolve_player_names(PlayerData& pd, const GameData& gd) {
 
 inline const char* job_type_str(int job_type) {
     switch (job_type) {
-        case 1: return "Research";
-        case 2: return "Building";
-        case 3: return "Ship Build";
-        case 4: return "Ship Upgrade";
-        case 5: return "Officer Training";
+        case 0: return "Ship Build";
+        case 1: return "Component";
+        case 2: return "Ship Refit";
+        case 3: return "Research";
+        case 4: return "Building";
+        case 5: return "Fleet Repair";
+        case 6: return "Refinery";
+        case 7: return "Base Repair";
+        case 8: return "Battle Report";
+        case 9: return "Mission";
+        case 10: return "Alliance Cooldown";
+        case 11: return "Ship Tier Up";
+        case 12: return "Ship Scrap";
+        case 13: return "Away Team";
+        case 14: return "IPVP Repair";
+        case 1000: return "Module Production";
+        case 1001: return "Mine Production";
         default: return "Unknown";
     }
 }

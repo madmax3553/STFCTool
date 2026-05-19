@@ -4,6 +4,7 @@
 // ---------------------------------------------------------------------------
 
 #include <algorithm>
+#include <string>
 #include <vector>
 
 #include "ftxui/dom/elements.hpp"
@@ -20,6 +21,93 @@ struct SyncTabState {
     int view = 0;       // 0-7
     int selected = 0;
 };
+
+struct SyncJobCounts {
+    int live = 0;
+    int raw = 0;
+    int ignored = 0;
+};
+
+inline bool sync_job_is_live(const PlayerData& pd, const PlayerJob& job, int64_t now) {
+    if (has_actionable_completed_job_claim(pd, job, now)) return true;
+    return has_live_unfinished_job(pd, job, now);
+}
+
+inline SyncJobCounts sync_job_counts(const PlayerData& pd, int64_t now) {
+    SyncJobCounts counts;
+    counts.raw = static_cast<int>(pd.jobs.size());
+    for (const auto& job : pd.jobs) {
+        if (sync_job_is_live(pd, job, now)) counts.live++;
+    }
+    counts.ignored = counts.raw - counts.live;
+    return counts;
+}
+
+inline std::string sync_job_kind(const PlayerJob& job) {
+    if (job.research_id != 0) return "Research";
+    if (job.building_id != 0) return "Building";
+    return job_type_str(job.job_type);
+}
+
+inline std::string sync_job_target(const PlayerJob& job, const GameData& gd) {
+    if (job.research_id != 0) {
+        auto it = gd.researches.find(job.research_id);
+        std::string name = it != gd.researches.end() && !it->second.name.empty()
+            ? it->second.name
+            : "Research#" + std::to_string(job.research_id);
+        return name + " L" + std::to_string(job.level);
+    }
+    if (job.building_id != 0) {
+        auto it = gd.buildings.find(job.building_id);
+        std::string name = it != gd.buildings.end() && !it->second.name.empty()
+            ? it->second.name
+            : "Building#" + std::to_string(job.building_id);
+        return name + " L" + std::to_string(job.level);
+    }
+    if (!job.uuid.empty()) return "Job " + job.uuid.substr(0, std::min<size_t>(8, job.uuid.size()));
+    return "Unknown target";
+}
+
+inline int sync_job_rank(const PlayerData& pd, const PlayerJob& job, int64_t now) {
+    if (has_actionable_completed_job_claim(pd, job, now)) return 0;
+    if (!job.completed) {
+        if (unfinished_job_is_stale(pd, job, now)) return 4;
+        int remaining = job_remaining_seconds(job);
+        if (remaining <= 0) return 1;
+        if (remaining > 0) return 2;
+    }
+    if (completed_job_already_reflected(pd, job)) return 3;
+    return 4;
+}
+
+inline std::string sync_job_status(const PlayerData& pd, const PlayerJob& job,
+                                   int64_t now, Color& color_out) {
+    if (has_actionable_completed_job_claim(pd, job, now)) {
+        color_out = Color::Green;
+        return "Claim";
+    }
+    if (job.completed && completed_job_already_reflected(pd, job)) {
+        color_out = Color::GrayDark;
+        return "Reflected";
+    }
+    if (job.completed) {
+        color_out = Color::GrayDark;
+        return "Stale";
+    }
+
+    if (unfinished_job_is_stale(pd, job, now)) {
+        color_out = Color::GrayDark;
+        return "Stale";
+    }
+
+    int remaining = job_remaining_seconds(job);
+    if (remaining <= 0) {
+        color_out = Color::Green;
+        return "Ready";
+    }
+    color_out = Color::Yellow;
+    return "Active";
+}
 
 inline Element render_sync_tab(const PlayerData& pd, const GameData& gd,
                                 IngressServer& server, SyncTabState& ss) {
@@ -41,15 +129,24 @@ inline Element render_sync_tab(const PlayerData& pd, const GameData& gd,
     });
 
     // Sub-view tabs
+    int64_t now = ui::now_epoch();
+    SyncJobCounts job_counts = sync_job_counts(pd, now);
+    std::string job_sync_label = pd.last_job_sync == std::chrono::system_clock::time_point{}
+        ? "never"
+        : ui::fmt_time(pd.last_job_sync);
     int counts[] = {
         (int)pd.officers.size(), (int)pd.ships.size(), (int)pd.resources.size(),
-        (int)pd.buildings.size(), (int)pd.researches.size(), (int)pd.jobs.size(),
+        (int)pd.buildings.size(), (int)pd.researches.size(), job_counts.live,
         (int)pd.buffs.size(), (int)pd.events.size()
     };
 
     Elements tabs;
     for (int i = 0; i < 8; i++) {
-        std::string label = std::string(labels[i]) + "(" + std::to_string(counts[i]) + ")";
+        std::string label = std::string(labels[i]) + "(" + std::to_string(counts[i]);
+        if (i == 5 && job_counts.raw != job_counts.live) {
+            label += "/" + std::to_string(job_counts.raw);
+        }
+        label += ")";
         auto tab = text(" " + label + " ");
         if (i == ss.view) tab = tab | bold | inverted;
         else if (counts[i] > 0) tab = tab | color(Color::Cyan);
@@ -60,6 +157,7 @@ inline Element render_sync_tab(const PlayerData& pd, const GameData& gd,
     // Data rows
     Elements rows;
     int max_rows = 0;
+    bool custom_empty_message = false;
 
     switch (ss.view) {
     case 0: { // Officers
@@ -166,20 +264,48 @@ inline Element render_sync_tab(const PlayerData& pd, const GameData& gd,
         break;
     }
     case 5: { // Jobs
-        rows.push_back(ui::tbl_header({{"Type", 16}, {"Status", 8}, {"Time", 12}, {"Lv", 5}}));
-        max_rows = (int)pd.jobs.size();
-        for (int i = 0; i < max_rows; i++) {
-            auto& j = pd.jobs[i];
-            std::string st; Color sc;
-            if (j.completed) { st = "Done"; sc = Color::Green; }
-            else { int rem = job_remaining_seconds(j); st = rem <= 0 ? "Ready" : "Active"; sc = rem <= 0 ? Color::Green : Color::Yellow; }
-            int rem = j.completed ? 0 : job_remaining_seconds(j);
-            auto row = hbox({
-                text(job_type_str(j.job_type)) | size(WIDTH, EQUAL, 16),
-                text(st) | bold | color(sc) | size(WIDTH, EQUAL, 8),
-                text(j.completed ? "-" : format_duration_short(rem)) | size(WIDTH, EQUAL, 12),
-                text(std::to_string(j.level)) | dim | size(WIDTH, EQUAL, 5),
+        rows.push_back(ui::tbl_header({{"Type", 12}, {"Status", 10}, {"Time", 12}, {"Target", 34}, {"Raw", 5}}));
+        if (job_counts.raw == 0) {
+            rows.push_back(text("  No job payload has been received by this sync target.") |
+                           color(Color::Yellow));
+            rows.push_back(text("  Treat building/research/ship queue state as manual/unknown.") | dim);
+            custom_empty_message = true;
+        }
+        rows.push_back(text("  Last job payload: " + job_sync_label) | dim);
+        if (job_counts.raw > 0 && job_counts.ignored > 0) {
+            rows.push_back(hbox({
+                text("  Live queue " + std::to_string(job_counts.live) + " / raw records " +
+                     std::to_string(job_counts.raw) + "; stale/reflected rows are ignored, active queues are unknown without a fresh job payload") | dim,
+            }));
+        }
+
+        auto sorted = pd.jobs;
+        std::stable_sort(sorted.begin(), sorted.end(),
+            [&pd, now](const PlayerJob& a, const PlayerJob& b) {
+                int ra = sync_job_rank(pd, a, now);
+                int rb = sync_job_rank(pd, b, now);
+                if (ra != rb) return ra < rb;
+                if (!a.completed && !b.completed) {
+                    return job_remaining_seconds(a) < job_remaining_seconds(b);
+                }
+                return a.start_time > b.start_time;
             });
+
+        max_rows = (int)sorted.size();
+        for (int i = 0; i < max_rows; i++) {
+            auto& j = sorted[i];
+            Color sc = Color::White;
+            std::string st = sync_job_status(pd, j, now, sc);
+            int rem = j.completed ? 0 : job_remaining_seconds(j);
+            bool live = sync_job_is_live(pd, j, now);
+            auto row = hbox({
+                text(ui::trunc(sync_job_kind(j), 10)) | size(WIDTH, EQUAL, 12),
+                text(st) | bold | color(sc) | size(WIDTH, EQUAL, 10),
+                text(j.completed ? "-" : format_duration_short(rem)) | size(WIDTH, EQUAL, 12),
+                text(ui::trunc(sync_job_target(j, gd), 32)) | size(WIDTH, EQUAL, 34),
+                text(live ? "live" : "raw") | dim | size(WIDTH, EQUAL, 5),
+            });
+            if (!live) row = row | dim;
             if (i == ss.selected) row = row | inverted | focus;
             rows.push_back(row);
         }
@@ -239,7 +365,7 @@ inline Element render_sync_tab(const PlayerData& pd, const GameData& gd,
                 text(st) | bold | color(sc) | size(WIDTH, EQUAL, 8),
                 text(e.ranking.score > 0 ? ui::fmt_num((int64_t)e.ranking.score) : "-") | size(WIDTH, EQUAL, 10),
                 text(rem > 0 ? ui::fmt_dur(rem) : "-") | size(WIDTH, EQUAL, 10),
-                text(e.entry_data.can_claim ? "!" : " ") | bold | color(Color::Green) | size(WIDTH, EQUAL, 2),
+                text(e.has_manual_claimable_reward(now) ? "!" : " ") | bold | color(Color::Green) | size(WIDTH, EQUAL, 2),
             });
             if (i == ss.selected) row = row | inverted | focus;
             rows.push_back(row);
@@ -248,7 +374,7 @@ inline Element render_sync_tab(const PlayerData& pd, const GameData& gd,
     }
     }
 
-    if (max_rows == 0) {
+    if (max_rows == 0 && !custom_empty_message) {
         rows.push_back(text("  No data — sync from STFC with community mod") | dim);
     }
     if (max_rows > 0) ss.selected = std::clamp(ss.selected, 0, max_rows - 1);

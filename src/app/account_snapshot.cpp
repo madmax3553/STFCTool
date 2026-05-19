@@ -1,6 +1,7 @@
 #include "app/account_snapshot.h"
 
 #include <algorithm>
+#include <set>
 
 namespace stfc {
 
@@ -150,6 +151,15 @@ static void resolve_research(FullAccountSnapshot& snap,
         player_map[pr.research_id] = &pr;
     }
 
+    std::map<int64_t, int> buff_levels;
+    for (const auto& pb : pd.buffs) {
+        if (pb.expired || pb.level <= 0) continue;
+        auto it = buff_levels.find(pb.buff_id);
+        if (it == buff_levels.end() || pb.level > it->second) {
+            buff_levels[pb.buff_id] = pb.level;
+        }
+    }
+
     for (const auto& [id, res] : gd.researches) {
         ResolvedResearch rr;
         rr.id = id;
@@ -164,12 +174,27 @@ static void resolve_research(FullAccountSnapshot& snap,
         rr.doubler = res.doubler;
         rr.buffs = res.buffs;
         rr.levels = res.levels;
+        rr.current_level = player_map.empty() ? -1 : 0;
 
         auto pit = player_map.find(id);
         if (pit != player_map.end()) {
             rr.current_level = pit->second->level;
             if (!pit->second->name.empty()) {
                 rr.name = pit->second->name;
+            }
+        } else {
+            int inferred_level = 0;
+            for (const auto& buff : res.buffs) {
+                auto bit = buff_levels.find(buff.id);
+                if (bit != buff_levels.end()) {
+                    inferred_level = std::max(inferred_level, bit->second);
+                }
+            }
+            if (inferred_level > 0) {
+                rr.current_level = std::min<int>(
+                    inferred_level,
+                    static_cast<int>(res.levels.size()));
+                snap.research_state_inferred = true;
             }
         }
 
@@ -184,11 +209,13 @@ static void resolve_research(FullAccountSnapshot& snap,
 static void resolve_buildings(FullAccountSnapshot& snap,
                                const PlayerData& pd,
                                const GameData& gd) {
+    std::set<int64_t> seen;
     for (const auto& pb : pd.buildings) {
         ResolvedBuilding rb;
         rb.id = pb.building_id;
         rb.current_level = pb.level;
         rb.name = pb.name;
+        seen.insert(pb.building_id);
 
         auto it = gd.buildings.find(pb.building_id);
         if (it != gd.buildings.end()) {
@@ -213,6 +240,16 @@ static void resolve_buildings(FullAccountSnapshot& snap,
 
         snap.buildings.push_back(std::move(rb));
     }
+
+    for (const auto& [id, bld] : gd.buildings) {
+        if (seen.count(id)) continue;
+        ResolvedBuilding rb;
+        rb.id = id;
+        rb.current_level = -1;
+        rb.name = bld.name.empty() ? "Building#" + std::to_string(id) : bld.name;
+        rb.description = bld.description;
+        snap.buildings.push_back(std::move(rb));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +263,10 @@ static void resolve_resources(FullAccountSnapshot& snap,
     for (const auto& pr : pd.resources) {
         player_map[pr.resource_id] = &pr;
     }
+    snap.resource_state_partial =
+        player_map.count(2325683920) == 0 ||  // Parsteel
+        player_map.count(743985951) == 0 ||   // Tritanium
+        player_map.count(2614028847) == 0;    // Dilithium
 
     for (const auto& [id, res] : gd.resources) {
         ResolvedResource rr;
@@ -288,16 +329,26 @@ static void resolve_buffs(FullAccountSnapshot& snap,
 static void resolve_jobs(FullAccountSnapshot& snap,
                           const PlayerData& pd,
                           const GameData& gd) {
+    auto now = std::chrono::system_clock::now();
+    int64_t now_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+        now.time_since_epoch()).count();
     int active_research = 0;
     int active_building = 0;
 
     for (const auto& pj : pd.jobs) {
         if (pj.completed) continue;  // skip completed jobs
+        if (!has_live_unfinished_job(pd, pj, now_epoch)) continue;
 
         ResolvedJob rj;
         rj.uuid = pj.uuid;
         rj.job_type = pj.job_type;
-        rj.job_type_name = job_type_str(pj.job_type);
+        if (pj.research_id != 0) {
+            rj.job_type_name = "Research";
+        } else if (pj.building_id != 0) {
+            rj.job_type_name = "Building";
+        } else {
+            rj.job_type_name = job_type_str(pj.job_type);
+        }
         rj.level = pj.level;
         rj.start_time = pj.start_time;
         rj.duration = pj.duration;
@@ -305,13 +356,13 @@ static void resolve_jobs(FullAccountSnapshot& snap,
         rj.completed = pj.completed;
 
         // Resolve target name
-        if (pj.job_type == 1 && pj.research_id != 0) {
+        if (pj.research_id != 0) {
             auto it = gd.researches.find(pj.research_id);
             if (it != gd.researches.end()) {
                 rj.target_name = it->second.name;
             }
             active_research++;
-        } else if (pj.job_type == 2 && pj.building_id != 0) {
+        } else if (pj.building_id != 0) {
             auto it = gd.buildings.find(pj.building_id);
             if (it != gd.buildings.end()) {
                 rj.target_name = it->second.name;
@@ -328,10 +379,16 @@ static void resolve_jobs(FullAccountSnapshot& snap,
 
     snap.active_job_count = static_cast<int>(snap.jobs.size());
 
-    // Idle slot estimation: assume 2 research slots and 2 building slots
-    // (This is a simplification; actual slot count depends on ops level and VIP)
-    snap.idle_research_slots = std::max(0, 2 - active_research);
-    snap.idle_building_slots = std::max(0, 2 - active_building);
+    // Idle slot estimation is only meaningful if the sync stream supplied
+    // a current unfinished job set. Missing job payloads are unknown, not idle.
+    if (snap.jobs.empty()) {
+        snap.idle_research_slots = -1;
+        snap.idle_building_slots = -1;
+    } else {
+        // Simplification: actual slot count depends on ops level and VIP.
+        snap.idle_research_slots = std::max(0, 2 - active_research);
+        snap.idle_building_slots = std::max(0, 2 - active_building);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -414,13 +471,10 @@ FullAccountSnapshot build_full_snapshot(const PlayerData& player_data,
                 re.remaining_seconds = static_cast<int>(pe.schedule.end - now_epoch);
             }
 
-            // Count reward tiers
-            for (const auto& seg : pe.segments) {
-                re.total_reward_tiers += static_cast<int>(seg.rewards.size());
-            }
+            re.total_reward_tiers = pe.reward_tier_count();
 
             if (re.state == EventState::Active) snap.active_event_count++;
-            if (pe.entry_data.can_claim) snap.claimable_event_count++;
+            if (pe.has_manual_claimable_reward(now_epoch)) snap.claimable_event_count++;
 
             snap.events.push_back(std::move(re));
         }

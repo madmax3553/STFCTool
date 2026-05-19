@@ -1,5 +1,6 @@
 #include "data/ingress_server.h"
 
+#include <algorithm>
 #include <fstream>
 #include <filesystem>
 #include <set>
@@ -109,31 +110,33 @@ void IngressServer::run_server() {
         std::map<std::string, int> type_counts;
 
         auto process_array = [&](const json& arr) {
-            std::lock_guard<std::mutex> lock(data_mutex_);
-
-            // If first sync, clear existing data for types present in this batch
-            std::set<std::string> types_in_batch;
-            for (auto& elem : arr) {
+            const auto received_at = std::chrono::system_clock::now();
+            bool saw_job_payload = false;
+            std::set<std::string> batch_types;
+            for (const auto& elem : arr) {
                 if (elem.contains("type") && elem["type"].is_string()) {
-                    types_in_batch.insert(elem["type"].get<std::string>());
+                    batch_types.insert(elem["type"].get<std::string>());
                 }
             }
+            std::lock_guard<std::mutex> lock(data_mutex_);
 
+            // Community Mod marks first sync per stream, not for the whole account.
+            // Clear only domains present in this payload so asynchronous first
+            // batches do not wipe unrelated data that arrived moments earlier.
             if (is_first_sync) {
-                for (auto& t : types_in_batch) {
-                    if (t == "officer") player_data_.officers.clear();
-                    else if (t == "ship") player_data_.ships.clear();
-                    else if (t == "research") player_data_.researches.clear();
-                    else if (t == "module") player_data_.buildings.clear();
-                    else if (t == "resource") player_data_.resources.clear();
-                    else if (t == "buff" || t == "expired_buff") player_data_.buffs.clear();
-                    else if (t == "job" || t == "completed_job") player_data_.jobs.clear();
-                    else if (t == "inventory") player_data_.inventory.clear();
-                    else if (t == "slot") player_data_.slots.clear();
-                    else if (t == "trait") player_data_.traits.clear();
-                    else if (t == "ft") player_data_.techs.clear();
-                    else if (t == "mission" || t == "active_mission") player_data_.missions.clear();
-                }
+                if (batch_types.count("officer")) player_data_.officers.clear();
+                if (batch_types.count("ship")) player_data_.ships.clear();
+                if (batch_types.count("research")) player_data_.researches.clear();
+                if (batch_types.count("module")) player_data_.buildings.clear();
+                if (batch_types.count("resource")) player_data_.resources.clear();
+                if (batch_types.count("buff") || batch_types.count("expired_buff")) player_data_.buffs.clear();
+                if (batch_types.count("job") || batch_types.count("completed_job")) player_data_.jobs.clear();
+                if (batch_types.count("inventory")) player_data_.inventory.clear();
+                if (batch_types.count("slot")) player_data_.slots.clear();
+                if (batch_types.count("trait")) player_data_.traits.clear();
+                if (batch_types.count("ft")) player_data_.techs.clear();
+                if (batch_types.count("mission") || batch_types.count("active_mission")) player_data_.missions.clear();
+                if (batch_types.count("platform_event")) player_data_.events.clear();
             }
 
             for (auto& elem : arr) {
@@ -252,6 +255,7 @@ void IngressServer::run_server() {
                     }
 
                 } else if (etype == "job") {
+                    saw_job_payload = true;
                     PlayerJob pj;
                     pj.uuid = elem.value("uuid", "");
                     pj.job_type = elem.value("job_type", 0);
@@ -273,6 +277,7 @@ void IngressServer::run_server() {
                     if (!found) player_data_.jobs.push_back(pj);
 
                 } else if (etype == "completed_job") {
+                    saw_job_payload = true;
                     std::string uuid = elem.value("uuid", "");
                     for (auto& existing : player_data_.jobs) {
                         if (existing.uuid == uuid) {
@@ -390,6 +395,9 @@ void IngressServer::run_server() {
                         pe.schedule.end = s.value("end", (int64_t)0);
                         pe.schedule.next_start = s.value("next_start", (int64_t)0);
                         pe.schedule.round_number = s.value("round_number", 0);
+                        if (s.contains("term") && s["term"].is_string()) {
+                            pe.schedule.term = s["term"].get<std::string>();
+                        }
                     }
 
                     if (elem.contains("ranking") && elem["ranking"].is_object()) {
@@ -424,6 +432,14 @@ void IngressServer::run_server() {
                         pe.metadata.battle_pass_type = m.value("battle_pass_type", 0);
                         pe.metadata.meta_event_day = m.value("meta_event_day", 0);
                         pe.metadata.meta_event_section = m.value("meta_event_section", 0);
+                        if (m.contains("scoring_info") && m["scoring_info"].is_array()) {
+                            for (auto& info : m["scoring_info"]) {
+                                EventMetadata::ScoringInfo si;
+                                si.id = info.value("id", 0);
+                                si.icon = info.value("icon", "");
+                                pe.metadata.scoring_info.push_back(std::move(si));
+                            }
+                        }
                     }
 
                     if (elem.contains("segments") && elem["segments"].is_array()) {
@@ -467,7 +483,10 @@ void IngressServer::run_server() {
                 // else: unknown type, counted but not processed
             }
 
-            player_data_.last_sync = std::chrono::system_clock::now();
+            player_data_.last_sync = received_at;
+            if (saw_job_payload) {
+                player_data_.last_job_sync = received_at;
+            }
         };
 
         if (j.is_array()) {
@@ -565,6 +584,10 @@ void IngressServer::save_player_data() {
         if (player_data_.last_sync != std::chrono::system_clock::time_point{}) {
             j["last_sync"] = std::chrono::duration_cast<std::chrono::seconds>(
                 player_data_.last_sync.time_since_epoch()).count();
+        }
+        if (player_data_.last_job_sync != std::chrono::system_clock::time_point{}) {
+            j["last_job_sync"] = std::chrono::duration_cast<std::chrono::seconds>(
+                player_data_.last_job_sync.time_since_epoch()).count();
         }
 
         json officers = json::array();
@@ -678,6 +701,7 @@ void IngressServer::save_player_data() {
                     {"end", ev.schedule.end},
                     {"next_start", ev.schedule.next_start},
                     {"round_number", ev.schedule.round_number},
+                    {"term", ev.schedule.term},
                 }},
                 {"ranking", {
                     {"id", ev.ranking.id},
@@ -693,14 +717,46 @@ void IngressServer::save_player_data() {
                     {"last_claimed", ev.entry_data.last_claimed_reward_index},
                     {"join_forbidden", ev.entry_data.join_forbidden},
                 }},
-                {"priority", ev.metadata.priority},
             };
-            // Segments (compact — just reward count for persistence)
-            ej["segment_count"] = static_cast<int>(ev.segments.size());
-            int total_rewards = 0;
-            for (auto& seg : ev.segments)
-                total_rewards += static_cast<int>(seg.rewards.size());
-            ej["reward_count"] = total_rewards;
+
+            json scoring = json::array();
+            for (auto& info : ev.metadata.scoring_info) {
+                scoring.push_back({{"id", info.id}, {"icon", info.icon}});
+            }
+            ej["metadata"] = {
+                {"is_auto_register", ev.metadata.is_auto_register},
+                {"auto_reward", ev.metadata.auto_reward},
+                {"immediate_reward", ev.metadata.immediate_reward},
+                {"is_cross_server", ev.metadata.is_cross_server},
+                {"cta", ev.metadata.cta},
+                {"priority", ev.metadata.priority},
+                {"icon_asset_id", ev.metadata.icon_asset_id},
+                {"battle_pass_link", ev.metadata.battle_pass_link},
+                {"battle_pass_resource_id", ev.metadata.battle_pass_resource_id},
+                {"battle_pass_type", ev.metadata.battle_pass_type},
+                {"meta_event_day", ev.metadata.meta_event_day},
+                {"meta_event_section", ev.metadata.meta_event_section},
+                {"scoring_info", scoring},
+            };
+
+            json segments = json::array();
+            for (auto& seg : ev.segments) {
+                json rewards = json::array();
+                for (auto& reward : seg.rewards) {
+                    rewards.push_back({
+                        {"position", reward.position},
+                        {"amount", reward.amount},
+                        {"type", reward.type},
+                        {"level", reward.level},
+                    });
+                }
+                segments.push_back({
+                    {"type", seg.type},
+                    {"values", seg.values},
+                    {"rewards", rewards},
+                });
+            }
+            ej["segments"] = segments;
             events.push_back(ej);
         }
         j["events"] = events;
@@ -731,6 +787,11 @@ void IngressServer::load_player_data() {
         if (j.contains("last_sync") && j["last_sync"].is_number()) {
             auto epoch_secs = j["last_sync"].get<int64_t>();
             player_data_.last_sync = std::chrono::system_clock::time_point(
+                std::chrono::seconds(epoch_secs));
+        }
+        if (j.contains("last_job_sync") && j["last_job_sync"].is_number()) {
+            auto epoch_secs = j["last_job_sync"].get<int64_t>();
+            player_data_.last_job_sync = std::chrono::system_clock::time_point(
                 std::chrono::seconds(epoch_secs));
         }
 
@@ -817,6 +878,16 @@ void IngressServer::load_player_data() {
                 pj.completed = jb.value("completed", false);
                 player_data_.jobs.push_back(pj);
             }
+            if (player_data_.last_job_sync == std::chrono::system_clock::time_point{}) {
+                int64_t latest_job_start = 0;
+                for (const auto& job : player_data_.jobs) {
+                    latest_job_start = std::max(latest_job_start, job.start_time);
+                }
+                if (latest_job_start > 0) {
+                    player_data_.last_job_sync = std::chrono::system_clock::time_point(
+                        std::chrono::seconds(latest_job_start));
+                }
+            }
         }
         if (j.contains("inventory") && j["inventory"].is_array()) {
             player_data_.inventory.clear();
@@ -892,6 +963,9 @@ void IngressServer::load_player_data() {
                     pe.schedule.end = s.value("end", (int64_t)0);
                     pe.schedule.next_start = s.value("next_start", (int64_t)0);
                     pe.schedule.round_number = s.value("round_number", 0);
+                    if (s.contains("term") && s["term"].is_string()) {
+                        pe.schedule.term = s["term"].get<std::string>();
+                    }
                 }
                 if (ev.contains("ranking") && ev["ranking"].is_object()) {
                     auto& r = ev["ranking"];
@@ -910,6 +984,55 @@ void IngressServer::load_player_data() {
                     pe.entry_data.join_forbidden = e.value("join_forbidden", 0);
                 }
                 pe.metadata.priority = ev.value("priority", (int64_t)0);
+                if (ev.contains("metadata") && ev["metadata"].is_object()) {
+                    auto& m = ev["metadata"];
+                    pe.metadata.is_auto_register = m.value("is_auto_register", false);
+                    pe.metadata.auto_reward = m.value("auto_reward", false);
+                    pe.metadata.immediate_reward = m.value("immediate_reward", false);
+                    pe.metadata.is_cross_server = m.value("is_cross_server", false);
+                    pe.metadata.cta = m.value("cta", (int64_t)0);
+                    pe.metadata.priority = m.value("priority", pe.metadata.priority);
+                    pe.metadata.icon_asset_id = m.value("icon_asset_id", "");
+                    pe.metadata.battle_pass_link = m.value("battle_pass_link", "");
+                    pe.metadata.battle_pass_resource_id = m.value("battle_pass_resource_id", "");
+                    pe.metadata.battle_pass_type = m.value("battle_pass_type", 0);
+                    pe.metadata.meta_event_day = m.value("meta_event_day", 0);
+                    pe.metadata.meta_event_section = m.value("meta_event_section", 0);
+                    if (m.contains("scoring_info") && m["scoring_info"].is_array()) {
+                        for (auto& info : m["scoring_info"]) {
+                            EventMetadata::ScoringInfo si;
+                            si.id = info.value("id", 0);
+                            si.icon = info.value("icon", "");
+                            pe.metadata.scoring_info.push_back(std::move(si));
+                        }
+                    }
+                }
+                if (ev.contains("segments") && ev["segments"].is_array()) {
+                    for (auto& seg : ev["segments"]) {
+                        EventSegment es;
+                        es.type = seg.value("type", 0);
+                        if (seg.contains("values") && seg["values"].is_array()) {
+                            for (auto& v : seg["values"]) {
+                                if (v.is_number()) es.values.push_back(v.get<int64_t>());
+                            }
+                        }
+                        if (seg.contains("rewards") && seg["rewards"].is_array()) {
+                            for (auto& rew : seg["rewards"]) {
+                                EventReward er;
+                                er.amount = rew.value("amount", (int64_t)0);
+                                er.type = rew.value("type", "");
+                                er.level = rew.value("level", "");
+                                if (rew.contains("position") && rew["position"].is_array()) {
+                                    for (auto& p : rew["position"]) {
+                                        if (p.is_number()) er.position.push_back(p.get<int64_t>());
+                                    }
+                                }
+                                es.rewards.push_back(std::move(er));
+                            }
+                        }
+                        pe.segments.push_back(std::move(es));
+                    }
+                }
                 player_data_.events.push_back(std::move(pe));
             }
         }

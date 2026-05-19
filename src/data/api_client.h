@@ -25,6 +25,12 @@ public:
     // Fetch translation data and apply to existing game data
     bool fetch_translations(GameData& data, const std::string& lang = "en");
 
+    // Fetch/cache event-adjacent definition data and record fallback/staleness status.
+    bool fetch_event_data_status(GameData& data, int max_age_hours = 24);
+
+    // Load optional local event label overrides from cache_dir/event_labels.json.
+    bool fetch_event_label_overrides(GameData& data);
+
     // Force refresh from API (ignore cache)
     void set_force_refresh(bool force) { force_refresh_ = force; }
 

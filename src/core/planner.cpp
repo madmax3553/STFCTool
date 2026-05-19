@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <fstream>
@@ -643,15 +644,36 @@ void Planner::enrich_plan_with_player_data(DailyPlan& plan,
                                             const GameData& gd) const {
     // Pre-classify jobs by type
     std::vector<const PlayerJob*> research_jobs, building_jobs, ship_jobs, officer_jobs;
+    auto now = std::chrono::system_clock::now();
+    int64_t now_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+        now.time_since_epoch()).count();
+    int stale_unfinished_jobs = 0;
     for (const auto& j : pd.jobs) {
         if (j.completed) continue;
-        switch (j.job_type) {
-            case 1: research_jobs.push_back(&j); break;
-            case 2: building_jobs.push_back(&j); break;
-            case 3: case 4: ship_jobs.push_back(&j); break;
-            case 5: officer_jobs.push_back(&j); break;
+        if (!has_live_unfinished_job(pd, j, now_epoch)) {
+            stale_unfinished_jobs++;
+            continue;
+        }
+        if (j.research_id != 0) {
+            research_jobs.push_back(&j);
+        } else if (j.building_id != 0) {
+            building_jobs.push_back(&j);
+        } else {
+            switch (j.job_type) {
+                case 0:   // ship construction
+                case 11:  // ship tier-up
+                case 12:  // ship scrap
+                    ship_jobs.push_back(&j);
+                    break;
+                default:
+                    officer_jobs.push_back(&j);
+                    break;
+            }
         }
     }
+    const bool queue_state_unknown =
+        research_jobs.empty() && building_jobs.empty() && ship_jobs.empty() &&
+        officer_jobs.empty();
 
     // Find officers near rank-up: those with shard_count that might be enough
     // Typical shard requirements by rank: rank2=10, rank3=30, rank4=100, rank5=200, rank6=400
@@ -715,9 +737,13 @@ void Planner::enrich_plan_with_player_data(DailyPlan& plan,
         // --- Research tasks ---
         if (task.tags.count("research") || task.category == TaskCategory::Research) {
             if (research_jobs.empty()) {
-                task.queue_idle = true;
-                task.dynamic_boost += 50;  // IDLE QUEUE: massive boost to top of list
-                task.context_hints.push_back("!! RESEARCH QUEUE IDLE - start something!");
+                if (queue_state_unknown) {
+                    task.context_hints.push_back("Research queue unknown - verify in game");
+                } else {
+                    task.queue_idle = true;
+                    task.dynamic_boost += 50;  // IDLE QUEUE: massive boost to top of list
+                    task.context_hints.push_back("!! RESEARCH QUEUE IDLE - start something!");
+                }
             } else {
                 for (const auto* j : research_jobs) {
                     task.has_active_job = true;
@@ -751,9 +777,13 @@ void Planner::enrich_plan_with_player_data(DailyPlan& plan,
                 || task.title.find("Building") != std::string::npos
                 || task.title.find("queue") != std::string::npos) {
                 if (building_jobs.empty()) {
-                    task.queue_idle = true;
-                    task.dynamic_boost += 50;  // IDLE QUEUE: massive boost
-                    task.context_hints.push_back("!! BUILD QUEUE IDLE - start something!");
+                    if (queue_state_unknown) {
+                        task.context_hints.push_back("Build queue unknown - verify in game");
+                    } else {
+                        task.queue_idle = true;
+                        task.dynamic_boost += 50;  // IDLE QUEUE: massive boost
+                        task.context_hints.push_back("!! BUILD QUEUE IDLE - start something!");
+                    }
                 } else {
                     for (const auto* j : building_jobs) {
                         task.has_active_job = true;
@@ -873,7 +903,11 @@ void Planner::enrich_plan_with_player_data(DailyPlan& plan,
                     if (rem > 0) task.context_hints.push_back("  Building: " + format_duration_short(rem) + " left");
                 }
             } else {
-                task.context_hints.push_back("No active jobs - save speed-ups for later");
+                if (stale_unfinished_jobs > 0) {
+                    task.context_hints.push_back("Active jobs unknown - stale raw job records ignored");
+                } else {
+                    task.context_hints.push_back("Active jobs unknown - no current job payload");
+                }
             }
         }
     }

@@ -274,7 +274,7 @@ struct FullAccountSnapshot {
     std::vector<ResolvedBuilding> buildings;  // player's buildings
     std::vector<ResolvedResource> resources;  // all known resources with player amount overlay
     std::vector<ResolvedBuff> buffs;          // active buffs
-    std::vector<ResolvedJob> jobs;            // active jobs (not completed)
+    std::vector<ResolvedJob> jobs;            // live unfinished job records when sync provides them
     std::vector<ResolvedTech> tech;           // forbidden/chaos tech
     std::vector<ResolvedEvent> events;        // platform events (solo, battlepass, alliance, etc.)
     int emerald_chain_level = 0;
@@ -287,10 +287,12 @@ struct FullAccountSnapshot {
     // Convenience lookups (populated by builder)
     int owned_officer_count = 0;
     int active_job_count = 0;
-    int idle_research_slots = 0;              // research slots not currently in use
-    int idle_building_slots = 0;              // building slots not currently in use
+    int idle_research_slots = -1;             // -1 when queue state is unknown
+    int idle_building_slots = -1;             // -1 when queue state is unknown
     int active_event_count = 0;               // events currently running
     int claimable_event_count = 0;            // events with unclaimed rewards
+    bool research_state_inferred = false;     // true when levels came from buffs, not research sync
+    bool resource_state_partial = false;      // true when core balances are absent from sync
 };
 
 // ---------------------------------------------------------------------------

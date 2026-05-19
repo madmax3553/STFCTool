@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <map>
 #include <sstream>
 
@@ -25,14 +26,25 @@ static std::string join_strings(const std::vector<std::string>& items, const std
 
 static std::string summarize_active_jobs(const PlayerData& pd) {
     std::vector<std::string> lines;
+    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    int stale_unfinished = 0;
     for (const auto& job : pd.jobs) {
         if (job.completed) continue;
+        if (!has_live_unfinished_job(pd, job, now)) {
+            stale_unfinished++;
+            continue;
+        }
         std::ostringstream line;
         line << job_type_str(job.job_type) << " L" << job.level
              << " (" << format_duration_short(job_remaining_seconds(job)) << " remaining)";
         lines.push_back(line.str());
     }
-    return lines.empty() ? "none" : join_strings(lines, "; ");
+    if (!lines.empty()) return join_strings(lines, "; ");
+    if (stale_unfinished > 0) {
+        return "unknown; " + std::to_string(stale_unfinished) + " stale raw job record(s) ignored";
+    }
+    return "unknown; no current job payload received";
 }
 
 static std::string summarize_primary_ships(const PlayerData& pd) {
@@ -149,6 +161,15 @@ static nlohmann::json research_option_json(const ResearchCandidate& c) {
         {"next_level", c.next_level},
         {"unlock_ops", c.unlock_level},
         {"research_time_seconds", c.research_time_seconds},
+        {"speedups", {
+            {"required", c.speedups.required},
+            {"evaluated", c.speedups.evaluated},
+            {"enough", c.speedups.enough},
+            {"required_seconds", c.speedups.required_seconds},
+            {"available_seconds", c.speedups.available_seconds},
+            {"shortage_seconds", c.speedups.shortage_seconds},
+            {"warning", c.speedups.warning},
+        }},
         {"funding_unknown", c.funding_unknown},
         {"percent_affordable", c.percent_affordable},
         {"costs", resources_to_prompt_json(c.costs)},
@@ -284,7 +305,7 @@ Respond with ONLY valid JSON, no other text:
     user << "Unavailable in current sync data. Do not assume live events or milestone thresholds.\n\n";
 
     user << "### DATA: INVENTORY SNAPSHOT\n";
-    user << "- Inventory Items: " << pd.inventory.size() << " synced item stacks (not yet categorized into speedups/xp buckets)\n";
+    user << "- Inventory Items: " << pd.inventory.size() << " synced item stacks; speedup coverage is checked on structured spend recommendations when definitions and balances are available.\n";
     user << "- Resources: " << data["resources"].get<std::string>() << "\n\n";
 
     user << "### USER PERSONAL FOCUS\n";

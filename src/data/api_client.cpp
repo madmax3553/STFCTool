@@ -72,6 +72,18 @@ void ApiClient::report_progress(const std::string& step, int current, int total)
     }
 }
 
+static int64_t now_epoch_seconds() {
+    return static_cast<int64_t>(std::time(nullptr));
+}
+
+static int cache_age_hours(const fs::path& path) {
+    if (!fs::exists(path)) return -1;
+    auto mod_time = fs::last_write_time(path);
+    auto now = fs::file_time_type::clock::now();
+    auto age = std::chrono::duration_cast<std::chrono::hours>(now - mod_time).count();
+    return age < 0 ? 0 : static_cast<int>(age);
+}
+
 // ---------------------------------------------------------------------------
 // Parse helpers
 // ---------------------------------------------------------------------------
@@ -624,6 +636,94 @@ bool ApiClient::fetch_translations(GameData& data, const std::string& lang) {
 }
 
 // ---------------------------------------------------------------------------
+// Fetch event helper data
+// ---------------------------------------------------------------------------
+
+bool ApiClient::fetch_event_data_status(GameData& data, int max_age_hours) {
+    report_progress("event-data", 0, 1);
+
+    auto& status = data.event_data_status;
+    status = EventDataStatus{};
+    status.checked = true;
+    status.checked_at = now_epoch_seconds();
+    status.source = "api.spocks.club/consumable";
+    status.fallback_names = true;
+    status.reward_definitions_available = false;
+
+    const std::string cache_file = "consumables.json";
+    const auto cache_path = fs::path(cache_dir_) / cache_file;
+    std::string body;
+
+    if (is_cache_fresh(cache_file, max_age_hours)) {
+        body = read_cache(cache_file);
+        status.stale = false;
+        status.cache_age_hours = cache_age_hours(cache_path);
+    } else {
+        body = api_get("/consumable");
+        if (!body.empty()) {
+            write_cache(cache_file, body);
+            status.stale = false;
+            status.cache_age_hours = 0;
+        } else {
+            body = read_cache(cache_file);
+            status.stale = true;
+            status.cache_age_hours = cache_age_hours(cache_path);
+        }
+    }
+
+    if (body.empty()) {
+        status.warning = "No event helper cache available; using sync fallback labels and reward IDs.";
+        report_progress("event-data", 1, 1);
+        return false;
+    }
+
+    try {
+        auto arr = json::parse(body);
+        if (arr.is_array()) {
+            status.consumable_count = static_cast<int>(arr.size());
+        } else if (arr.is_object() && arr.contains("data") && arr["data"].is_array()) {
+            status.consumable_count = static_cast<int>(arr["data"].size());
+        }
+    } catch (const json::exception&) {
+        status.warning = "Event helper cache could not be parsed; using sync fallback labels and reward IDs.";
+        report_progress("event-data", 1, 1);
+        return false;
+    }
+
+    status.warning = status.stale
+        ? "Event helper cache is stale; event titles and chest contents are unresolved."
+        : "Event helper cache loaded; event titles and chest contents are unresolved.";
+
+    report_progress("event-data", 1, 1);
+    return true;
+}
+
+bool ApiClient::fetch_event_label_overrides(GameData& data) {
+    data.event_label_overrides.clear();
+
+    std::string body = read_cache("event_labels.json");
+    if (body.empty()) return false;
+
+    try {
+        auto root = json::parse(body);
+        const json* labels = &root;
+        if (root.is_object() && root.contains("labels") && root["labels"].is_object()) {
+            labels = &root["labels"];
+        }
+        if (!labels->is_object()) return false;
+        for (auto& [key, value] : labels->items()) {
+            if (value.is_string()) {
+                data.event_label_overrides[key] = value.get<std::string>();
+            }
+        }
+    } catch (const json::exception&) {
+        return false;
+    }
+
+    return !data.event_label_overrides.empty();
+}
+
+// ---------------------------------------------------------------------------
 // Fetch all
 // ---------------------------------------------------------------------------
 
@@ -635,6 +735,8 @@ bool ApiClient::fetch_all(GameData& data) {
     ok = fetch_buildings(data) && ok;
     ok = fetch_resources(data) && ok;
     ok = fetch_translations(data) && ok;
+    fetch_event_label_overrides(data);
+    fetch_event_data_status(data);
     return ok;
 }
 

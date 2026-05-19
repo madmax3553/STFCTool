@@ -17,6 +17,8 @@ lets you make decisions, then synthesizes everything into an actionable plan.
 │ Runtime sources:                                             │
 │   • api.spocks.club — officers, ships, research, buildings   │
 │   • community mod sync — player state, events, buffs, jobs   │
+│     Note: job sync is opportunistic; missing job payloads     │
+│     mean queue state is unknown, not idle.                    │
 │                                                              │
 │ Development reference (not used at runtime):                 │
 │   • "The Officer Tool" (StewieDoo xlsx) — curated officer    │
@@ -26,7 +28,7 @@ lets you make decisions, then synthesizes everything into an actionable plan.
 │                                                              │
 │ Output: AccountSnapshot                                      │
 │   Complete picture of the player's current state              │
-│   including active events and in-progress jobs               │
+│   including active events and any current job records         │
 └───────────────────────┬──────────────────────────────────────┘
                         ▼
 ┌──────────────────────────────────────────────────────────────┐
@@ -89,7 +91,7 @@ lets you make decisions, then synthesizes everything into an actionable plan.
 │ Input:                                                       │
 │   • UserDecisions (confirmed crews, ships, priorities)       │
 │   • Active events (from sync data)                           │
-│   • Current jobs (what's already building/researching)       │
+│   • Queue state when provided; otherwise manual/unknown       │
 │   • Time context (day of week, event timers)                 │
 │                                                              │
 │ Output: ActionPlan                                           │
@@ -107,11 +109,11 @@ lets you make decisions, then synthesizes everything into an actionable plan.
 Everything we know about the player right now:
 - officers: id, name, level, rank, stats, abilities (structured)
 - ships: name, hull type, tier, level, grade, abilities
-- research: completed, in-progress, available
-- buildings: levels, upgrade state
+- research: completed and available; active queue state only when supplied
+- buildings: levels; active upgrade state only when supplied
 - resources: current amounts
 - buffs: active buffs/boosts
-- jobs: active build/research/upgrade queues
+- jobs: opportunistic build/research/ship job records; absent or stale records mean queue state is unknown
 - events: active events with objectives and progress
 
 ### DomainAnalysis (Stage 2 → Stage 3)

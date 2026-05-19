@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <regex>
 #include <set>
 #include <sstream>
 
@@ -172,6 +173,173 @@ bool contains_word(const std::string& haystack, const std::string& needle) {
     return lower_h.find(lower_n) != std::string::npos;
 }
 
+std::string lower_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+std::string compact_duration(int64_t seconds) {
+    if (seconds <= 0) return "0m";
+    const int64_t days = seconds / 86400;
+    seconds %= 86400;
+    const int64_t hours = seconds / 3600;
+    seconds %= 3600;
+    const int64_t minutes = seconds / 60;
+
+    std::ostringstream out;
+    if (days > 0) {
+        out << days << "d";
+        if (hours > 0) out << " " << hours << "h";
+        return out.str();
+    }
+    if (hours > 0) {
+        out << hours << "h";
+        if (minutes > 0) out << " " << minutes << "m";
+        return out.str();
+    }
+    if (minutes > 0) return std::to_string(minutes) + "m";
+    return std::to_string(seconds) + "s";
+}
+
+int64_t parse_general_speedup_seconds(const std::string& name) {
+    if (name.empty()) return 0;
+    const auto lower = lower_copy(name);
+    if (lower.find("speedup") == std::string::npos &&
+        lower.find("speed up") == std::string::npos &&
+        lower.find("speed-up") == std::string::npos) {
+        return 0;
+    }
+    if (lower.find("repair") != std::string::npos ||
+        lower.find("assignment") != std::string::npos ||
+        lower.find("countdown") != std::string::npos ||
+        lower.find("armada") != std::string::npos ||
+        lower.find("outpost") != std::string::npos ||
+        lower.find("alliance") != std::string::npos ||
+        lower.find("asb") != std::string::npos ||
+        lower.find("caa credit") != std::string::npos) {
+        return 0;
+    }
+
+    static const std::regex duration_re(
+        R"((\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b)",
+        std::regex_constants::icase);
+    std::smatch match;
+    if (!std::regex_search(name, match, duration_re)) return 0;
+
+    int64_t amount = 0;
+    try {
+        amount = std::stoll(match[1].str());
+    } catch (...) {
+        return 0;
+    }
+    const auto unit = lower_copy(match[2].str());
+    if (unit == "m" || unit == "min" || unit == "mins" ||
+        unit == "minute" || unit == "minutes") {
+        return amount * 60;
+    }
+    if (unit == "h" || unit == "hr" || unit == "hrs" ||
+        unit == "hour" || unit == "hours") {
+        return amount * 3600;
+    }
+    if (unit == "d" || unit == "day" || unit == "days") {
+        return amount * 86400;
+    }
+    return 0;
+}
+
+struct SpeedupInventorySummary {
+    bool definitions_available = false;
+    bool resource_balances_reliable = false;
+    bool has_positive_speedups = false;
+    int definition_count = 0;
+    int positive_stack_count = 0;
+    int64_t available_seconds = 0;
+};
+
+SpeedupInventorySummary summarize_speedups(const FullAccountSnapshot& snapshot) {
+    SpeedupInventorySummary summary;
+    summary.resource_balances_reliable = !snapshot.resource_state_partial;
+
+    std::map<int64_t, int64_t> seconds_by_id;
+    std::set<int64_t> counted_resource_ids;
+    for (const auto& resource : snapshot.resources) {
+        const int64_t seconds = parse_general_speedup_seconds(resource.name);
+        if (seconds <= 0) continue;
+        seconds_by_id[resource.id] = seconds;
+        summary.definitions_available = true;
+        summary.definition_count++;
+        if (resource.amount > 0) {
+            summary.available_seconds += seconds * resource.amount;
+            summary.has_positive_speedups = true;
+            summary.positive_stack_count++;
+            counted_resource_ids.insert(resource.id);
+        }
+    }
+
+    for (const auto& item : snapshot.inventory) {
+        auto it = seconds_by_id.find(item.ref_id);
+        if (it == seconds_by_id.end() || item.count <= 0) continue;
+        if (counted_resource_ids.count(item.ref_id)) continue;
+        summary.available_seconds += it->second * item.count;
+        summary.has_positive_speedups = true;
+        summary.positive_stack_count++;
+    }
+
+    return summary;
+}
+
+SpeedupCoverage speedup_coverage_for(int duration_seconds,
+                                     const SpeedupInventorySummary& summary) {
+    SpeedupCoverage coverage;
+    if (duration_seconds <= 0) {
+        coverage.required = false;
+        coverage.evaluated = true;
+        coverage.enough = true;
+        coverage.source = "no timer";
+        return coverage;
+    }
+
+    coverage.required = true;
+    coverage.required_seconds = duration_seconds;
+    coverage.available_seconds = summary.available_seconds;
+    coverage.source = summary.positive_stack_count > 0
+        ? "resource/inventory sync"
+        : "resource sync";
+
+    if (!summary.definitions_available) {
+        coverage.evaluated = false;
+        coverage.warning = "speedup item definitions are missing from cached game data";
+        return coverage;
+    }
+
+    if (summary.resource_balances_reliable || summary.available_seconds >= coverage.required_seconds) {
+        coverage.evaluated = true;
+        coverage.enough = coverage.available_seconds >= coverage.required_seconds;
+        coverage.shortage_seconds = coverage.enough
+            ? 0
+            : coverage.required_seconds - coverage.available_seconds;
+        return coverage;
+    }
+
+    coverage.evaluated = false;
+    coverage.shortage_seconds = std::max<int64_t>(
+        0, coverage.required_seconds - coverage.available_seconds);
+    coverage.warning = "speedup balances are not fully synced";
+    return coverage;
+}
+
+std::string speedup_reason_fragment(const SpeedupCoverage& coverage) {
+    if (!coverage.required) return "";
+    if (!coverage.evaluated) {
+        return "speedup coverage not verified";
+    }
+    if (coverage.enough) {
+        return "speedups cover " + compact_duration(coverage.required_seconds) + " timer";
+    }
+    return "speedups short by " + compact_duration(coverage.shortage_seconds);
+}
+
 std::string research_tree_name(int64_t tree_id) {
     switch (tree_id) {
         case 1870147103: return "Combat tree";
@@ -229,14 +397,19 @@ void reserve_costs(const ResearchCandidate& c, std::map<int64_t, int64_t>& remai
 }
 
 std::string build_candidate_reason(const ResearchCandidate& c,
-                                   bool idle_research_slot,
+                                   int idle_research_slots,
                                    int time_budget_minutes);
+std::string classify_research_bucket(const ResearchCandidate& c);
+std::string classify_funding_class(const ResearchCandidate& c);
+bool is_tracking_only_research(const ResearchCandidate& c);
 
 void refresh_candidate_budget(ResearchCandidate& c,
                               const std::map<int64_t, int64_t>& remaining,
-                              bool idle_research_slot,
+                              int idle_research_slots,
                               int time_budget_minutes,
+                              bool resource_balances_reliable,
                               bool note_after_priorities) {
+    const bool idle_research_slot = idle_research_slots > 0;
     c.missing_resources.clear();
     bool resource_ok = true;
     double affordable_sum = 0.0;
@@ -259,8 +432,13 @@ void refresh_candidate_budget(ResearchCandidate& c,
     c.percent_affordable = c.funding_unknown
         ? 0.0
         : (affordable_count == 0 ? 1.0 : affordable_sum / static_cast<double>(affordable_count));
+    c.resource_balances_unknown = !resource_balances_reliable;
+    c.research_bucket = classify_research_bucket(c);
+    c.funding_class = classify_funding_class(c);
+    c.tracking_only = is_tracking_only_research(c);
+    c.resources_available = c.resources_available && resource_balances_reliable;
     c.can_start_now = c.prerequisites_met && c.resources_available && idle_research_slot;
-    c.reason = build_candidate_reason(c, idle_research_slot, time_budget_minutes);
+    c.reason = build_candidate_reason(c, idle_research_slots, time_budget_minutes);
     if (note_after_priorities && !c.resources_available && !c.funding_unknown &&
         c.prerequisites_met && !c.missing_resources.empty()) {
         c.reason = "after higher priorities, needs resources; " + c.reason;
@@ -278,6 +456,113 @@ bool add_candidate_once(std::vector<ResearchCandidate>& selected,
 
 bool is_prime_research(const ResearchCandidate& c) {
     return contains_word(c.name, "prime");
+}
+
+bool is_bulk_resource_name(const std::string& name);
+
+bool resource_contains_any(const ResearchCandidate& c,
+                           const std::vector<std::string>& needles,
+                           bool missing_only = false) {
+    for (const auto& cost : c.costs) {
+        if (missing_only && cost.missing <= 0) continue;
+        for (const auto& needle : needles) {
+            if (contains_word(cost.name, needle)) return true;
+        }
+    }
+    return false;
+}
+
+bool is_standard_research_resource(const PlannedResource& r) {
+    return is_bulk_resource_name(r.name) ||
+           contains_word(r.name, "refined ore") ||
+           contains_word(r.name, "refined gas") ||
+           contains_word(r.name, "refined crystal") ||
+           contains_word(r.name, "raw ore") ||
+           contains_word(r.name, "raw gas") ||
+           contains_word(r.name, "raw crystal") ||
+           contains_word(r.name, "isogen") ||
+           contains_word(r.name, "faction credit") ||
+           contains_word(r.name, "solo armada") ||
+           contains_word(r.name, "armada directive");
+}
+
+bool has_only_standard_research_resources(const ResearchCandidate& c) {
+    if (c.costs.empty()) return false;
+    return std::all_of(c.costs.begin(), c.costs.end(), is_standard_research_resource);
+}
+
+bool has_nonstandard_research_resource(const ResearchCandidate& c) {
+    return std::any_of(c.costs.begin(), c.costs.end(),
+                       [](const PlannedResource& r) {
+                           return !is_standard_research_resource(r);
+                       });
+}
+
+bool is_specialty_ship_research(const ResearchCandidate& c) {
+    const std::string text = c.name + " " + c.description + " " + c.research_tree_name;
+    if (has_nonstandard_research_resource(c)) return true;
+    if (resource_contains_any(c, {"Black Market Schematics", "Transogen", "Nanoprobe",
+                                  "Nexus Particle", "Shard", "Refit"})) {
+        return true;
+    }
+    return contains_word(text, "serene squall") ||
+           contains_word(text, "reliant") ||
+           contains_word(text, "voyager") ||
+           contains_word(text, "talios") ||
+           contains_word(text, "vi'dar") ||
+           contains_word(text, "vidar") ||
+           contains_word(text, "monaveen") ||
+           contains_word(text, "cerritos") ||
+           contains_word(text, "defiant") ||
+           contains_word(text, "nova squadron") ||
+           contains_word(text, "forbidden tech") ||
+           contains_word(text, "refit");
+}
+
+std::string classify_research_bucket(const ResearchCandidate& c) {
+    if (is_prime_research(c) || resource_contains_any(c, {"Prime "})) return "prime";
+    if (!c.costs.empty() && is_specialty_ship_research(c) &&
+        !has_only_standard_research_resources(c)) {
+        return "specialty_ship";
+    }
+    return "daily";
+}
+
+std::string classify_funding_class(const ResearchCandidate& c) {
+    if (c.funding_unknown) return "unknown";
+    if (resource_contains_any(c, {"5★ Epic", "5* Epic", "G5 Epic", "Grade 5 Epic",
+                                  "6★ Epic", "6* Epic", "G6 Epic", "Grade 6 Epic"}, true)) {
+        return "level_locked";
+    }
+    if (c.research_bucket == "prime" &&
+        (resource_contains_any(c, {"Particle", "Medallion", "Emblem", "Prime Key", "Particle Key"}, true) ||
+         has_nonstandard_research_resource(c)) &&
+        !has_only_standard_research_resources(c)) {
+        return "purchase_or_event";
+    }
+    if (c.research_bucket == "specialty_ship" ||
+        resource_contains_any(c, {"Black Market Schematics", "Transogen", "Nanoprobe",
+                                  "Nexus Particle", "Shard", "Refit"})) {
+        return "f2p_grindable";
+    }
+    if (has_only_standard_research_resources(c)) return "standard";
+    return "f2p_grindable";
+}
+
+bool is_tracking_only_research(const ResearchCandidate& c) {
+    if (c.resource_balances_unknown) return true;
+    if (c.funding_unknown) return true;
+    return (c.research_bucket == "prime" &&
+            (c.funding_class == "purchase_or_event" ||
+             c.funding_class == "level_locked") &&
+            !c.resources_available);
+}
+
+int research_bucket_rank(const ResearchCandidate& c) {
+    if (c.research_bucket == "daily") return 0;
+    if (c.research_bucket == "specialty_ship") return 1;
+    if (c.research_bucket == "prime") return 2;
+    return 3;
 }
 
 bool is_low_impact_research(const ResearchCandidate& c) {
@@ -313,7 +598,7 @@ double keyword_score(const ResearchCandidate& c, const std::string& focus) {
         contains_word(text, "unlock") || contains_word(text, "r&d")) {
         score += 12.0;
     }
-    if (is_prime_research(c) && !is_low_impact_research(c)) {
+    if (is_prime_research(c) && !c.tracking_only && !is_low_impact_research(c)) {
         score += 12.0;
     }
     if (contains_word(text, "research") || contains_word(text, "build") ||
@@ -345,26 +630,52 @@ double keyword_score(const ResearchCandidate& c, const std::string& focus) {
 }
 
 std::string build_candidate_reason(const ResearchCandidate& c,
-                                   bool idle_research_slot,
+                                   int idle_research_slots,
                                    int time_budget_minutes) {
     std::vector<std::string> reasons;
+    const bool idle_research_slot = idle_research_slots > 0;
     if (c.funding_unknown) {
         reasons.push_back("funding requirements not listed in cache");
+    }
+    if (c.resource_balances_unknown) {
+        reasons.push_back("resource balances missing from sync");
+    }
+    if (c.research_bucket == "specialty_ship") {
+        reasons.push_back("specialty ship funded");
+    } else if (c.research_bucket == "prime") {
+        if (c.funding_class == "purchase_or_event") {
+            reasons.push_back("Prime watchlist: purchase/event-gated currency");
+        } else if (c.funding_class == "level_locked") {
+            reasons.push_back("Prime watchlist: material tier gated");
+        } else {
+            reasons.push_back("Prime research");
+        }
+    }
+    if (c.tracking_only) {
+        reasons.push_back("track separately from everyday ROI");
+    }
+    if (std::any_of(c.blockers.begin(), c.blockers.end(),
+                    [](const PlanBlocker& b) { return b.current_level < 0; })) {
+        reasons.push_back("requirement level missing from sync");
     }
 
     if (c.can_start_now) {
         reasons.push_back("can start now");
     } else if (c.resources_available && c.prerequisites_met) {
-        reasons.push_back(idle_research_slot ? "ready when selected" : "resources ready, research queue busy");
+        if (idle_research_slots < 0) {
+            reasons.push_back("resources ready; research queue state unknown");
+        } else {
+            reasons.push_back(idle_research_slot ? "ready when selected" : "resources ready, research queue busy");
+        }
     } else if (!c.prerequisites_met) {
         reasons.push_back("blocked by prerequisites");
-    } else if (!c.funding_unknown) {
+    } else if (!c.funding_unknown && !c.resource_balances_unknown) {
         reasons.push_back("good save target");
     }
 
-    if (!c.funding_unknown && c.percent_affordable >= 1.0) {
+    if (!c.funding_unknown && !c.resource_balances_unknown && c.percent_affordable >= 1.0) {
         reasons.push_back("fully funded");
-    } else if (!c.funding_unknown && c.percent_affordable >= 0.75) {
+    } else if (!c.funding_unknown && !c.resource_balances_unknown && c.percent_affordable >= 0.75) {
         reasons.push_back("near-affordable");
     }
 
@@ -373,6 +684,10 @@ std::string build_candidate_reason(const ResearchCandidate& c,
         reasons.push_back("fits time budget");
     } else if (c.research_time_seconds > 0 && c.research_time_seconds <= 8 * 3600) {
         reasons.push_back("short upgrade");
+    }
+    const auto speedup_note = speedup_reason_fragment(c.speedups);
+    if (!speedup_note.empty()) {
+        reasons.push_back(speedup_note);
     }
 
     if (c.unlock_level > 0) {
@@ -431,6 +746,32 @@ PlanBlocker blocker_from_json(const json& j) {
     return b;
 }
 
+json speedup_to_json(const SpeedupCoverage& s) {
+    return {
+        {"required", s.required},
+        {"evaluated", s.evaluated},
+        {"enough", s.enough},
+        {"required_seconds", s.required_seconds},
+        {"available_seconds", s.available_seconds},
+        {"shortage_seconds", s.shortage_seconds},
+        {"source", s.source},
+        {"warning", s.warning},
+    };
+}
+
+SpeedupCoverage speedup_from_json(const json& j) {
+    SpeedupCoverage s;
+    s.required = j.value("required", false);
+    s.evaluated = j.value("evaluated", false);
+    s.enough = j.value("enough", false);
+    s.required_seconds = j.value("required_seconds", (int64_t)0);
+    s.available_seconds = j.value("available_seconds", (int64_t)0);
+    s.shortage_seconds = j.value("shortage_seconds", (int64_t)0);
+    s.source = j.value("source", "");
+    s.warning = j.value("warning", "");
+    return s;
+}
+
 json candidate_to_json(const ResearchCandidate& c) {
     json costs = json::array();
     for (const auto& r : c.costs) costs.push_back(resource_to_json(r));
@@ -462,13 +803,18 @@ json candidate_to_json(const ResearchCandidate& c) {
         {"local_score", c.local_score},
         {"percent_affordable", c.percent_affordable},
         {"funding_unknown", c.funding_unknown},
+        {"resource_balances_unknown", c.resource_balances_unknown},
         {"prerequisites_met", c.prerequisites_met},
         {"resources_available", c.resources_available},
         {"can_start_now", c.can_start_now},
+        {"research_bucket", c.research_bucket},
+        {"funding_class", c.funding_class},
+        {"tracking_only", c.tracking_only},
         {"costs", costs},
         {"missing_resources", missing},
         {"requirements", requirements},
         {"blockers", blockers},
+        {"speedups", speedup_to_json(c.speedups)},
         {"reason", c.reason},
     };
 }
@@ -492,9 +838,16 @@ ResearchCandidate candidate_from_json(const json& j) {
     c.local_score = j.value("local_score", 0.0);
     c.percent_affordable = j.value("percent_affordable", 0.0);
     c.funding_unknown = j.value("funding_unknown", false);
+    c.resource_balances_unknown = j.value("resource_balances_unknown", false);
     c.prerequisites_met = j.value("prerequisites_met", false);
     c.resources_available = j.value("resources_available", false);
     c.can_start_now = j.value("can_start_now", false);
+    c.research_bucket = j.value("research_bucket", "daily");
+    c.funding_class = j.value("funding_class", "standard");
+    c.tracking_only = j.value("tracking_only", false);
+    if (j.contains("speedups") && j["speedups"].is_object()) {
+        c.speedups = speedup_from_json(j["speedups"]);
+    }
     c.reason = j.value("reason", "");
     if (c.research_tree_name.empty() && c.research_tree != 0) {
         c.research_tree_name = research_tree_name(c.research_tree);
@@ -532,6 +885,7 @@ json action_to_json(const PlanAction& a) {
         {"reason", a.reason},
         {"can_do_now", a.can_do_now},
         {"duration_seconds", a.duration_seconds},
+        {"speedups", speedup_to_json(a.speedups)},
         {"resources_spent", spent},
         {"missing_resources", missing},
     };
@@ -546,6 +900,9 @@ PlanAction action_from_json(const json& j) {
     a.reason = j.value("reason", "");
     a.can_do_now = j.value("can_do_now", false);
     a.duration_seconds = j.value("duration_seconds", 0);
+    if (j.contains("speedups") && j["speedups"].is_object()) {
+        a.speedups = speedup_from_json(j["speedups"]);
+    }
     if (j.contains("resources_spent") && j["resources_spent"].is_array()) {
         for (const auto& r : j["resources_spent"]) a.resources_spent.push_back(resource_from_json(r));
     }
@@ -570,7 +927,10 @@ std::vector<ResearchCandidate> analyze_research_candidates(
     const auto t_levels = tech_levels(snapshot);
     const auto s_levels = ship_levels(snapshot);
     const auto s_names = ship_names(snapshot);
-    const bool idle_research_slot = snapshot.idle_research_slots > 0;
+    const int idle_research_slots = snapshot.idle_research_slots;
+    const bool idle_research_slot = idle_research_slots > 0;
+    const bool resource_balances_reliable = !snapshot.resource_state_partial;
+    const auto speedup_summary = summarize_speedups(snapshot);
     std::map<std::string, std::string> names_by_location;
     for (const auto& research : snapshot.research) {
         if (research.row <= 0 || research.column <= 0) continue;
@@ -613,6 +973,7 @@ std::vector<ResearchCandidate> analyze_research_candidates(
         c.next_level = next.id > 0 ? next.id : research.current_level + 1;
         c.unlock_level = research.unlock_level;
         c.research_time_seconds = next.research_time_seconds;
+        c.speedups = speedup_coverage_for(c.research_time_seconds, speedup_summary);
         c.hard_currency_cost = next.hard_currency_cost;
         c.military_might = next.military_might;
         c.funding_unknown = next.costs.empty();
@@ -643,6 +1004,13 @@ std::vector<ResearchCandidate> analyze_research_candidates(
         c.percent_affordable = c.funding_unknown
             ? 0.0
             : (affordable_count == 0 ? 1.0 : affordable_sum / static_cast<double>(affordable_count));
+        c.resource_balances_unknown = !resource_balances_reliable;
+        if (!resource_balances_reliable) {
+            c.resources_available = false;
+        }
+        c.research_bucket = classify_research_bucket(c);
+        c.funding_class = classify_funding_class(c);
+        c.tracking_only = is_tracking_only_research(c);
 
         bool prereq_ok = true;
         if (snapshot.ops_level > 0 && research.unlock_level > snapshot.ops_level) {
@@ -698,6 +1066,10 @@ std::vector<ResearchCandidate> analyze_research_candidates(
             else if (c.research_time_seconds > 30 * 86400) c.local_score -= 8.0;
             else if (c.research_time_seconds > 7 * 86400) c.local_score -= 3.0;
         }
+        if (c.speedups.required && c.research_time_seconds > std::max(1, time_budget_minutes) * 60) {
+            if (c.speedups.evaluated && !c.speedups.enough) c.local_score -= 4.0;
+            else if (!c.speedups.evaluated && c.research_time_seconds > 8 * 3600) c.local_score -= 2.0;
+        }
         if (c.military_might > 0) {
             c.local_score += std::min(8.0, std::log10(static_cast<double>(c.military_might) + 1.0));
         }
@@ -705,16 +1077,29 @@ std::vector<ResearchCandidate> analyze_research_candidates(
         if (c.funding_unknown) c.local_score -= 30.0;
         if (is_low_impact_research(c)) c.local_score -= 28.0;
         c.local_score -= scarce_resource_penalty(c);
+        if (c.research_bucket == "daily") c.local_score += 6.0;
+        else if (c.research_bucket == "specialty_ship") c.local_score += 2.0;
+        else if (c.research_bucket == "prime") c.local_score -= 8.0;
+        if (c.tracking_only) c.local_score -= 45.0;
+        if (c.funding_class == "purchase_or_event" && !c.resources_available) c.local_score -= 20.0;
+        if (std::any_of(c.blockers.begin(), c.blockers.end(),
+                        [](const PlanBlocker& b) { return b.current_level < 0; })) {
+            c.local_score -= 12.0;
+        }
         if (!c.resources_available && c.percent_affordable < 0.25) c.local_score -= 10.0;
         if (!c.prerequisites_met && c.blockers.size() > 2) c.local_score -= 8.0;
 
-        c.reason = build_candidate_reason(c, idle_research_slot, time_budget_minutes);
+        c.reason = build_candidate_reason(c, idle_research_slots, time_budget_minutes);
         candidates.push_back(std::move(c));
     }
 
     std::sort(candidates.begin(), candidates.end(),
               [](const ResearchCandidate& a, const ResearchCandidate& b) {
+                  int ra = research_bucket_rank(a);
+                  int rb = research_bucket_rank(b);
+                  if (ra != rb) return ra < rb;
                   if (a.can_start_now != b.can_start_now) return a.can_start_now > b.can_start_now;
+                  if (a.tracking_only != b.tracking_only) return !a.tracking_only;
                   if (a.local_score != b.local_score) return a.local_score > b.local_score;
                   return a.percent_affordable > b.percent_affordable;
               });
@@ -742,8 +1127,32 @@ ActionPlan generate_action_plan(const FullAccountSnapshot& snapshot,
     if (snapshot.resources.empty() || !has_positive_resource) {
         plan.warnings.push_back("No resource balances available; affordability checks cannot be trusted.");
     }
-    if (snapshot.idle_research_slots <= 0) {
+    if (snapshot.resource_state_partial) {
+        plan.warnings.push_back("Core resource balances are missing from sync; funding and save targets are verify-only until a full resource sync arrives.");
+    }
+    auto building_known = [&snapshot](int64_t id) {
+        return std::any_of(snapshot.buildings.begin(), snapshot.buildings.end(),
+                           [id](const ResolvedBuilding& b) {
+                               return b.id == id && b.current_level >= 0;
+                           });
+    };
+    if (!building_known(0) || !building_known(25)) {
+        plan.warnings.push_back("Station building sync is incomplete; building-gated research is marked unknown until the next full module sync.");
+    }
+    if (snapshot.research_state_inferred) {
+        plan.warnings.push_back("Explicit research sync is missing; research levels are inferred from active buffs where possible.");
+    }
+    if (snapshot.idle_research_slots < 0) {
+        plan.warnings.push_back("Research queue state is unknown because no current job payload was received; ready items are queue-next targets until verified in game.");
+    } else if (snapshot.idle_research_slots <= 0) {
         plan.warnings.push_back("Research queues appear busy; ready items are save/queue-next targets.");
+    }
+    const auto speedup_summary = summarize_speedups(snapshot);
+    if (!speedup_summary.definitions_available) {
+        plan.warnings.push_back("Speedup item definitions are missing from cached game data; research/building/ship timers cannot be checked.");
+    } else if (!speedup_summary.resource_balances_reliable &&
+               speedup_summary.available_seconds <= 0) {
+        plan.warnings.push_back("Speedup balances are not fully synced; spend actions show speedup coverage as unverified until a full resource sync arrives.");
     }
 
     auto candidates = analyze_research_candidates(snapshot, time_budget_minutes, plan.focus);
@@ -753,7 +1162,8 @@ ActionPlan generate_action_plan(const FullAccountSnapshot& snapshot,
     }
 
     const size_t top_count = std::min<size_t>(10, candidates.size());
-    const bool idle_research_slot = snapshot.idle_research_slots > 0;
+    const int idle_research_slots = snapshot.idle_research_slots;
+    const bool resource_balances_reliable = !snapshot.resource_state_partial;
     auto remaining_after_starts = resource_amounts(snapshot);
     std::set<int64_t> selected_ids;
     std::map<int64_t, int> selected_by_tree;
@@ -764,8 +1174,8 @@ ActionPlan generate_action_plan(const FullAccountSnapshot& snapshot,
         if (enforce_tree_cap && selected_by_tree[candidate.research_tree] >= 3) return false;
 
         ResearchCandidate pick = candidate;
-        refresh_candidate_budget(pick, remaining_after_starts, idle_research_slot,
-                                 time_budget_minutes, false);
+        refresh_candidate_budget(pick, remaining_after_starts, idle_research_slots,
+                                 time_budget_minutes, resource_balances_reliable, false);
         if (!pick.can_start_now || !can_afford_with_remaining(pick, remaining_after_starts)) {
             return false;
         }
@@ -785,50 +1195,63 @@ ActionPlan generate_action_plan(const FullAccountSnapshot& snapshot,
         if (plan.top_research.size() >= 5) break;
     }
 
-    size_t prime_save_targets = 0;
-    for (const auto& c : candidates) {
-        if (plan.top_research.size() >= top_count || prime_save_targets >= 2) break;
-        if (!is_prime_research(c) || is_low_impact_research(c) || selected_ids.count(c.id)) {
-            continue;
-        }
-        ResearchCandidate pick = c;
-        refresh_candidate_budget(pick, remaining_after_starts, idle_research_slot,
-                                 time_budget_minutes, true);
-        if (add_candidate_once(plan.top_research, selected_ids, std::move(pick))) {
-            selected_by_tree[c.research_tree]++;
-            prime_save_targets++;
-        }
-    }
+    auto add_bucket = [&](const std::string& bucket, size_t limit, bool include_tracking) {
+        size_t added = 0;
+        for (const auto& c : candidates) {
+            if (plan.top_research.size() >= top_count || added >= limit) break;
+            if (selected_ids.count(c.id)) continue;
+            if (c.research_bucket != bucket) continue;
+            if (!include_tracking && c.tracking_only) continue;
+            if (selected_by_tree[c.research_tree] >= 4) continue;
 
-    for (const auto& c : candidates) {
-        if (plan.top_research.size() >= top_count) break;
-        if (selected_ids.count(c.id)) continue;
-        if (selected_by_tree[c.research_tree] >= 4) continue;
-        ResearchCandidate pick = c;
-        refresh_candidate_budget(pick, remaining_after_starts, idle_research_slot,
-                                 time_budget_minutes, true);
-        if (!pick.missing_resources.empty() || !pick.can_start_now) {
+            ResearchCandidate pick = c;
+            refresh_candidate_budget(pick, remaining_after_starts, idle_research_slots,
+                                     time_budget_minutes, resource_balances_reliable, true);
+            if (pick.tracking_only && !include_tracking) continue;
+            if (add_candidate_once(plan.top_research, selected_ids, std::move(pick))) {
+                selected_by_tree[c.research_tree]++;
+                added++;
+            }
+        }
+    };
+
+    add_bucket("daily", 5, false);
+    add_bucket("specialty_ship", 3, false);
+    add_bucket("prime", 3, resource_balances_reliable);
+
+    auto fill_remaining = [&](bool include_tracking) {
+        for (const auto& c : candidates) {
+            if (plan.top_research.size() >= top_count) break;
+            if (selected_ids.count(c.id)) continue;
+            ResearchCandidate pick = c;
+            refresh_candidate_budget(pick, remaining_after_starts, idle_research_slots,
+                                     time_budget_minutes, resource_balances_reliable, true);
+            if (pick.tracking_only && !include_tracking) continue;
             if (add_candidate_once(plan.top_research, selected_ids, std::move(pick))) {
                 selected_by_tree[c.research_tree]++;
             }
         }
-    }
+    };
 
-    for (const auto& c : candidates) {
-        if (plan.top_research.size() >= top_count) break;
-        if (selected_ids.count(c.id)) continue;
-        ResearchCandidate pick = c;
-        refresh_candidate_budget(pick, remaining_after_starts, idle_research_slot,
-                                 time_budget_minutes, true);
-        if (add_candidate_once(plan.top_research, selected_ids, std::move(pick))) {
-            selected_by_tree[c.research_tree]++;
-        }
-    }
+    fill_remaining(false);
+    fill_remaining(true);
+
+    std::stable_sort(plan.top_research.begin(), plan.top_research.end(),
+                     [](const ResearchCandidate& a, const ResearchCandidate& b) {
+                         if (a.tracking_only != b.tracking_only) return !a.tracking_only;
+                         if (a.can_start_now != b.can_start_now) return a.can_start_now > b.can_start_now;
+                         int ra = research_bucket_rank(a);
+                         int rb = research_bucket_rank(b);
+                         if (ra != rb) return ra < rb;
+                         if (a.local_score != b.local_score) return a.local_score > b.local_score;
+                         return a.percent_affordable > b.percent_affordable;
+                     });
 
     int priority = 1;
     std::set<int64_t> planned_start_ids;
     for (const auto& c : plan.top_research) {
         if (!c.can_start_now) continue;
+        if (c.tracking_only) continue;
         PlanAction action;
         action.priority = priority++;
         action.domain = "research";
@@ -837,6 +1260,7 @@ ActionPlan generate_action_plan(const FullAccountSnapshot& snapshot,
         action.reason = c.reason;
         action.can_do_now = true;
         action.duration_seconds = c.research_time_seconds;
+        action.speedups = c.speedups;
         action.resources_spent = c.costs;
         plan.do_now.push_back(std::move(action));
         planned_start_ids.insert(c.id);
@@ -846,8 +1270,9 @@ ActionPlan generate_action_plan(const FullAccountSnapshot& snapshot,
     for (const auto& c : candidates) {
         if (planned_start_ids.count(c.id)) continue;
         ResearchCandidate target_candidate = c;
-        refresh_candidate_budget(target_candidate, remaining_after_starts, idle_research_slot,
-                                 time_budget_minutes, true);
+        refresh_candidate_budget(target_candidate, remaining_after_starts, idle_research_slots,
+                                 time_budget_minutes, resource_balances_reliable, true);
+        if (target_candidate.tracking_only) continue;
         if (target_candidate.missing_resources.empty()) continue;
         if (!target_candidate.prerequisites_met && target_candidate.percent_affordable < 0.8) continue;
         SaveForTarget target;

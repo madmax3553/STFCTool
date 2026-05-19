@@ -13,7 +13,7 @@ is a ranked action list:
 - What are my top 5 researches right now?
 - Which researches can I start with current resources?
 - Which researches should I save for, and exactly which resources are missing?
-- Which events/jobs/resources change the priority?
+- Which events/resources, and any available job records, change the priority?
 - What should I ignore because it is low efficiency right now?
 
 ## Product Shape
@@ -28,7 +28,8 @@ is a ranked action list:
   - resources
   - inventory
   - buffs
-  - active jobs
+  - opportunistic job records where available
+  - active upgrade queues only when a fresh job payload is received
   - active events
 - Game reference data from Spocks cache/API:
   - research definitions, levels, costs, prerequisites, durations
@@ -84,11 +85,11 @@ Flow:
 
 - Use `src/app/account_snapshot.*` as the canonical resolved account model.
 - Ensure every player item has resolved names and relevant game metadata.
-- Include current resources and active jobs in the snapshot.
+- Include current resources and any available job records in the snapshot.
 - Include active events and claimable rewards in the snapshot.
 - Include derived fields:
   - ops level
-  - free research/build queues
+  - free research/build queues only when queue data is supplied; otherwise mark unknown
   - resources by category
   - active buffs affecting build/research/mining
   - current blockers
@@ -214,7 +215,7 @@ for, and what to ignore.
   - research top 5
   - resource save plan
   - active event opportunities
-  - current active jobs
+  - current active jobs when synced, otherwise queue state unknown
   - user time budget
 - Output:
   - do now

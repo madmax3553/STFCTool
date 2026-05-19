@@ -14,6 +14,7 @@
 #include <climits>
 #include <algorithm>
 #include <chrono>
+#include <iostream>
 
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
@@ -26,6 +27,7 @@
 #include "data/community_data.h"
 #include "app/account_snapshot.h"
 #include "app/action_planner.h"
+#include "app/strategy_recommender.h"
 
 #include "tui/ui_common.h"
 #include "tui/tab_dashboard.h"
@@ -45,8 +47,16 @@ static bool contains_unresolved_plan_label(const std::string& value) {
            value.find("Ship#") != std::string::npos;
 }
 
-static bool action_plan_needs_regeneration(const ActionPlan& plan) {
+static int64_t sync_epoch(std::chrono::system_clock::time_point tp) {
+    if (tp == std::chrono::system_clock::time_point{}) return 0;
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        tp.time_since_epoch()).count();
+}
+
+static bool action_plan_needs_regeneration(const ActionPlan& plan,
+                                           int64_t current_sync = 0) {
     if (plan.generated_at == 0 || plan.top_research.empty()) return true;
+    if (current_sync > 0 && plan.last_sync != current_sync) return true;
 
     for (const auto& r : plan.top_research) {
         if (contains_unresolved_plan_label(r.name) ||
@@ -79,6 +89,26 @@ static bool action_plan_needs_regeneration(const ActionPlan& plan) {
     }
 
     return false;
+}
+
+static bool strategy_plan_needs_regeneration(const StrategyPlan& strategy,
+                                             const ActionPlan& action_plan,
+                                             int64_t current_sync = 0) {
+    if (strategy.generated_at == 0 || strategy.do_now.empty()) return true;
+    if (current_sync > 0 && strategy.last_sync != current_sync) return true;
+    if (action_plan.generated_at > 0 && strategy.generated_at < action_plan.generated_at) return true;
+    if (action_plan.last_sync > 0 && strategy.last_sync != action_plan.last_sync) return true;
+    return false;
+}
+
+static int manual_event_claim_count(const PlayerData& player_data) {
+    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    int count = 0;
+    for (const auto& event : player_data.events) {
+        if (event.has_manual_claimable_reward(now)) count++;
+    }
+    return count;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +144,34 @@ struct AppState {
     SyncTabState sync_state;
     PlanTabState plan_state;
     ActionPlan action_plan;
+    StrategyPlan strategy_plan;
+
+    bool refresh_plans_if_needed(bool force = false) {
+        if (!data_loaded.load() ||
+            player_data.last_sync == std::chrono::system_clock::time_point{}) {
+            return false;
+        }
+
+        const int64_t current_sync = sync_epoch(player_data.last_sync);
+        bool regenerate_action_plan = force || action_plan_needs_regeneration(action_plan, current_sync);
+        bool regenerate_strategy_plan = force || regenerate_action_plan ||
+            strategy_plan_needs_regeneration(strategy_plan, action_plan, current_sync);
+
+        if (!regenerate_action_plan && !regenerate_strategy_plan) {
+            return false;
+        }
+
+        auto snapshot = build_full_snapshot(player_data, game_data);
+        if (regenerate_action_plan) {
+            action_plan = generate_action_plan(snapshot, 45, "growth");
+            save_action_plan(action_plan);
+        }
+        if (regenerate_strategy_plan) {
+            strategy_plan = generate_strategy_plan(snapshot, player_data, action_plan, 45);
+            save_strategy_plan(strategy_plan);
+        }
+        return true;
+    }
 
     // Constructor: load cached data
     AppState() : api_client("data/game_data"), ingress_server("data/player_data", 8270) {
@@ -146,12 +204,10 @@ struct AppState {
         }
 
         bool loaded_plan = load_action_plan(action_plan);
-        if (data_loaded &&
-            player_data.last_sync != std::chrono::system_clock::time_point{} &&
-            (!loaded_plan || action_plan_needs_regeneration(action_plan))) {
-            auto snapshot = build_full_snapshot(player_data, game_data);
-            action_plan = generate_action_plan(snapshot, 45, "growth");
-            save_action_plan(action_plan);
+        bool loaded_strategy_plan = load_strategy_plan(strategy_plan);
+        if (!loaded_plan) action_plan.generated_at = 0;
+        if (!loaded_strategy_plan) strategy_plan.generated_at = 0;
+        if (refresh_plans_if_needed(false)) {
             status_message += " | plan refreshed";
         } else if (data_loaded && player_data.last_sync == std::chrono::system_clock::time_point{}) {
             status_message += " | sync required for plan";
@@ -169,7 +225,7 @@ static Element render_help() {
         separator(),
         text("Navigation") | bold | color(Color::Cyan),
         text("  j/k          Up / Down in list"),
-        text("  h/l          Prev / Next view (Sync tab)"),
+        text("  h/l          Prev / Next view or pane"),
         text("  g/G          Jump to top / bottom"),
         text("  Ctrl+d/u     Half-page down / up"),
         text("  1-4          Switch tab"),
@@ -204,10 +260,19 @@ static Element render_status_bar(AppState& state) {
 // main()
 // ---------------------------------------------------------------------------
 
-int main() {
+int main(int argc, char** argv) {
     using namespace stfc;
 
     auto state = std::make_shared<AppState>();
+
+    if (argc > 1 && std::string(argv[1]) == "--generate-plan") {
+        bool refreshed = state->refresh_plans_if_needed(true);
+        std::cout << "plan " << (refreshed ? "generated" : "unchanged")
+                  << ": " << state->strategy_plan.do_now.size() << " avalanche, "
+                  << state->action_plan.top_research.size() << " research, "
+                  << manual_event_claim_count(state->player_data) << " manual event claims\n";
+        return refreshed ? 0 : 1;
+    }
 
     // Tab structure
     int selected_tab = 0;
@@ -231,14 +296,14 @@ int main() {
                 content = render_dashboard_tab(state->player_data, state->game_data, state->data_loaded);
                 break;
             case 1:
-                content = render_events_tab(state->player_data, state->events_state);
+                content = render_events_tab(state->player_data, state->game_data, state->events_state);
                 break;
             case 2:
                 content = render_sync_tab(state->player_data, state->game_data,
                                           state->ingress_server, state->sync_state);
                 break;
             case 3:
-                content = render_plan_tab(state->action_plan, state->plan_state);
+                content = render_plan_tab(state->action_plan, state->strategy_plan, state->plan_state);
                 break;
             default:
                 content = text("Unknown tab") | center;
@@ -287,6 +352,15 @@ int main() {
             return true;
         }
 
+        if (event == Event::Custom) {
+            state->player_data = state->ingress_server.get_player_data();
+            if (state->data_loaded) {
+                resolve_player_names(state->player_data, state->game_data);
+            }
+            state->refresh_plans_if_needed(false);
+            return false;
+        }
+
         // Refresh game data
         if (event == Event::Character('r')) {
             if (!state->loading) {
@@ -322,6 +396,11 @@ int main() {
                 state->ingress_server.stop();
                 state->set_status("Sync server stopped");
             } else {
+                state->ingress_server.set_data_callback([state](const std::string& data_type) {
+                    state->set_status("Received sync data: " + data_type);
+                    auto screen = ScreenInteractive::Active();
+                    if (screen) screen->PostEvent(Event::Custom);
+                });
                 state->ingress_server.start();
                 state->set_status("Sync server started on port " + std::to_string(state->ingress_server.port()));
 
@@ -349,11 +428,14 @@ int main() {
 
             auto snapshot = build_full_snapshot(state->player_data, state->game_data);
             state->action_plan = generate_action_plan(snapshot, 45, "growth");
+            state->strategy_plan = generate_strategy_plan(snapshot, state->player_data,
+                                                          state->action_plan, 45);
             bool saved = save_action_plan(state->action_plan);
+            bool strategy_saved = save_strategy_plan(state->strategy_plan);
             state->set_status("Plan generated: " +
-                std::to_string(state->action_plan.do_now.size()) + " ready, " +
-                std::to_string(std::min<size_t>(5, state->action_plan.top_research.size())) +
-                " research" + (saved ? "" : " (save failed)"));
+                std::to_string(state->strategy_plan.do_now.size()) + " avalanche, " +
+                std::to_string(state->action_plan.top_research.size()) +
+                " research" + ((saved && strategy_saved) ? "" : " (save failed)"));
             selected_tab = 3;
             return true;
         }
@@ -389,7 +471,9 @@ int main() {
             case 3: // Plan
                 return handle_plan_input(mapped != event ? mapped : event,
                                          state->plan_state,
-                                         static_cast<int>(state->action_plan.top_research.size()));
+                                         static_cast<int>(state->action_plan.top_research.size()),
+                                         static_cast<int>(state->strategy_plan.do_now.size()),
+                                         static_cast<int>(state->strategy_plan.avoid.size()));
         }
 
         return false;
