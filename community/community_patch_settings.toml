@@ -417,7 +417,7 @@ verify_ssl = true
 [sync.targets.local]
 # STFCTool local ingress server
 token = "stfctool-local"
-url = "http://192.168.1.217:8270/sync/ingress/"
+url = "http://127.0.0.1:8270/sync/ingress/"
 
 #  <[=============================================================================================================]>
 #
